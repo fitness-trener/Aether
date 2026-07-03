@@ -15,7 +15,11 @@ def propose(caps: CapabilitySet, violation: dict) -> Suggestion:
         value = target
         why = f"code tried to reach {target}, blocked (not in net allowlist)"
     else:
-        value = os.path.dirname(target) or "/"
+        parent = os.path.dirname(target)
+        if parent in ("", "/", os.sep):
+            # never propose a broad "/" grant — minimal-grant guard
+            raise ValueError(f"refusing broad fs grant for {target!r}: no usable parent dir")
+        value = parent
         why = f"code tried to read {target}, blocked (not under any fs prefix)"
     return Suggestion(capability=kind, value=value,
                       rationale=f"{why}. Minimal grant: {kind} += {value}")

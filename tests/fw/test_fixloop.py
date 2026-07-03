@@ -1,3 +1,4 @@
+import pytest
 from aether.fw.caps import CapabilitySet
 from aether.fw.diag import capability_violation
 from aether.fw.fixloop import propose, apply
@@ -22,3 +23,9 @@ def test_fs_proposes_parent_dir_not_root():
     v = capability_violation("fs", "/data/models/a.bin")
     s = propose(caps, v)
     assert s.value == "/data/models"          # parent dir, not "/"
+
+def test_fs_refuses_root_grant_for_bare_target():
+    caps = CapabilitySet(fs=[])
+    v = capability_violation("fs", "a.bin")
+    with pytest.raises(ValueError):
+        propose(caps, v)
