@@ -3,9 +3,11 @@ from fnmatch import fnmatch
 from aether.fw.caps import CapabilitySet
 
 def fs_allowed(caps: CapabilitySet, path: str) -> bool:
-    real = os.path.normpath(os.path.join("/", path)) if not os.path.isabs(path) else os.path.normpath(path)
+    # realpath resolves symlinks so /work/link->/etc cannot escape the prefix;
+    # nonexistent components are normalized textually (stdlib semantics).
+    real = os.path.realpath(path)
     for prefix in caps.fs:
-        pfx = os.path.normpath(prefix)
+        pfx = os.path.realpath(prefix)
         if real == pfx or real.startswith(pfx + os.sep):
             return True
     return False
