@@ -8,7 +8,9 @@ class CapabilitySet:
     raw: dict = field(default_factory=dict)
 
     def to_toml_str(self) -> str:
-        def arr(xs): return "[" + ", ".join(f'"{x}"' for x in xs) + "]"
+        def _q(x):
+            return '"' + x.replace("\\", "\\\\").replace('"', '\\"') + '"'
+        def arr(xs): return "[" + ", ".join(_q(x) for x in xs) + "]"
         return f"fs = {arr(self.fs)}\nnet = {arr(self.net)}\n"
 
 def load_caps(path: str) -> CapabilitySet:

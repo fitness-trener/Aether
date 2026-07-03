@@ -1,3 +1,4 @@
+import pytest
 from aether.fw.diag import capability_violation
 
 def test_net_violation_is_e0701():
@@ -10,3 +11,7 @@ def test_fs_violation_maps_to_fs_capability():
     d = capability_violation("fs", "/home/user/.ssh/id_rsa")
     assert d["required_capability"] == "fs"
     assert d["extra"]["target"].endswith("id_rsa")
+
+def test_unknown_kind_raises_value_error():
+    with pytest.raises(ValueError):
+        capability_violation("bogus", "whatever")
