@@ -21,8 +21,7 @@ def decide(caps: CapabilitySet, host: str) -> EgressDecision:
     return EgressDecision(False, host, f"host {host} not in net allowlist")
 
 # _handle: recv/parse/decide/403-or-dial/pipe logic for one accepted CONNECT
-# connection. Shared by the TCP proxy (run_proxy) and the unix-socket proxy
-# (run_proxy_unix) so both topologies enforce identically.
+# connection. Used by the unix-socket proxy (bind_proxy_unix / _serve).
 def _handle(client_sock, caps, on_deny):
     c = client_sock
     try:
@@ -43,32 +42,34 @@ def _handle(client_sock, caps, on_deny):
         try: c.close()
         except Exception: pass
 
-# run_proxy: minimal HTTP CONNECT proxy over TCP. Exercised by the demo
-# (Task 7), not unit-tested (needs sockets). Kept small on purpose.
-def run_proxy(caps, listen_port, on_deny):
-    import socket, threading
-    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    srv.bind(("127.0.0.1", listen_port)); srv.listen(16)
-    while True:
-        conn, _ = srv.accept()
-        threading.Thread(target=_handle, args=(conn, caps, on_deny), daemon=True).start()
-
-# run_proxy_unix: same CONNECT proxy, listening on a bind-mounted unix socket
-# instead of TCP. This is the host side of the sound egress topology: the
-# sandboxed child reaches this only via the in-child TCP->unix shim (see
-# runner.py), so the enforcement point lives outside the netns entirely.
-def run_proxy_unix(caps, sock_path, on_deny):
-    import socket, threading, os
+# bind_proxy_unix / _serve: split so the caller can bind+listen
+# *synchronously* before handing control to bwrap (avoids a startup race
+# where bwrap tries to bind-mount a socket that isn't listening yet), then
+# run the accept loop in a background thread on the already-bound socket.
+# This is the host side of the sound egress topology: the sandboxed child
+# reaches this only via the in-child TCP->unix shim (see runner.py), so the
+# enforcement point lives outside the netns entirely.
+def bind_proxy_unix(sock_path):
+    import socket, os
     try:
         os.unlink(sock_path)
     except FileNotFoundError:
         pass
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     srv.bind(sock_path); srv.listen(16)
+    return srv
+
+def _serve(srv, caps, on_deny):
+    import threading
     while True:
         conn, _ = srv.accept()
         threading.Thread(target=_handle, args=(conn, caps, on_deny), daemon=True).start()
+
+# run_proxy_unix: bind+listen+serve in one call, for callers that don't
+# need the synchronous-bind split (e.g. direct/manual use, tests).
+def run_proxy_unix(caps, sock_path, on_deny):
+    srv = bind_proxy_unix(sock_path)
+    _serve(srv, caps, on_deny)
 
 def _pipe(a, b):
     import socket, threading

@@ -20,6 +20,19 @@ def test_argv_sets_proxy_env_and_unshares_net():
     joined = " ".join(argv)
     assert "HTTPS_PROXY" in joined and "8888" in joined
 
+def test_argv_grants_cap_net_admin_for_lo_up():
+    caps = CapabilitySet(fs=[], net=[])
+    argv = build_bwrap_argv(caps, proxy_port=8888, script="/work/agent.py")
+    assert "--cap-add" in argv
+    i = argv.index("--cap-add")
+    assert argv[i+1] == "CAP_NET_ADMIN"
+
+def test_argv_ro_binds_etc_ssl_for_ca_certs():
+    caps = CapabilitySet(fs=[], net=[])
+    argv = build_bwrap_argv(caps, proxy_port=8888, script="/work/agent.py")
+    binds = [(argv[i+1], argv[i+2]) for i, a in enumerate(argv) if a == "--ro-bind"]
+    assert ("/etc/ssl", "/etc/ssl") in binds
+
 def test_argv_binds_host_sock_into_sandbox():
     caps = CapabilitySet(fs=[], net=[])
     argv = build_bwrap_argv(caps, proxy_port=8888, script="/work/agent.py",

@@ -1,6 +1,6 @@
 import os, subprocess, threading
 from aether.fw.caps import CapabilitySet
-from aether.fw.egress import run_proxy_unix
+from aether.fw.egress import bind_proxy_unix, _serve
 
 # Path the unix socket is bind-mounted to *inside* the sandbox. The child
 # netns has no route to the host at all (--unshare-net); the only way out
@@ -15,7 +15,7 @@ CHILD_SOCK = "/tmp/aeth_egress.sock"
 # bind-mounted in), so the unix-connect-and-pipe logic is duplicated here
 # in miniature.
 _SHIM_SRC = r"""
-import sys, os, socket, threading, fcntl
+import sys, os, socket, threading, fcntl, subprocess
 
 def _bring_up_lo():
     SIOCGIFFLAGS = 0x8913
@@ -72,7 +72,12 @@ sock_path, port, script = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 _bring_up_lo()
 t = threading.Thread(target=_serve, args=(sock_path, port), daemon=True)
 t.start()
-os.execvp("python3", ["python3", script])
+# NOT os.execvp: exec replaces this process image, killing the forwarder
+# thread and closing the listener socket, so the agent's proxy connect
+# would get ECONNREFUSED. subprocess.call keeps this process (and thread)
+# alive for the child's lifetime.
+rc = subprocess.call(["python3", script])
+sys.exit(rc)
 """
 
 def build_bwrap_argv(caps: CapabilitySet, proxy_port: int, script: str,
@@ -81,12 +86,23 @@ def build_bwrap_argv(caps: CapabilitySet, proxy_port: int, script: str,
     script_dir = os.path.dirname(script)
     argv = ["bwrap",
             "--unshare-user", "--unshare-pid", "--unshare-ipc", "--unshare-uts",
-            "--unshare-net"]
+            "--unshare-net",
+            # bwrap drops all caps by default; the shim's SIOCSIFFLAGS ioctl
+            # to bring up lo needs CAP_NET_ADMIN, scoped to the sandbox's
+            # own userns/netns only -- it grants nothing on the host.
+            "--cap-add", "CAP_NET_ADMIN"]
     for prefix in caps.fs:
         argv += ["--ro-bind", prefix, prefix]
+    # script_dir is bound ro, granting read access to the script's whole
+    # parent directory (not just the script file) -- fine for this demo;
+    # a hardened version would bind-mount the script file alone.
     argv += ["--ro-bind", script_dir, script_dir]
     argv += ["--ro-bind", "/usr", "/usr", "--ro-bind", "/lib", "/lib",
             "--ro-bind", "/lib64", "/lib64", "--proc", "/proc", "--dev", "/dev",
+            # public trust anchors, read-only; needed so the legit leg's
+            # TLS verify (e.g. https://api.openai.com) doesn't fail with
+            # CERTIFICATE_VERIFY_FAILED inside the sandbox.
+            "--ro-bind", "/etc/ssl", "/etc/ssl",
             "--bind", host_sock, CHILD_SOCK,
             "--clearenv",
             "--setenv", "HTTPS_PROXY", f"http://127.0.0.1:{proxy_port}",
@@ -98,7 +114,13 @@ def run_sandboxed(caps: CapabilitySet, script: str, proxy_port: int) -> tuple[in
     script = os.path.abspath(script)
     host_sock = CHILD_SOCK
     denied = []
-    t = threading.Thread(target=run_proxy_unix, args=(caps, host_sock, denied.append), daemon=True)
+    # Bind+listen synchronously *before* spawning bwrap: if the accept loop
+    # were only started in a thread and bwrap raced ahead, bind() might not
+    # have happened yet and bwrap's bind-mount of the socket path would
+    # fail ("Can't find source path <sock>"). Binding here guarantees the
+    # socket exists on disk before argv is built / bwrap execs.
+    srv = bind_proxy_unix(host_sock)
+    t = threading.Thread(target=_serve, args=(srv, caps, denied.append), daemon=True)
     t.start()
     argv = build_bwrap_argv(caps, proxy_port, script, host_sock)
     rc = subprocess.call(argv)

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # demo/run_demo.sh — side-by-side. Requires Linux + bwrap.
 set -u
+export PYTHONPATH="$PWD/transpiler${PYTHONPATH:+:$PYTHONPATH}"
 PORT=8888
 
 # --- plant a real secret and a real, locally-reachable sink so the
