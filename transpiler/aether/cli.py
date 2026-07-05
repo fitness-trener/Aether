@@ -23,10 +23,18 @@ from typing import Any, Dict
 
 from .diagnostics import AetherError, Diagnostic
 from .lexer import tokenize
-from .parser import parse
+from .parser import parse, parse_collect
 from .emitter import emit
+from .pretty import pretty
 from .passes.capability import check_capabilities
-from .runtime import build_namespace, set_effect_strict
+from .passes.effects import (
+    check_effects, check_effect_scope, check_fs_path_safety, check_secret_flow,
+    check_injection, check_command_injection, check_pii_flow,
+    check_authorization, check_resource_authorization, check_open_redirect,
+)
+from .passes.modules import check_modules
+from .passes.imports import resolve_imports
+from .runtime import build_namespace, set_effect_strict, set_deterministic
 
 
 # ----------------------------------------------------------------------
@@ -52,6 +60,35 @@ def _read(path: str) -> str:
         return f.read()
 
 
+def _has_imports(ast: Dict[str, Any]) -> bool:
+    """True if the AST contains any top-level ImportDecl."""
+    for d in ast.get("decls", []) or []:
+        if d.get("kind") == "ImportDecl":
+            return True
+    return False
+
+
+def _maybe_resolve_imports(ast: Dict[str, Any], source_path: str, args) -> tuple:
+    """H.E.3 multi-file resolution gate.
+
+    If the parsed AST contains at least one ImportDecl and the user has not
+    opted out via --no-import-resolution, run resolve_imports and surface
+    any diagnostics. Returns (combined_ast, exit_code). When exit_code != 0
+    the caller should bail. When ImportDecls are absent or resolution is
+    disabled, returns the original AST and exit_code=0.
+    """
+    if getattr(args, "no_import_resolution", False):
+        return ast, 0
+    if not _has_imports(ast):
+        return ast, 0
+    combined, diags = resolve_imports(ast, source_path)
+    if diags:
+        for d in diags:
+            _emit_error(d, args.json)
+        return combined, 2
+    return combined, 0
+
+
 # ----------------------------------------------------------------------
 # Subcommands
 # ----------------------------------------------------------------------
@@ -66,8 +103,41 @@ def cmd_parse(args) -> int:
 def cmd_emit(args) -> int:
     src = _read(args.file)
     ast = parse(src, args.file)
+    ast, rc = _maybe_resolve_imports(ast, args.file, args)
+    if rc != 0:
+        return rc
     py = emit(ast)
     print(py)
+    return 0
+
+
+def cmd_fmt(args) -> int:
+    """C.4 formatter. Parse + canonical pretty-print.
+
+    Defaults to writing the formatted source to stdout. With `--write`,
+    overwrites the input file in place. With `--check`, exits 1 if the
+    file is not already canonically formatted, exit 0 otherwise — for
+    CI integration ("does this PR contain unformatted code?").
+    """
+    src = _read(args.file)
+    ast = parse(src, args.file)
+    formatted = pretty(ast)
+    if getattr(args, "check", False):
+        if src == formatted:
+            return 0
+        if not args.json:
+            sys.stderr.write(f"would reformat: {args.file}\n")
+        else:
+            json.dump({"ok": False, "would_reformat": args.file}, sys.stderr)
+            sys.stderr.write("\n")
+        return 1
+    if getattr(args, "write", False):
+        with open(args.file, "w", encoding="utf-8") as f:
+            f.write(formatted)
+        if not args.json:
+            print(f"formatted: {args.file}")
+        return 0
+    sys.stdout.write(formatted)
     return 0
 
 
@@ -81,18 +151,126 @@ def _run_capability_check(ast, as_json) -> int:
     return 2
 
 
+def _run_effects_check(ast, as_json) -> int:
+    """Returns 0 if all call-site effects ⊆ caller declared effects, 2 otherwise."""
+    diags = check_effects(ast)
+    if not diags:
+        return 0
+    for d in diags:
+        _emit_error(d, as_json)
+    return 2
+
+
+def _run_effect_scope_check(ast, as_json) -> int:
+    """Reach-scope discipline: E0710 (net.fetch host must be pinned) +
+    E0711 (fs read/write path must be literal or safeJoin-sanitized).
+    0 if clean, 2 otherwise."""
+    diags = (check_effect_scope(ast) + check_fs_path_safety(ast)
+             + check_secret_flow(ast) + check_injection(ast)
+             + check_command_injection(ast) + check_pii_flow(ast)
+             + check_authorization(ast) + check_resource_authorization(ast)
+             + check_open_redirect(ast))
+    if not diags:
+        return 0
+    for d in diags:
+        _emit_error(d, as_json)
+    return 2
+
+
+def _run_module_check(ast, as_json) -> int:
+    """D.3 module-validation pass. 0 if structurally OK, 2 otherwise."""
+    diags = check_modules(ast)
+    if not diags:
+        return 0
+    for d in diags:
+        _emit_error(d, as_json)
+    return 2
+
+
+def _run_smt_check(ast, as_json, timeout_ms):
+    """Opt-in SMT contract proving (--prove, v2 roadmap 1.1).
+    Returns (rc, summary|None). rc 2 iff any clause was refuted."""
+    from .passes.smt import HAVE_Z3, check_contracts_smt
+    if not HAVE_Z3:
+        msg = ("--prove requires the z3-solver package "
+               "(pip install 'aether-lang[smt]')")
+        if as_json:
+            json.dump({"ok": False, "error": msg}, sys.stdout)
+            sys.stdout.write("\n")
+        else:
+            print(f"aether: {msg}", file=sys.stderr)
+        return 2, None
+    diags, summary = check_contracts_smt(ast, timeout_ms=timeout_ms)
+    for d in diags:
+        _emit_error(d, as_json)
+    if not as_json:
+        print("prove: {proved} proved, {refuted} refuted, "
+              "{timeout} timeout, {skipped} skipped".format(**summary))
+    rc = 2 if any(d.severity == "error" for d in diags) else 0
+    return rc, summary
+
+
 def cmd_check(args) -> int:
     src = _read(args.file)
-    ast = parse(src, args.file)
+    if getattr(args, "collect_errors", False):
+        # C.6 multi-error parser recovery: surface every recoverable
+        # parse error in one pass, instead of bailing on the first.
+        ast, parse_diags = parse_collect(src, args.file)
+        for d in parse_diags:
+            _emit_error(d, args.json)
+        if parse_diags:
+            if args.json:
+                json.dump({"ok": False, "diagnostics": [d.to_dict() for d in parse_diags]},
+                          sys.stdout)
+                sys.stdout.write("\n")
+            return 2
+    else:
+        ast = parse(src, args.file)
+    # H.E.3 multi-file resolution (default-on when ImportDecls present).
+    ast, rc = _maybe_resolve_imports(ast, args.file, args)
+    if rc != 0:
+        return rc
     py = emit(ast)
     # Compile but don't execute.
     compile(py, args.file + ".py", "exec")
-    if getattr(args, "capability_strict", False):
+    # Default-on static effect checking (B.1). Opt out with --no-static-effects.
+    if not getattr(args, "no_static_effects", False):
+        rc = _run_effects_check(ast, args.json)
+        if rc != 0:
+            return rc
+    # Default-on broad-scope check (E0710): reject unpinned net.fetch hosts
+    # that admit SSRF. Opt out with --no-scope-check.
+    if not getattr(args, "no_scope_check", False):
+        rc = _run_effect_scope_check(ast, args.json)
+        if rc != 0:
+            return rc
+    # Default-on transitive capability check (B.3). No-op when no modules.
+    # Opt out entirely with --no-capability-check.
+    # --capability-strict is kept as an alias for the default behaviour for
+    # backward compat with v0.2 scripts.
+    if not getattr(args, "no_capability_check", False):
         rc = _run_capability_check(ast, args.json)
         if rc != 0:
             return rc
+    # Default-on module-validation pass (D.3). No-op when no modules.
+    if not getattr(args, "no_module_check", False):
+        rc = _run_module_check(ast, args.json)
+        if rc != 0:
+            return rc
+    # Opt-in SMT contract proving (v2 roadmap 1.1). Off by default;
+    # enable with --prove. E0901 refutations fail the check; E0902
+    # timeouts warn and pass.
+    prove_summary = None
+    if getattr(args, "prove", False):
+        rc, prove_summary = _run_smt_check(
+            ast, args.json, getattr(args, "prove_timeout_ms", 5000))
+        if rc != 0:
+            return rc
     if args.json:
-        json.dump({"ok": True, "decls": len(ast["decls"])}, sys.stdout)
+        out = {"ok": True, "decls": len(ast["decls"])}
+        if prove_summary is not None:
+            out["prove"] = prove_summary
+        json.dump(out, sys.stdout)
         sys.stdout.write("\n")
     else:
         print(f"OK: {args.file} ({len(ast['decls'])} decls)")
@@ -102,9 +280,28 @@ def cmd_check(args) -> int:
 def cmd_run(args) -> int:
     if args.effect_strict:
         set_effect_strict(True)
+    # C.5 deterministic test mode: pin clock + random seed for reproducible runs.
+    if getattr(args, "deterministic", False) or os.environ.get("AETHER_DETERMINISTIC"):
+        seed = int(os.environ.get("AETHER_SEED", "0"))
+        set_deterministic(seed)
     src = _read(args.file)
     ast = parse(src, args.file)
-    if getattr(args, "capability_strict", False):
+    # H.E.3 multi-file resolution (default-on when ImportDecls present).
+    ast, rc = _maybe_resolve_imports(ast, args.file, args)
+    if rc != 0:
+        return rc
+    # Default-on static effect checking (B.1).
+    if not getattr(args, "no_static_effects", False):
+        rc = _run_effects_check(ast, args.json)
+        if rc != 0:
+            return rc
+    # Default-on broad-scope check (E0710). Opt out with --no-scope-check.
+    if not getattr(args, "no_scope_check", False):
+        rc = _run_effect_scope_check(ast, args.json)
+        if rc != 0:
+            return rc
+    # Default-on transitive capability check (B.3).
+    if not getattr(args, "no_capability_check", False):
         rc = _run_capability_check(ast, args.json)
         if rc != 0:
             return rc
@@ -132,6 +329,13 @@ def cmd_test(args) -> int:
     expected = _read(exp_path) if os.path.isfile(exp_path) else ""
     try:
         ast = parse(src, src_path)
+        # H.E.3 multi-file resolution (default-on when ImportDecls present).
+        if _has_imports(ast) and not getattr(args, "no_import_resolution", False):
+            ast, diags = resolve_imports(ast, src_path)
+            if diags:
+                for d in diags:
+                    _emit_error(d, args.json)
+                return 2
         py = emit(ast)
         code = compile(py, src_path + ".py", "exec")
         g = build_namespace()
@@ -163,6 +367,82 @@ def cmd_test(args) -> int:
 
 
 # ----------------------------------------------------------------------
+# H.A.2 — fix-loop entry point
+#
+# `aether fix-loop <file>` dispatches to one of two paths:
+#
+#   default (deterministic)
+#     Calls the deterministic reference implementation at
+#     `demos/payment_workflow/fix_loop.py`. Handles E0801 (effect not
+#     covered) and E0701 (capability not declared) — the codes whose
+#     `extra` dict is sufficient for a mechanical AST rewrite. Used in
+#     CI; produces an identical transcript on every invocation. NOT
+#     "AI-driven."
+#
+#   --live
+#     Calls Anthropic via the live LLM path used by
+#     `demos/payment_workflow/llm_fix_demo.py`. Handles arbitrary
+#     errors including logic errors that the deterministic path cannot
+#     repair (E0301, E0302, E0304, E0305). Requires
+#     ANTHROPIC_API_KEY. If the env var is missing, fails with a clear
+#     message — does NOT silently fall back to deterministic.
+#
+# The two paths are documented for what they are. Never conflated.
+# ----------------------------------------------------------------------
+
+def cmd_fix_loop(args) -> int:
+    """Dispatch to deterministic (default) or --live LLM path."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    repo_root = os.path.dirname(os.path.dirname(here))
+    demo_dir = os.path.join(repo_root, "demos", "payment_workflow")
+
+    if not os.path.isfile(args.file):
+        sys.stderr.write(f"file not found: {args.file}\n")
+        return 2
+
+    # Make the demo modules importable.
+    if demo_dir not in sys.path:
+        sys.path.insert(0, demo_dir)
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+
+    if args.live:
+        # Live LLM path — calls Anthropic. Requires ANTHROPIC_API_KEY.
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            sys.stderr.write(
+                "aether fix-loop --live: ANTHROPIC_API_KEY not set.\n"
+                "  The live path calls Anthropic for diagnostics the\n"
+                "  deterministic path cannot mechanically repair.\n"
+                "  Set ANTHROPIC_API_KEY, or omit --live for the\n"
+                "  deterministic path (E0801 + E0701 only).\n"
+            )
+            return 2
+        try:
+            from llm_fix_demo import _do_live   # type: ignore
+        except ImportError as e:
+            sys.stderr.write(f"aether fix-loop --live: import failed: {e}\n")
+            return 2
+        transcript = args.out_transcript or args.file.replace(
+            ".aeth", ".live.transcript.json")
+        return _do_live(args.file, transcript, label=f"cli ({args.file})")
+
+    # Deterministic path (default).
+    try:
+        from fix_loop import main as deterministic_main  # type: ignore
+    except ImportError as e:
+        sys.stderr.write(f"aether fix-loop: deterministic path import failed: {e}\n")
+        return 2
+    argv = [args.file]
+    if args.out_source:
+        argv += ["--out-source", args.out_source]
+    if args.out_transcript:
+        argv += ["--out-transcript", args.out_transcript]
+    if args.quiet:
+        argv += ["--quiet"]
+    return deterministic_main(argv)
+
+
+# ----------------------------------------------------------------------
 # argparse wiring
 # ----------------------------------------------------------------------
 
@@ -177,31 +457,106 @@ def main(argv=None) -> int:
 
     sp = sub.add_parser("emit", help="emit Python source for a file")
     sp.add_argument("file")
+    sp.add_argument("--no-import-resolution", action="store_true",
+                    help="opt out of default-on multi-file import resolution "
+                         "(H.E.3); treat ImportDecls as opaque")
 
     sp = sub.add_parser("check", help="parse + emit (no execution)")
     sp.add_argument("file")
+    sp.add_argument("--no-static-effects", action="store_true",
+                    help="opt out of default-on static effect checking (B.1)")
+    sp.add_argument("--no-scope-check", action="store_true",
+                    help="opt out of default-on reach-scope checks (E0710 net host + E0711 fs path); "
+                         "allows unpinned hosts + dynamic fs paths")
+    sp.add_argument("--no-capability-check", action="store_true",
+                    help="opt out of default-on capability check (B.3)")
     sp.add_argument("--capability-strict", action="store_true",
-                    help="enforce that every effect's required capability is "
-                         "declared by some module in the program")
+                    help="(deprecated; capability check is now default-on, "
+                         "this flag is a no-op alias kept for backward compat)")
+    sp.add_argument("--collect-errors", action="store_true",
+                    help="surface every recoverable parse error in one pass "
+                         "(C.6); useful for agent fix-loops")
+    sp.add_argument("--no-module-check", action="store_true",
+                    help="opt out of default-on module-validation pass (D.3)")
+    sp.add_argument("--no-import-resolution", action="store_true",
+                    help="opt out of default-on multi-file import resolution "
+                         "(H.E.3); treat ImportDecls as opaque")
+    sp.add_argument("--prove", action="store_true",
+                    help="run the opt-in SMT contract-proving pass "
+                         "(requires z3-solver: pip install 'aether-lang[smt]')")
+    sp.add_argument("--prove-timeout-ms", type=int, default=5000,
+                    help="per-obligation Z3 timeout in ms (default 5000)")
 
     sp = sub.add_parser("run", help="parse + emit + execute")
     sp.add_argument("file")
     sp.add_argument("--effect-strict", action="store_true",
                     help="enforce that observed effects are subset of declared")
+    sp.add_argument("--deterministic", action="store_true",
+                    help="C.5: pin time + random seed for reproducible runs "
+                         "(also activated by env var AETHER_DETERMINISTIC=1; "
+                         "seed read from AETHER_SEED, default 0)")
+    sp.add_argument("--no-static-effects", action="store_true",
+                    help="opt out of default-on static effect checking (B.1)")
+    sp.add_argument("--no-scope-check", action="store_true",
+                    help="opt out of default-on reach-scope checks (E0710 net host + E0711 fs path); "
+                         "allows unpinned hosts + dynamic fs paths")
+    sp.add_argument("--no-capability-check", action="store_true",
+                    help="opt out of default-on capability check (B.3)")
     sp.add_argument("--capability-strict", action="store_true",
-                    help="enforce that every effect's required capability is "
-                         "declared by some module in the program")
+                    help="(deprecated; capability check is now default-on, "
+                         "this flag is a no-op alias kept for backward compat)")
+    sp.add_argument("--no-import-resolution", action="store_true",
+                    help="opt out of default-on multi-file import resolution "
+                         "(H.E.3); treat ImportDecls as opaque")
 
     sp = sub.add_parser("test", help="run a reference program directory")
     sp.add_argument("dir")
+    sp.add_argument("--no-import-resolution", action="store_true",
+                    help="opt out of default-on multi-file import resolution "
+                         "(H.E.3); treat ImportDecls as opaque")
+
+    sp = sub.add_parser("fmt", help="parse + canonical pretty-print (C.4)")
+    sp.add_argument("file")
+    sp.add_argument("--write", action="store_true",
+                    help="overwrite the input file in place")
+    sp.add_argument("--check", action="store_true",
+                    help="exit 1 if the file is not canonically formatted "
+                         "(useful for CI)")
+
+    sp = sub.add_parser(
+        "fix-loop",
+        help="run the agent fix-loop against <file>",
+        description=(
+            "Aether agent fix-loop. "
+            "Default (deterministic): reproducible AST rewrites for E0801 "
+            "(effect not covered) and E0701 (capability not declared). Used "
+            "in CI. NOT 'AI-driven'. "
+            "--live: calls Anthropic for arbitrary errors including logic "
+            "errors (E0301/E0302/E0304/E0305). Requires ANTHROPIC_API_KEY. "
+            "If unset, fails with a clear message. "
+            "The two paths are documented separately and never conflated."
+        ),
+    )
+    sp.add_argument("file", help="path to broken .aeth source")
+    sp.add_argument("--live", action="store_true",
+                    help="use the live LLM path (calls Anthropic; requires "
+                         "ANTHROPIC_API_KEY). Default is the deterministic path.")
+    sp.add_argument("--out-source", default=None,
+                    help="where to write the fixed .aeth")
+    sp.add_argument("--out-transcript", default=None,
+                    help="where to write the fix transcript JSON")
+    sp.add_argument("--quiet", action="store_true",
+                    help="suppress progress output")
 
     args = p.parse_args(argv)
     try:
-        if args.cmd == "parse":   return cmd_parse(args)
-        if args.cmd == "emit":    return cmd_emit(args)
-        if args.cmd == "check":   return cmd_check(args)
-        if args.cmd == "run":     return cmd_run(args)
-        if args.cmd == "test":    return cmd_test(args)
+        if args.cmd == "parse":    return cmd_parse(args)
+        if args.cmd == "emit":     return cmd_emit(args)
+        if args.cmd == "check":    return cmd_check(args)
+        if args.cmd == "run":      return cmd_run(args)
+        if args.cmd == "test":     return cmd_test(args)
+        if args.cmd == "fmt":      return cmd_fmt(args)
+        if args.cmd == "fix-loop": return cmd_fix_loop(args)
     except AetherError as e:
         _emit_error(e.diag, args.json)
         return 2

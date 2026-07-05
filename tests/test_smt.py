@@ -257,6 +257,49 @@ def test_untranslatable_requires_skips_whole_function():
     assert summary == {"proved": 0, "refuted": 0, "timeout": 0, "skipped": 1}
 
 
+def _run_cli(src: str, *flags: str, as_json: bool = False):
+    # --json is a top-level flag and must precede the subcommand;
+    # --prove & co. belong to the `check` subparser and follow the file.
+    pre = ["--json"] if as_json else []
+    with tempfile.TemporaryDirectory() as td:
+        path = os.path.join(td, "prog.aeth")
+        with open(path, "w") as f:
+            f.write(src)
+        return subprocess.run(
+            [sys.executable, "-B", "-m", "transpiler.aether.cli",
+             *pre, "check", path, *flags],
+            cwd=ROOT, capture_output=True, text=True)
+
+
+def test_cli_prove_refuted_exits_2():
+    if not HAVE_Z3:
+        return
+    r = _run_cli(REFUTABLE, "--prove", as_json=True)
+    assert r.returncode == 2, (r.returncode, r.stdout, r.stderr)
+    # _emit_error writes diagnostics to stderr (same as every other pass)
+    assert '"E0901"' in r.stderr
+    assert "counterexample" in r.stderr
+
+
+def test_cli_prove_proved_exits_0_with_summary():
+    if not HAVE_Z3:
+        return
+    r = _run_cli(PROVABLE, "--prove", as_json=True)
+    assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
+    data = json.loads(r.stdout.strip().splitlines()[-1])
+    assert data["ok"] is True
+    assert data["prove"]["proved"] == 2
+    assert data["prove"]["refuted"] == 0
+
+
+def test_cli_without_prove_flag_ignores_contracts():
+    if not HAVE_Z3:
+        return
+    r = _run_cli(REFUTABLE)          # no --prove: stays opt-in
+    assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
+    assert "E0901" not in (r.stdout + r.stderr)
+
+
 def main() -> int:
     if not HAVE_Z3:
         print("SKIP: z3-solver not installed; SMT pass tests skipped")
