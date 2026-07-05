@@ -201,6 +201,16 @@ def main() -> int:
             "stderr": r.stderr.strip(),
         }
 
+    rel_t = os.path.join(ROOT, "tests", "test_release_emit.py")
+    if os.path.isfile(rel_t):
+        cmd = [sys.executable, "-B", rel_t]
+        r = subprocess.run(cmd, cwd=ROOT, env=env, capture_output=True, text=True)
+        results["release_emit"] = {
+            "ok": r.returncode == 0,
+            "stdout": r.stdout.strip(),
+            "stderr": r.stderr.strip(),
+        }
+
     arch_bench = os.path.join(ROOT, "bench", "architectural", "run_bench.py")
     if os.path.isfile(arch_bench):
         cmd = [sys.executable, "-B", arch_bench]
@@ -331,6 +341,7 @@ def main() -> int:
     smt_ok = bool(results.get("smt") and results["smt"]["ok"])
     bb_ok = bool(results.get("stdlib_bytes") and results["stdlib_bytes"]["ok"])
     pack_ok = bool(results.get("pack") and results["pack"]["ok"])
+    rel_ok = bool(results.get("release_emit") and results["release_emit"]["ok"])
     arch_ok = bool(results.get("architectural_bench") and results["architectural_bench"]["ok"])
     f_ok = bool(results.get("fix_loop_demo") and results["fix_loop_demo"]["ok"])
     alsp_ok = bool(results.get("alsp_corpus") and results["alsp_corpus"]["ok"])
@@ -360,6 +371,7 @@ def main() -> int:
     print(f"# smt:            {'PASS' if smt_ok else 'FAIL'} (v2 1.1: --prove)", file=sys.stderr)
     print(f"# stdlib_bytes:   {'PASS' if bb_ok else 'FAIL'} (wave 1: bitwise + bytes bridge)", file=sys.stderr)
     print(f"# pack:           {'PASS' if pack_ok else 'FAIL'} (wave 1: python interop)", file=sys.stderr)
+    print(f"# release_emit:   {'PASS' if rel_ok else 'FAIL'} (wave 1: --release)", file=sys.stderr)
     print(f"# arch_bench:     {'PASS' if arch_ok else 'FAIL'} (E: 10 tasks)", file=sys.stderr)
     print(f"# fix_loop_demo: {'PASS' if f_ok else 'FAIL'} (F: payment + fix-loop)", file=sys.stderr)
     print(f"# alsp_corpus:    {'PASS' if alsp_ok else 'FAIL'} (H.A.1: 30 programs)", file=sys.stderr)
@@ -373,7 +385,7 @@ def main() -> int:
     everything = ((n_ref_ok == n_ref) and (n_bench_ok == n_bench) and reg_ok
                   and static_ok and recovery_ok and det_ok and rt_ok and fmt_ok
                   and sdk_ok and lsp_ok and d1_ok and d2_ok and d3_ok and mf_ok
-                  and smt_ok and bb_ok and pack_ok
+                  and smt_ok and bb_ok and pack_ok and rel_ok
                   and arch_ok and f_ok and llm_ok and pkg_ok and pg_ok
                   and demos_ok and fuzz_ok and scope_ok
                   and alsp_ok and flc_ok and capfw_ok)

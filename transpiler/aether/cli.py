@@ -106,7 +106,7 @@ def cmd_emit(args) -> int:
     ast, rc = _maybe_resolve_imports(ast, args.file, args)
     if rc != 0:
         return rc
-    py = emit(ast)
+    py = emit(ast, release=getattr(args, "release", False))
     print(py)
     return 0
 
@@ -322,6 +322,11 @@ def cmd_check(args) -> int:
 
 
 def cmd_run(args) -> int:
+    if getattr(args, "release", False) and getattr(args, "effect_strict", False):
+        print("aether: --release and --effect-strict are mutually exclusive "
+              "(strict effect checking needs the frames --release removes)",
+              file=sys.stderr)
+        return 2
     if args.effect_strict:
         set_effect_strict(True)
     # C.5 deterministic test mode: pin clock + random seed for reproducible runs.
@@ -349,7 +354,7 @@ def cmd_run(args) -> int:
         rc = _run_capability_check(ast, args.json)
         if rc != 0:
             return rc
-    py = emit(ast)
+    py = emit(ast, release=getattr(args, "release", False))
     code = compile(py, args.file + ".py", "exec")
     g = build_namespace()
     g["__name__"] = "__main__"
@@ -504,6 +509,9 @@ def main(argv=None) -> int:
     sp.add_argument("--no-import-resolution", action="store_true",
                     help="opt out of default-on multi-file import resolution "
                          "(H.E.3); treat ImportDecls as opaque")
+    sp.add_argument("--release", action="store_true",
+                    help="elide effect frames and ensures asserts; keep "
+                         "requires + refinement boundary checks")
 
     sp = sub.add_parser("pack",
                         help="emit FILE as an importable Python package "
@@ -547,6 +555,9 @@ def main(argv=None) -> int:
 
     sp = sub.add_parser("run", help="parse + emit + execute")
     sp.add_argument("file")
+    sp.add_argument("--release", action="store_true",
+                    help="elide effect frames and ensures asserts; keep "
+                         "requires + refinement boundary checks")
     sp.add_argument("--effect-strict", action="store_true",
                     help="enforce that observed effects are subset of declared")
     sp.add_argument("--deterministic", action="store_true",
