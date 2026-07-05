@@ -211,11 +211,14 @@ toolchain/sandbox/etc. issues.
 | **E9002** | internal error (parser/emitter raised something other than `AetherError`) |
 | **E9003** | Python runtime error inside the candidate (e.g. divide-by-zero with no precondition) |
 
-## SMT contract proving — E09xx (opt-in, `aether check --prove`)
+## SMT contract proving — E09xx (default-on when z3 is installed)
 
-Emitted by `transpiler/aether/passes/smt.py`. The pass is opt-in
-(`--prove`) and requires the optional `z3-solver` dependency
-(`pip install 'aether-lang[smt]'`).
+Emitted by `transpiler/aether/passes/smt.py`. The pass runs by default on
+`aether check` whenever the optional `z3-solver` dependency is importable
+(`pip install 'aether-lang[smt]'`); `--no-prove` disables it, `--prove`
+forces it (and errors with an install hint when z3 is missing). On
+z3-less installs the pass is skipped silently — the core stays
+zero-dependency.
 
 | Code | Description | `extra` fields |
 |------|-------------|----------------|

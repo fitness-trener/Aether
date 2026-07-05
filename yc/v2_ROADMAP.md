@@ -28,6 +28,9 @@ until 2026-07-06, when the pass was created as
   now actually has it).
 - `--prove` on `aether check` (opt-in, default off) plus
   `--prove-timeout-ms` (per-obligation Z3 timeout, default 5000 ms).
+  2026-07-06 (later the same day): flipped default-on when z3 is
+  installed (`--no-prove` escape hatch; `--prove` now means "force,
+  error if z3 missing"). The opt-in era lasted one day.
 - Diagnostics per the `grammar/diagnostics.md` catalog (not the
   "E0507-class" the original entry guessed): **E0901** = refuted
   `ensures` clause (error, fails the check), **E0902** = solver

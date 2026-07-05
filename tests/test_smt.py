@@ -292,10 +292,18 @@ def test_cli_prove_proved_exits_0_with_summary():
     assert data["prove"]["refuted"] == 0
 
 
-def test_cli_without_prove_flag_ignores_contracts():
+def test_cli_prove_is_default_on_when_z3_present():
     if not HAVE_Z3:
         return
-    r = _run_cli(REFUTABLE)          # no --prove: stays opt-in
+    r = _run_cli(REFUTABLE)           # no flag: default-on since wave 1
+    assert r.returncode == 2, (r.returncode, r.stdout, r.stderr)
+    assert "E0901" in (r.stdout + r.stderr)
+
+
+def test_cli_no_prove_disables():
+    if not HAVE_Z3:
+        return
+    r = _run_cli(REFUTABLE, "--no-prove")
     assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
     assert "E0901" not in (r.stdout + r.stderr)
 

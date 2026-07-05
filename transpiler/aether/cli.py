@@ -298,15 +298,18 @@ def cmd_check(args) -> int:
         rc = _run_module_check(ast, args.json)
         if rc != 0:
             return rc
-    # Opt-in SMT contract proving (v2 roadmap 1.1). Off by default;
-    # enable with --prove. E0901 refutations fail the check; E0902
-    # timeouts warn and pass.
+    # SMT contract proving: default-on when z3-solver is installed
+    # (wave 1 flip; was opt-in). --no-prove disables; --prove forces and
+    # errors with an install hint when z3 is missing. E0901 refutations
+    # fail the check; E0902 timeouts warn and pass.
     prove_summary = None
-    if getattr(args, "prove", False):
-        rc, prove_summary = _run_smt_check(
-            ast, args.json, getattr(args, "prove_timeout_ms", 5000))
-        if rc != 0:
-            return rc
+    if not getattr(args, "no_prove", False):
+        from .passes.smt import HAVE_Z3
+        if HAVE_Z3 or getattr(args, "prove", False):
+            rc, prove_summary = _run_smt_check(
+                ast, args.json, getattr(args, "prove_timeout_ms", 5000))
+            if rc != 0:
+                return rc
     if args.json:
         out = {"ok": True, "decls": len(ast["decls"])}
         if prove_summary is not None:
@@ -534,8 +537,11 @@ def main(argv=None) -> int:
                     help="opt out of default-on multi-file import resolution "
                          "(H.E.3); treat ImportDecls as opaque")
     sp.add_argument("--prove", action="store_true",
-                    help="run the opt-in SMT contract-proving pass "
-                         "(requires z3-solver: pip install 'aether-lang[smt]')")
+                    help="force the SMT contract-proving pass; errors if "
+                         "z3-solver is missing (pip install 'aether-lang[smt]'). "
+                         "The pass already runs by default when z3 is installed")
+    sp.add_argument("--no-prove", action="store_true",
+                    help="disable the default-on SMT contract-proving pass")
     sp.add_argument("--prove-timeout-ms", type=int, default=5000,
                     help="per-obligation Z3 timeout in ms (default 5000)")
 
