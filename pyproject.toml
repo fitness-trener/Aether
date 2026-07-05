@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aether-lang"
+version = "0.3.0"
+description = "A programming language designed for AI agents to write production code."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Aether contributors" },
+]
+keywords = [
+    "programming language", "AI agents", "effects",
+    "capabilities", "refinement types", "static analysis",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Compilers",
+    "Topic :: Software Development :: Interpreters",
+]
+
+# Aether's core depends on the Python stdlib only. The optional LLM
+# fix-loop demo pulls in `anthropic`; declared as an extra so the
+# default install stays minimal.
+dependencies = []
+
+[project.optional-dependencies]
+llm = ["anthropic >= 0.34.0"]
+smt = ["z3-solver >= 4.12"]
+dev = ["pytest >= 7.0", "z3-solver >= 4.12"]
+
+[project.urls]
+Homepage   = "https://github.com/aether-lang/aether"
+Repository = "https://github.com/aether-lang/aether"
+Issues     = "https://github.com/aether-lang/aether/issues"
+
+[project.scripts]
+aether = "transpiler.aether.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["transpiler*"]
+exclude = ["tests*", "demos*", "bench*", "scripts*", "validation*", "runs*", "audits*", "yc*", "docs*", "grammar*", "prompt*", "reference*", "playground*", "web*", "transpiler*__pycache__*", "*__pycache__*"]
+
+[tool.setuptools.package-data]
+"transpiler.aether" = ["py.typed"]
