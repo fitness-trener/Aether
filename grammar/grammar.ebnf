@@ -19,11 +19,15 @@
      4.  not           (unary prefix)
      5.  ==  !=
      6.  <  <=  >  >=  is  in
-     7.  +  -
-     8.  *  /  %
-     9.  unary -
-     10. call, field-access, index   (postfix, left-assoc)
-     11. atom: literal, identifier, parenthesised, constructor
+     7.  bor           (bitwise or, Int)
+     8.  bxor          (bitwise xor, Int)
+     9.  band          (bitwise and, Int)
+     10. shl  shr      (shifts, Int)
+     11. +  -
+     12. *  /  %
+     13. unary -
+     14. call, field-access, index   (postfix, left-assoc)
+     15. atom: literal, identifier, parenthesised, constructor
 
    The parser implements precedence with a Pratt loop, but the EBNF below
    spells out only the structural productions; precedence is comments. *)

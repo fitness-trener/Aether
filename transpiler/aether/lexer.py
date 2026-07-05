@@ -32,6 +32,8 @@ KEYWORDS = {
     "self", "result", "old",
     # Logical
     "and", "or", "not", "implies",
+    # Bitwise / shifts (Int only; Int is arbitrary-precision so shl never overflows)
+    "band", "bor", "bxor", "shl", "shr",
     # Effects
     "pure",
     # Reserved for v0.2

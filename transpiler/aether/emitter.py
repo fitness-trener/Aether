@@ -84,6 +84,19 @@ def emit(ast: Dict[str, Any]) -> str:
     ctx.union_cases.setdefault("Ok", "Result")
     ctx.union_cases.setdefault("Err", "Result")
 
+    # B.4 polish: emit one module-level predicate-helper per refinement type
+    # before the user's declarations, so per-call boundary checks can reuse
+    # the same callable instead of allocating a fresh lambda per invocation.
+    # The helper name is `_ae_refn_<TypeName>`. It's pure and takes _ae_self.
+    if ctx.refinements:
+        ctx.emit()
+        ctx.emit("# refinement predicates (B.4: hoisted helpers)")
+        for refn_name, refn_data in ctx.refinements.items():
+            pred_src = emit_expr(ctx, refn_data["predicate"])
+            ctx.emit(f"def _ae_refn_{refn_name}(_ae_self):")
+            with ctx.block():
+                ctx.emit(f"return bool({pred_src})")
+
     # Emit each top-level declaration. After each, flush any helper functions.
     for d in ast["decls"]:
         emit_top_decl(ctx, d)
@@ -180,22 +193,23 @@ def emit_function(ctx: EmitContext, d: Dict[str, Any]):
             eff_lits.append("(" + ", ".join(repr(p) for p in e["path"]) + ",)")
         ctx.emit(f"push_effect_frame([{', '.join(eff_lits)}])")
         old_marker_idx = len(ctx.lines)
-        # Emit refinement-type boundary checks for any parameter whose
-        # declared type is a refinement. The predicate is compiled into
-        # a lambda taking the candidate as `_ae_self` (because Aether's
-        # `self` keyword inside a refinement clause refers to the value
-        # being checked). The mangle of `self` is `_ae_self`.
+        # B.4 polish: refinement boundary checks reference the hoisted
+        # `_ae_refn_<TypeName>` helper instead of allocating a lambda per
+        # call. The predicate's source text is also passed so the runtime
+        # diagnostic can include it: "value 0 fails refinement PositiveInt
+        # where self > 0" reads better than "value 0 fails refinement
+        # PositiveInt".
         for p in d["params"]:
             ty = p.get("type") or {}
             if ty.get("kind") == "TypeName" and ty.get("name") in ctx.refinements:
                 refn_name = ty["name"]
                 pname_m = mangle(p["name"])
                 pred_ast = ctx.refinements[refn_name]["predicate"]
-                pred_src = emit_expr(ctx, pred_ast)
+                pred_text = _pretty(pred_ast)
                 ctx.emit(
                     f"_ae_check_refinement({pname_m}, "
-                    f"(lambda _ae_self: bool({pred_src})), "
-                    f"{refn_name!r}, {p['name']!r})"
+                    f"_ae_refn_{refn_name}, "
+                    f"{refn_name!r}, {p['name']!r}, {pred_text!r})"
                 )
         for clause in d["requires"]:
             cond_src = emit_expr(ctx, clause)
@@ -209,20 +223,27 @@ def emit_function(ctx: EmitContext, d: Dict[str, Any]):
                 ctx.emit("return _ae_result")
             else:
                 emit_block(ctx, d["body"])
-                # Implicit fall-through: function body ended without return.
-                # Treat as `return None` for Unit-returning functions.
-                ctx.emit("_ae_result = None")
-                emit_ensures_checks(ctx)
-                ctx.emit("return _ae_result")
+                # Implicit fall-through: only emit if the body could fall through.
+                # If the last statement is unconditionally a `return`, the
+                # fall-through path is dead and emitting it duplicates the
+                # ensures check (also creating a redundant old() snapshot).
+                if not _body_terminates(d["body"]):
+                    ctx.emit("_ae_result = None")
+                    emit_ensures_checks(ctx)
+                    ctx.emit("return _ae_result")
         ctx.emit("finally:")
         with ctx.block():
             ctx.emit("pop_effect_frame()")
 
         old_pairs = ctx.old_exprs_stack[-1]
         if old_pairs:
+            # old() snapshots are inserted at the function's body level
+            # (same indent as `push_effect_frame`), which is the current
+            # `ctx.indent_level` while we're still inside the
+            # `with ctx.block()` for the function body.
             old_lines = []
             for old_var, old_src in old_pairs:
-                old_lines.append("    " * (ctx.indent_level + 1) + f"{old_var} = {old_src}")
+                old_lines.append("    " * ctx.indent_level + f"{old_var} = {old_src}")
             ctx.lines[old_marker_idx:old_marker_idx] = old_lines
 
     ctx.fn_name_stack.pop()
@@ -240,6 +261,39 @@ def emit_ensures_checks(ctx: EmitContext):
         cond_src = emit_expr(ctx, clause)
         ctx.emit(f"_ae_assert_contract(bool({cond_src}), 'ensures', "
                  f"{repr(_pretty(clause))}, {fn_name!r})")
+
+
+def _body_terminates(stmts: List[Dict[str, Any]]) -> bool:
+    """Conservative check: returns True if every control-flow path through
+    `stmts` ends in a Return / Break / Continue and the implicit fall-through
+    cannot be reached. Used to suppress emission of the dead-code fall-through
+    block (which would also create a redundant old() snapshot)."""
+    if not stmts:
+        return False
+    last = stmts[-1]
+    k = last.get("kind")
+    if k in ("Return", "Break", "Continue"):
+        return True
+    if k == "If":
+        # Terminates iff every branch terminates.
+        if last.get("else") is None:
+            return False
+        if not _body_terminates(last["then"]):
+            return False
+        for e in last.get("elifs", []):
+            if not _body_terminates(e["body"]):
+                return False
+        if not _body_terminates(last["else"]):
+            return False
+        return True
+    if k == "Match":
+        # Terminates iff every arm terminates. (Aether's match is exhaustive
+        # per the spec, so no `else` is needed.)
+        arms = last.get("arms", [])
+        if not arms:
+            return False
+        return all(_body_terminates(a["body"]) for a in arms)
+    return False
 
 
 # ----------------------------------------------------------------------
@@ -374,6 +428,7 @@ PY_BINOPS = {
     "+": "+", "-": "-", "*": "*", "%": "%",
     "==": "==", "!=": "!=", "<": "<", "<=": "<=", ">": ">", ">=": ">=",
     "and": "and", "or": "or",
+    "band": "&", "bor": "|", "bxor": "^", "shl": "<<", "shr": ">>",
 }
 
 
@@ -516,7 +571,7 @@ def emit_match_expr(ctx: EmitContext, e: Dict[str, Any]) -> str:
 # Pretty printer for diagnostics
 # ----------------------------------------------------------------------
 
-def _pretty(e: Dict[str, Any]) -> str:
+def _pretty(e):
     k = e["kind"]
     if k == "IntLit":
         return str(e["value"])
@@ -536,4 +591,6 @@ def _pretty(e: Dict[str, Any]) -> str:
         return f"{_pretty(e['func'])}(...)"
     if k == "Field":
         return f"{_pretty(e['value'])}.{e['name']}"
+    if k == "Old":
+        return f"old({_pretty(e['value'])})"
     return f"<{k}>"

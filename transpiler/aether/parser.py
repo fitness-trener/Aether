@@ -15,15 +15,50 @@ from .diagnostics import AetherError, Diagnostic, Position
 
 
 def parse(source: str, filename: str = "<input>") -> Dict[str, Any]:
+    """Strict parse: raises AetherError on the first parse error.
+
+    Backward-compatible single-error API used by the runtime, emitter,
+    benchmark harness, and every Phase-A/B regression test.
+    """
     tokens = tokenize(source, filename)
     p = Parser(tokens)
     return p.parse_program()
 
 
+def parse_collect(source: str, filename: str = "<input>"):
+    """Lenient parse (C.6): recovers at top-level boundaries and returns
+    (ast_or_none, [Diagnostic, ...]).
+
+    - If `diagnostics` is empty, `ast_or_none` is a well-formed program.
+    - Otherwise the parser collected every recoverable error it could
+      while syncing forward to the next top-level declaration; the AST
+      returned is a partial Program containing whichever decls parsed
+      cleanly. Callers wanting a hard fail can convert the diagnostics
+      back into `raise AetherError(None, diagnostics=diags)`.
+
+    This is the entry point the agent SDK, the LSP, and the
+    `aether check --collect-errors` CLI mode use to surface every parse
+    problem in one shot, rather than the fix-loop having to re-run the
+    parser for each error one at a time.
+    """
+    tokens = tokenize(source, filename)
+    p = Parser(tokens, collect_errors=True)
+    ast = p.parse_program()
+    return ast, list(p.diagnostics)
+
+
+# Top-level keywords used as sync points for multi-error recovery.
+_SYNC_TOP_LEVEL_KEYWORDS = (
+    "function", "type", "record", "union", "const", "module", "import",
+)
+
+
 class Parser:
-    def __init__(self, tokens: List[Token]):
+    def __init__(self, tokens: List[Token], collect_errors: bool = False):
         self.tokens = tokens
         self.i = 0
+        self.collect_errors = collect_errors
+        self.diagnostics: List[Diagnostic] = []
 
     # --- token helpers --------------------------------------------------
 
@@ -82,8 +117,30 @@ class Parser:
     def parse_program(self) -> Dict[str, Any]:
         decls = []
         while self.peek().kind != "eof":
-            decls.append(self.parse_top_decl())
+            if self.collect_errors:
+                start_i = self.i
+                try:
+                    decls.append(self.parse_top_decl())
+                except AetherError as e:
+                    self.diagnostics.append(e.diag)
+                    # Don't loop forever on the same token.
+                    if self.i == start_i:
+                        self.advance()
+                    self._sync_to_top_level()
+            else:
+                decls.append(self.parse_top_decl())
         return {"kind": "Program", "decls": decls}
+
+    def _sync_to_top_level(self) -> None:
+        """Advance the cursor until we either hit a top-level keyword
+        or eof. Used only in collect-errors mode."""
+        while True:
+            t = self.peek()
+            if t.kind == "eof":
+                return
+            if t.kind == "kw" and t.value in _SYNC_TOP_LEVEL_KEYWORDS:
+                return
+            self.advance()
 
     def parse_top_decl(self) -> Dict[str, Any]:
         t = self.peek()
@@ -543,7 +600,19 @@ class Parser:
         return self._binop_loop(self._parse_rel, ("==", "!="))
 
     def _parse_rel(self) -> Dict[str, Any]:
-        return self._binop_loop(self._parse_add, ("<", "<=", ">", ">=", "is", "in"))
+        return self._binop_loop(self._parse_bor, ("<", "<=", ">", ">=", "is", "in"))
+
+    def _parse_bor(self) -> Dict[str, Any]:
+        return self._binop_loop(self._parse_bxor, ("bor",))
+
+    def _parse_bxor(self) -> Dict[str, Any]:
+        return self._binop_loop(self._parse_band, ("bxor",))
+
+    def _parse_band(self) -> Dict[str, Any]:
+        return self._binop_loop(self._parse_shift, ("band",))
+
+    def _parse_shift(self) -> Dict[str, Any]:
+        return self._binop_loop(self._parse_add, ("shl", "shr"))
 
     def _parse_add(self) -> Dict[str, Any]:
         return self._binop_loop(self._parse_mul, ("+", "-"))
@@ -623,7 +692,6 @@ class Parser:
         # match-expression
         if t.kind == "kw" and t.value == "match":
             return self._parse_match_expr()
-        # list literal
         if t.kind == "sym" and t.value == "[":
             self.advance()
             elems: List[Dict[str, Any]] = []
