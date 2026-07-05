@@ -1,4 +1,4 @@
-# SPEC_ISSUES — v0.2 backlog
+# SPEC_ISSUES — v0.2+ backlog
 
 Anything discovered while building v0.1 that should be fixed in v0.2 lands here.
 Do not edit the v0.1 grammar/spec to address these — work around them in v0.1
@@ -6,6 +6,13 @@ and resolve them in a single revision pass.
 
 This log was audited against the actual implementation on 2026-05-03 after an
 independent review. Resolved entries reflect the post-audit state.
+
+**See also**: `yc/v2_ROADMAP.md` — the strategic, feature-level scope ledger
+for v0.4+. The roadmap document explains the *categories* of deferred work
+(SMT, native compilation, async, package manager, LSP polish, multi-file
+resolution for SDK + LSP, dotted/aliased imports, symbol-level export
+filtering) and the reasoning behind each deferral. This file is the
+granular bug log; the roadmap is the strategy.
 
 ## Open
 
@@ -88,6 +95,16 @@ use a non-identifier separator like `__pred__` / `__bang__`, or reject any
 user identifier that already ends in `_q` / `_e`.
 
 ## Resolved
+
+### S-019 · Int spec/runtime divergence resolved: arbitrary precision  *(resolved 2026-07-06)*
+`grammar/types.md` said "64-bit signed integer" while the transpiled
+runtime used Python arbitrary-precision int. Three real-world ports
+(humanize 10**100, bech32 accumulators) silently relied on > 2**63
+values, so the runtime behaviour is the useful one. Decision: the spec
+now says arbitrary-precision; overflow/wrapping never occurs; fixed-width
+code masks explicitly with `band`. Enforcing 64-bit was rejected: it
+would require overflow diagnostics on every arithmetic op and would have
+broken all three validated ports.
 
 ### S-001 · `ensures` clauses now fire at runtime  *(resolved 2026-05-03)*
 Previously a postcondition violation was silently ignored. The emitter now

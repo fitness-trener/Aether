@@ -4,12 +4,18 @@ Aether is gradually typed at function bodies, statically typed at function/modul
 
 ## Primitive types
 
-    Int        // 64-bit signed integer
+    Int        // arbitrary-precision signed integer
     Float      // 64-bit IEEE-754
     Bool       // true | false
     String     // immutable UTF-8 string
     Bytes      // immutable byte sequence
     Unit       // the trivial type, sole value `()`
+
+`Int` is arbitrary-precision: arithmetic never overflows or wraps. This is
+specified, not an accident of the Python runtime — contract reasoning
+(`ensures`, SMT proving) assumes mathematical integers. Code that needs
+fixed-width wrapping semantics must mask explicitly, e.g.
+`x band 18446744073709551615` for u64.
 
 ## Parameterised types
 
