@@ -60,6 +60,51 @@ def test_bitwise_pretty_roundtrip():
     assert py1 == py2
 
 
+BYTES_SRC = """
+function main() returns Unit
+  effects log
+do
+  print(intToString(ord("A")))
+  print(chr(66))
+  let b: Bytes = bytesFromList([222, 173, 190, 239])
+  print(intToString(bytesLen(b)))
+  print(intToString(byteAt(b, 0)))
+  print(intToString(byteAt(b, 3)))
+  let h: Bytes = sha256(stringToBytes("abc"))
+  print(intToString(bytesLen(h)))
+  print(intToString(byteAt(h, 0)))
+  print(bytesToString(bytesFromList([104, 105])))
+  print(intToString(sum(bytesToList(bytesFromList([1, 2, 3])))))
+end
+"""
+
+
+def test_bytes_bridge():
+    # sha256("abc") = ba7816bf... -> first byte 0xba = 186
+    assert _run(BYTES_SRC) == "65\nB\n4\n222\n239\n32\n186\nhi\n6\n"
+
+
+def test_bytes_domain_errors():
+    from aether.diagnostics import AetherError
+    from aether import runtime as rt
+    for bad in [
+        lambda: rt._ae_byteAt(b"ab", 2),
+        lambda: rt._ae_byteAt(b"ab", -1),
+        lambda: rt._ae_ord("ab"),
+        lambda: rt._ae_ord(""),
+        lambda: rt._ae_chr(-1),
+        lambda: rt._ae_chr(1114112),
+        lambda: rt._ae_bytesFromList([0, 256]),
+        lambda: rt._ae_bytesFromList([-1]),
+    ]:
+        try:
+            bad()
+        except AetherError as e:
+            assert e.diag.code == "E0305", e.diag.code
+        else:
+            raise AssertionError(f"no E0305 from {bad}")
+
+
 def main() -> int:
     tests = [(n, f) for n, f in sorted(globals().items())
              if n.startswith("test_") and callable(f)]

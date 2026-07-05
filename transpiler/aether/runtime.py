@@ -13,6 +13,7 @@ just calls them directly.
 """
 
 from __future__ import annotations
+import re
 from typing import Any, Callable, Dict, List, Tuple, Optional
 
 
@@ -139,10 +140,13 @@ def _ae_head(xs):                      return _ae_Some(xs[0]) if xs else _ae_Non
 def _ae_tail(xs):
     if not xs:
         from .diagnostics import AetherError, Diagnostic, Position
-        raise AetherError(Diagnostic(code="E0301", category="contract",
-                                     severity="error",
-                                     message="tail of empty list",
-                                     position=Position(0, 0)))
+        raise AetherError(Diagnostic(
+            code="E0305", category="contract", severity="error",
+            message="tail of empty list",
+            position=Position(0, 0),
+            suggestion="check empty?(xs) before calling tail",
+            extra={"stdlib_function": "tail"},
+        ))
     return list(xs[1:])
 
 def _ae_append(xs, x):                 return list(xs) + [x]
@@ -261,13 +265,185 @@ def _ae_writeFile(path, contents):
     except OSError as e:
         return _ae_Err(str(e))
 
+def _ae_sqlQuery(q):
+    # Models a database call — carries the `db.query` effect. The demo
+    # returns a marker instead of touching a real DB. E0713 refuses a
+    # query string built by raw concatenation of untrusted input.
+    record_effect("db", "query")
+    return "ROWS(" + q + ")"
+
+def _ae_sqlBind(template, value):
+    # Pure. Parameterized-query binding: substitute the first `?` in
+    # `template` with a safely-escaped literal of `value`. This is the
+    # sanctioned way to put untrusted input into a query; E0713 accepts a
+    # sqlBind(...) result and refuses raw string concatenation.
+    escaped = "'" + str(value).replace("'", "''") + "'"
+    return template.replace("?", escaped, 1)
+
+def _ae_sqlExec(stmt, auth):
+    # Models a data-MUTATING database statement (UPDATE/DELETE/INSERT) —
+    # carries the `db.exec` effect (capability `db`). The demo returns a
+    # marker instead of touching a real DB. E0716 refuses a call whose
+    # `auth` argument is not a proven Authorized<...> value, and E0713
+    # refuses a `stmt` built by raw concatenation.
+    record_effect("db", "exec")
+    return "MUTATED(" + stmt + " by " + str(auth) + ")"
+
+
+def _ae_authorize(principal, action):
+    # Pure. The sanctioned authorization guard: checks that `principal`
+    # may perform `action` and returns an Authorized<String> proof token.
+    # `Authorized<T>` is a compile-time-only marker (erased at runtime);
+    # the protection is static — E0716 refuses a mutating sink whose
+    # dataflow carries no authorize(...) / Authorized<T> proof. The demo
+    # models the policy decision as a token; a real backend would consult
+    # a policy store here.
+    return "AUTH(" + str(principal) + ":" + str(action) + ")"
+
+
+def _ae_sqlByOwner(stmt, resourceId, proof):
+    # Models a RESOURCE-SCOPED data mutation (UPDATE/DELETE on one row) —
+    # carries the `db.exec` effect (capability `db`). The demo returns a
+    # marker instead of touching a real DB. E0717 refuses a call whose
+    # `proof` is not an authorizeResource(...) result bound to the SAME
+    # `resourceId` the sink mutates (IDOR / cross-tenant, CWE-639), and
+    # E0713 refuses a `stmt` built by raw concatenation.
+    record_effect("db", "exec")
+    return "MUTATED(" + stmt + " @ " + str(resourceId) + " by " + str(proof) + ")"
+
+
+def _ae_authorizeResource(principal, action, resourceId):
+    # Pure. The object-level authorization guard: checks that `principal`
+    # may perform `action` ON `resourceId` and returns an
+    # Authorized<String> proof token bound to that resource. The binding
+    # is static — E0717 requires sqlByOwner's proof to name the SAME id
+    # the sink mutates; a proof for a different id is refused. The demo
+    # models the policy decision as a token; a real backend would check
+    # row ownership here.
+    return ("AUTH(" + str(principal) + ":" + str(action)
+            + "@" + str(resourceId) + ")")
+
+
+def _ae_shellExec(cmd):
+    # Models a shell execution — carries the `exec.run` effect (requires
+    # capability `exec`). The demo returns a marker instead of spawning a
+    # real process. E0714 refuses a command line built by raw
+    # concatenation of untrusted input.
+    record_effect("exec", "run")
+    return "EXEC(" + cmd + ")"
+
+def _ae_shellArg(template, value):
+    # Pure. Substitute the first `?` in `template` with `value` quoted as
+    # a single shell argument (POSIX single-quote escaping: ' -> '\''),
+    # so it cannot inject `;`/`|`/`$( )` shell syntax. The sanctioned way
+    # to place untrusted input on a command line; E0714 accepts a
+    # shellArg(...) result and refuses raw string concatenation.
+    quoted = "'" + str(value).replace("'", "'\\''") + "'"
+    return template.replace("?", quoted, 1)
+
+def _ae_redirect(url):
+    # Models an HTTP redirect — carries the `net.redirect` effect. E0718
+    # refuses a target steerable by untrusted input (open redirect).
+    record_effect("net", "redirect")
+    return "REDIRECT(" + url + ")"
+
+def _ae_safeRedirect(host, path):
+    # Pure. Build a redirect target pinned to `host`: strip any scheme,
+    # authority, and leading slashes from `path` so the result can only
+    # ever point at `host`. The sanctioned repair for E0718 — it defeats
+    # both absolute-url and protocol-relative (//evil.com) open redirects.
+    p = str(path)
+    if "://" in p:
+        after = p.split("://", 1)[1]
+        p = after.split("/", 1)[1] if "/" in after else ""
+    p = p.lstrip("/\\")
+    return "https://" + str(host).strip("/") + "/" + p
+
+def _ae_classifyPII(x):
+    # Pure. Wrap a value as PII<T>, a compile-time-only taint marker
+    # (erased at runtime). E0715 refuses a PII value reaching a log or
+    # disk sink unless masked with redact().
+    return x
+
+def _ae_redact(x):
+    # Pure. The sanctioned, consent-safe masking of a PII<T> value. Emails
+    # keep the first char + domain; everything else keeps the first char.
+    # E0715 treats a redact(...) subtree as an intended, masked disclosure.
+    s = str(x)
+    if "@" in s:
+        local, _, domain = s.partition("@")
+        head = local[:1] if local else ""
+        return head + "***@" + domain
+    return (s[:1] + "***") if s else "***"
+
+def _ae_classify(x):
+    # Pure. Wrap a value as Secret<T>. `Secret<T>` is a compile-time-only
+    # taint marker (erased at runtime — a Secret<String> IS its string).
+    # The protection is static: E0712 refuses a Secret flowing into a log
+    # sink. classify() marks a value secret; reveal() is the sanctioned,
+    # auditable exit.
+    return x
+
+def _ae_reveal(x):
+    # Pure. Unwrap a Secret<T> to its T. This is the ONLY sanctioned way
+    # to expose a secret; E0712 treats a reveal(...) subtree as an
+    # intentional, code-reviewed disclosure and does not flag it.
+    return x
+
+def _ae_safeJoin(base, rel):
+    # Pure. Join `rel` under `base`, discarding any component that would
+    # escape it: `..`, `.`, absolute roots, and drive/backslash prefixes.
+    # The result is guaranteed to stay within `base`. This is the
+    # sanctioned way to build a filesystem path from untrusted input —
+    # it defeats path traversal / Zip-Slip by construction, and E0711
+    # recognizes it as the safe wrapper around readFile/writeFile paths.
+    parts = [p for p in re.split(r"[/\\]", rel) if p not in ("", ".", "..")]
+    b = base.rstrip("/\\")
+    return (b + "/" + "/".join(parts)) if parts else b
+
 
 # ----------------------------------------------------------------------
 # Stdlib: Time / Hash / Math
 # ----------------------------------------------------------------------
 
+_DETERMINISTIC_CLOCK_MS = None
+_DETERMINISTIC_CLOCK_INIT = 1714579200000   # 2024-05-01T00:00:00Z (stable anchor)
+
+
+def set_deterministic(seed: int = 0) -> None:
+    """C.5 deterministic test mode: pin time + random seed so an agent
+    fix-loop, the benchmark harness, and any reproducer the user files
+    against an Aether program produce identical output across runs.
+
+    What this controls:
+      - `now()` returns `_DETERMINISTIC_CLOCK_INIT` ms on the first call
+        and advances by 1 ms on each subsequent call.
+      - Python's `random.seed(seed)` is set in case a future stdlib
+        function uses it.
+
+    What this does NOT control:
+      - Python's dict/set iteration order, which depends on
+        `PYTHONHASHSEED` and must be set before interpreter startup.
+        The CLI's `--deterministic` flag warns about this when it sees
+        an unset hash seed and the bench harness sets it explicitly.
+    """
+    global _DETERMINISTIC_CLOCK_MS
+    _DETERMINISTIC_CLOCK_MS = _DETERMINISTIC_CLOCK_INIT
+    import random
+    random.seed(seed)
+
+
+def is_deterministic() -> bool:
+    return _DETERMINISTIC_CLOCK_MS is not None
+
+
 def _ae_now():
     record_effect("time", "now")
+    global _DETERMINISTIC_CLOCK_MS
+    if _DETERMINISTIC_CLOCK_MS is not None:
+        ms = _DETERMINISTIC_CLOCK_MS
+        _DETERMINISTIC_CLOCK_MS = ms + 1
+        return {"_kind": "Instant", "epochMillis": ms}
     import time
     return {"_kind": "Instant", "epochMillis": int(time.time() * 1000)}
 
@@ -283,6 +459,56 @@ def _ae_md5(b):
     import hashlib
     return hashlib.md5(b).digest()
 
+# --- Bytes <-> Int bridge + char codes (gap 1.1: unblocks base58/bech32/JWT) ---
+
+def _e0305_raise(msg: str, suggestion: str):
+    from .diagnostics import AetherError, Diagnostic, Position
+    raise AetherError(Diagnostic(
+        code="E0305", category="contract", severity="error",
+        message=msg, position=Position(0, 0),
+        suggestion=suggestion, confidence=1.0))
+
+def _ae_ord(s):
+    if len(s) != 1:
+        _e0305_raise(f"ord requires a single-character string, got length {len(s)}",
+                     "require length(s) == 1 at the call site")
+    return ord(s)
+
+def _ae_chr(n):
+    if n < 0 or n > 0x10FFFF:
+        _e0305_raise(f"chr code point {n} outside 0..1114111",
+                     "require 0 <= n <= 1114111 at the call site")
+    return chr(n)
+
+def _ae_byteAt(b, i):
+    if i < 0 or i >= len(b):
+        _e0305_raise(f"byteAt index {i} out of range for {len(b)} bytes",
+                     "require 0 <= i < bytesLen(b) at the call site")
+    return b[i]
+
+def _ae_bytesLen(b):
+    return len(b)
+
+def _ae_bytesFromList(xs):
+    for x in xs:
+        if x < 0 or x > 255:
+            _e0305_raise(f"bytesFromList element {x} outside 0..255",
+                         "every element must satisfy 0 <= x <= 255")
+    return bytes(xs)
+
+def _ae_bytesToList(b):
+    return list(b)
+
+def _ae_stringToBytes(s):
+    return s.encode("utf-8")
+
+def _ae_bytesToString(b):
+    try:
+        return b.decode("utf-8")
+    except UnicodeDecodeError:
+        _e0305_raise("bytesToString: input is not valid UTF-8",
+                     "only decode byte sequences produced from valid UTF-8 text")
+
 def _ae_abs(x):                        return abs(x)
 def _ae_min(a, b):                     return min(a, b)
 def _ae_max(a, b):                     return max(a, b)
@@ -293,11 +519,94 @@ def _ae_pow(a, b):                     return a ** b
 def _ae_sqrt(x):
     if x < 0:
         from .diagnostics import AetherError, Diagnostic, Position
-        raise AetherError(Diagnostic(code="E0301", category="contract",
-                                     severity="error",
-                                     message="sqrt of negative",
-                                     position=Position(0, 0)))
+        raise AetherError(Diagnostic(
+            code="E0305", category="contract", severity="error",
+            message="sqrt of negative",
+            position=Position(0, 0),
+            suggestion="ensure x >= 0.0 before calling sqrt",
+            extra={"stdlib_function": "sqrt", "value": x},
+        ))
     import math; return math.sqrt(x)
+
+
+# ----------------------------------------------------------------------
+# D.1 stdlib expansion
+#
+# Each function below is pure (no effect declaration; the static effect
+# pass treats absence as `pure`). Tested by `tests/test_stdlib_d1.py`.
+# ----------------------------------------------------------------------
+
+# --- List ----------------------------------------------------------
+
+def _ae_sort(xs):                       return sorted(xs)
+def _ae_sortBy(xs, key):                return sorted(xs, key=key)
+def _ae_take(xs, n):                    return list(xs[:max(0, n)])
+def _ae_drop(xs, n):                    return list(xs[max(0, n):])
+def _ae_sum(xs):                        return sum(xs)
+def _ae_product(xs):
+    p = 1
+    for x in xs:
+        p *= x
+    return p
+def _ae_all(xs, p):                     return all(bool(p(x)) for x in xs)
+def _ae_any(xs, p):                     return any(bool(p(x)) for x in xs)
+def _ae_find(xs, p):
+    for x in xs:
+        if bool(p(x)):
+            return _ae_Some(x)
+    return _ae_None()
+def _ae_flatMap(xs, f):
+    out = []
+    for x in xs:
+        out.extend(f(x))
+    return out
+def _ae_count(xs, p):                   return sum(1 for x in xs if bool(p(x)))
+def _ae_flatten(xss):
+    out = []
+    for xs in xss:
+        out.extend(xs)
+    return out
+
+# --- Map -----------------------------------------------------------
+
+def _ae_mapValues(m, f):
+    return {k: f(v) for k, v in m.items()}
+
+# --- Set -----------------------------------------------------------
+# (named `setUnion` etc. because `union` is a reserved keyword in Aether.)
+
+def _ae_setUnion(a, b):                 return frozenset(set(a) | set(b))
+def _ae_setIntersection(a, b):          return frozenset(set(a) & set(b))
+def _ae_setDifference(a, b):            return frozenset(set(a) - set(b))
+
+# --- String --------------------------------------------------------
+
+def _ae_repeat(s, n):                   return s * max(0, n)
+def _ae_padLeft(s, n, c):
+    if not c:
+        return s
+    while len(s) < n:
+        s = c[0] + s
+    return s
+def _ae_padRight(s, n, c):
+    if not c:
+        return s
+    while len(s) < n:
+        s = s + c[0]
+    return s
+def _ae_chars(s):                       return list(s)
+
+# --- Math ----------------------------------------------------------
+
+def _ae_gcd(a, b):
+    import math
+    return math.gcd(abs(int(a)), abs(int(b)))
+def _ae_lcm(a, b):
+    import math
+    a, b = abs(int(a)), abs(int(b))
+    if a == 0 or b == 0:
+        return 0
+    return a * b // math.gcd(a, b)
 
 
 # ----------------------------------------------------------------------
@@ -318,53 +627,84 @@ def _ae_unwrapOrElse(o, default):      return o[1] if o[0] == "Some" else defaul
 # ----------------------------------------------------------------------
 
 def _ae_assert_contract(cond: bool, kind: str, expr: str, fn: str, args=None):
-    """Raise a structured contract error if `cond` is False."""
+    """Raise a structured contract error if `cond` is False.
+
+    D.2 split: `requires` failures use E0301, `ensures` failures use
+    E0304. An agent fix-loop reading the code alone can immediately tell
+    whether the failure is on the caller side (provide better input) or
+    the implementation side (the function lied about what it returns).
+    """
     if cond:
         return
     from .diagnostics import AetherError, Diagnostic, Position
+    if kind == "ensures":
+        code = "E0304"
+        suggestion = (f"the implementation of {fn} does not satisfy its "
+                      f"declared postcondition: {expr}")
+    else:
+        code = "E0301"
+        suggestion = (f"caller of {fn} must satisfy its precondition: "
+                      f"{expr}")
     raise AetherError(Diagnostic(
-        code="E0301", category="contract", severity="error",
+        code=code, category="contract", severity="error",
         message=f"{kind} clause failed in {fn}: {expr}",
         position=Position(0, 0),
-        extra={"args": args or {}},
+        extra={"function": fn, "clause_kind": kind,
+               "clause_text": expr, "args": args or {}},
         confidence=1.0,
-        suggestion=f"check inputs to {fn}",
+        suggestion=suggestion,
     ))
 
 
-def _ae_check_refinement(value, predicate_fn, type_name: str, binding_name: str):
-    """Boundary-crossing check for a refinement type.
+
+def _ae_check_refinement(value, predicate_fn, type_name: str,
+                          binding_name: str, predicate_text: str = ""):
+    """Boundary-crossing check for a refinement type (B.4 polished).
 
     Called at function entry for any parameter whose declared type is a
     refinement (e.g. `type PositiveInt = Int where self > 0`). The
-    predicate is compiled into a lambda taking the candidate as `_ae_self`.
+    `predicate_fn` is a hoisted module-level `_ae_refn_<TypeName>` helper
+    emitted by the compiler. `predicate_text` is the source-rendered
+    predicate ("self > 0") used in the diagnostic message and `extra`
+    field so an agent fix-loop can see *why* the value was rejected,
+    not just that it was.
     """
     try:
         ok = bool(predicate_fn(value))
     except Exception as e:
         from .diagnostics import AetherError, Diagnostic, Position
+        msg = (f"refinement predicate for {type_name} raised "
+               f"{type(e).__name__} on value bound to {binding_name!r}")
+        if predicate_text:
+            msg += f" (predicate: {predicate_text})"
         raise AetherError(Diagnostic(
             code="E0303", category="refinement", severity="error",
-            message=(f"refinement predicate for {type_name} raised "
-                     f"{type(e).__name__} on value bound to {binding_name!r}"),
+            message=msg,
             position=Position(0, 0),
-            suggestion=("ensure refinement predicates are total over their base type "
-                        "(handle every possible input)"),
+            suggestion=("ensure refinement predicates are total over their "
+                        "base type (handle every possible input)"),
             confidence=1.0,
+            extra={"type": type_name, "binding": binding_name,
+                   "predicate": predicate_text,
+                   "value_repr": repr(value)[:80]},
         )) from e
-    if ok:
-        return
-    from .diagnostics import AetherError, Diagnostic, Position
-    raise AetherError(Diagnostic(
-        code="E0302", category="refinement", severity="error",
-        message=(f"value bound to {binding_name!r} fails refinement "
-                 f"{type_name}"),
-        position=Position(0, 0),
-        suggestion=(f"caller must ensure {binding_name} satisfies "
-                    f"{type_name}'s refinement clause"),
-        confidence=1.0,
-        extra={"value_repr": repr(value)[:80]},
-    ))
+    if not ok:
+        from .diagnostics import AetherError, Diagnostic, Position
+        pred_clause = f" where ({predicate_text})" if predicate_text else ""
+        msg = (f"value bound to {binding_name!r} (= {value!r}) fails refinement "
+               f"{type_name}{pred_clause}")
+        raise AetherError(Diagnostic(
+            code="E0302", category="refinement", severity="error",
+            message=msg,
+            position=Position(0, 0),
+            suggestion=(f"caller must ensure {binding_name} satisfies "
+                        f"{type_name}{pred_clause}"),
+            confidence=1.0,
+            extra={"type": type_name, "binding": binding_name,
+                   "predicate": predicate_text,
+                   "value_repr": repr(value)[:80]},
+        ))
+    return value
 
 
 # ----------------------------------------------------------------------
@@ -373,11 +713,13 @@ def _ae_check_refinement(value, predicate_fn, type_name: str, binding_name: str)
 
 def build_namespace() -> Dict[str, Any]:
     g: Dict[str, Any] = {}
+    EXPORTS = {
+        "_make_union", "_TRACKER",
+        "push_effect_frame", "pop_effect_frame",
+        "record_effect", "set_effect_strict",
+        "set_deterministic", "is_deterministic",
+    }
     for name, val in globals().items():
-        if name.startswith("_ae_") or name in {
-            "_make_union", "_TRACKER",
-            "push_effect_frame", "pop_effect_frame",
-            "record_effect", "set_effect_strict",
-        }:
+        if name.startswith("_ae_") or name in EXPORTS:
             g[name] = val
     return g
