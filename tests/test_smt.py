@@ -25,7 +25,8 @@ except ImportError:
 from aether.parser import parse  # noqa: E402
 
 if HAVE_Z3:
-    from aether.passes.smt import translate_expr, _resolve_param_sort, _mk_var  # noqa: E402
+    from aether.passes.smt import (  # noqa: E402
+        translate_expr, _resolve_param_sort, _mk_var, check_contracts_smt)
 
 
 # One function whose clauses exercise the whole fragment. `requires`
@@ -145,6 +146,115 @@ end
                                type_decls) is None
     assert _resolve_param_sort({"kind": "GenericType", "name": "List",
                                 "args": []}, type_decls) is None
+
+
+REFUTABLE = """
+function myAbs(x: Int) returns Int
+  ensures result >= 0
+  effects pure
+do
+  return x
+end
+"""
+
+PROVABLE = """
+function clampLow(x: Int) returns Int
+  requires x >= 0
+  requires x <= 100
+  ensures result >= 0
+  ensures result <= 100
+  effects pure
+do
+  return x
+end
+"""
+
+REFINED = """
+type Percentage = Int where self >= 0 and self <= 100
+
+function keep(p: Percentage) returns Int
+  ensures result >= 0
+  effects pure
+do
+  return p
+end
+"""
+
+VIA_CALL = """
+function helper(x: Int) returns Int
+  effects pure
+do
+  return x
+end
+
+function viaCall(x: Int) returns Int
+  ensures result >= 0
+  effects pure
+do
+  return helper(x)
+end
+"""
+
+UNSOUND_ASSUMPTION = """
+function trusted(x: Int) returns Int
+  requires isFine(x)
+  ensures result >= 0
+  effects pure
+do
+  return x
+end
+"""
+
+
+def test_refutable_emits_e0901_with_counterexample():
+    if not HAVE_Z3:
+        return
+    diags, summary = check_contracts_smt(parse(REFUTABLE, "<smt>"))
+    assert summary == {"proved": 0, "refuted": 1, "timeout": 0,
+                       "skipped": 0}, summary
+    d = diags[0]
+    assert d.code == "E0901"
+    assert d.category == "contract"
+    assert d.severity == "error"
+    assert d.extra["function"] == "myAbs"
+    assert d.extra["clause_kind"] == "ensures"
+    cx = d.extra["counterexample"]
+    assert int(cx["x"]) < 0, cx        # roadmap 1.3: concrete violating input
+    assert int(cx["result"]) < 0, cx
+
+
+def test_provable_produces_no_diagnostics():
+    if not HAVE_Z3:
+        return
+    diags, summary = check_contracts_smt(parse(PROVABLE, "<smt>"))
+    assert diags == []
+    assert summary == {"proved": 2, "refuted": 0, "timeout": 0, "skipped": 0}
+
+
+def test_refinement_predicate_is_assumed():
+    if not HAVE_Z3:
+        return
+    diags, summary = check_contracts_smt(parse(REFINED, "<smt>"))
+    assert diags == []
+    assert summary["proved"] == 1, summary
+
+
+def test_call_body_is_skipped_not_guessed():
+    if not HAVE_Z3:
+        return
+    diags, summary = check_contracts_smt(parse(VIA_CALL, "<smt>"))
+    assert diags == []
+    assert summary == {"proved": 0, "refuted": 0, "timeout": 0, "skipped": 1}
+
+
+def test_untranslatable_requires_skips_whole_function():
+    # Soundness: without the isFine(x) assumption, x = -1 would "refute"
+    # the ensures. The pass must skip, not fabricate a counterexample.
+    if not HAVE_Z3:
+        return
+    diags, summary = check_contracts_smt(parse(UNSOUND_ASSUMPTION, "<smt>"))
+    assert diags == []
+    assert summary == {"proved": 0, "refuted": 0, "timeout": 0, "skipped": 1}
 
 
 def main() -> int:
