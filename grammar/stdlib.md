@@ -423,6 +423,12 @@ The constructors `Some`, `None`, `Ok`, `Err` are also always in scope.
 
 ## Math
 
+    function formatFloat(x: Float, ndigits: Int) returns String
+      requires ndigits >= 0
+      effects pure
+      // Fixed-point decimal, round-half-even applied to the exact binary
+      // value of x. Deterministic across platforms; no exponent notation.
+
     function abs(x: Int) returns Int
       effects pure
     function min(a: Int, b: Int) returns Int

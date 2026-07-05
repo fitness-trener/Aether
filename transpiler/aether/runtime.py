@@ -509,6 +509,19 @@ def _ae_bytesToString(b):
         _e0305_raise("bytesToString: input is not valid UTF-8",
                      "only decode byte sequences produced from valid UTF-8 text")
 
+def _ae_formatFloat(x, ndigits):
+    """Fixed-point decimal string, round-half-even on the exact binary
+    value of x (gap 1.3). Identical to CPython format(x, '.Nf'), but the
+    behaviour is SPECIFIED here, not inherited: Decimal(float) is exact,
+    quantize applies IEEE-754 roundTiesToEven at the requested digit."""
+    if ndigits < 0:
+        _e0305_raise(f"formatFloat ndigits {ndigits} must be >= 0",
+                     "require ndigits >= 0 at the call site")
+    from decimal import Decimal, ROUND_HALF_EVEN
+    q = Decimal(1).scaleb(-ndigits)
+    d = Decimal(x).quantize(q, rounding=ROUND_HALF_EVEN)
+    return f"{d:f}"
+
 def _ae_abs(x):                        return abs(x)
 def _ae_min(a, b):                     return min(a, b)
 def _ae_max(a, b):                     return max(a, b)

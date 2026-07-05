@@ -105,6 +105,46 @@ def test_bytes_domain_errors():
             raise AssertionError(f"no E0305 from {bad}")
 
 
+FFLOAT_SRC = """
+function main() returns Unit
+  effects log
+do
+  print(formatFloat(2.25, 1))
+  print(formatFloat(2.35, 1))
+  print(formatFloat(2.675, 2))
+  print(formatFloat(1.5, 0))
+  print(formatFloat(0.0 - 0.04, 1))
+  print(formatFloat(3.0, 3))
+end
+"""
+
+
+def test_format_float():
+    # 2.25 is exactly representable -> half-even ties to 2.2.
+    # 2.35 in binary is 2.350000000000000088... -> above the tie -> 2.4.
+    # 2.675 in binary is 2.674999999999999822... -> below the tie -> 2.67.
+    # 1.5 with 0 digits: half-even ties to 2.
+    assert _run(FFLOAT_SRC) == "2.2\n2.4\n2.67\n2\n-0.0\n3.000\n"
+
+
+def test_format_float_matches_python_format():
+    from aether import runtime as rt
+    for x in [0.1, 2.5, 2.675, 1e10, -3.14159, 123456.789]:
+        for nd in [0, 1, 2, 6]:
+            assert rt._ae_formatFloat(x, nd) == format(x, f".{nd}f"), (x, nd)
+
+
+def test_format_float_domain():
+    from aether.diagnostics import AetherError
+    from aether import runtime as rt
+    try:
+        rt._ae_formatFloat(1.0, -1)
+    except AetherError as e:
+        assert e.diag.code == "E0305"
+    else:
+        raise AssertionError("no E0305 for ndigits < 0")
+
+
 def main() -> int:
     tests = [(n, f) for n, f in sorted(globals().items())
              if n.startswith("test_") and callable(f)]
