@@ -23,7 +23,7 @@ from aether.passes.effects import (                   # noqa: E402
     check_template_injection, check_deserialization, check_cleartext_transmission,
     check_metadata_fetch, check_hardcoded_secret, check_log_injection,
     check_reflected_xss, check_header_injection, check_xxe,
-    check_csv_injection,
+    check_csv_injection, check_marker_boundary,
     _net_authority_wildcarded,
 )
 
@@ -1455,6 +1455,133 @@ end
     print("E0712/E0724: plain String return stays clean")
 
 
+# --- E0729 marker laundering across a user-function boundary ------------
+# A Secret/PII/Untrusted value passed to a user-declared callee parameter
+# NOT typed with that marker erases the marker inside the callee — every
+# sink pass goes blind. Sanctioned exits: the marker's unwrappers at the
+# call site, or a marker-typed parameter.
+
+def _mb_codes(src: str):
+    ast = parse(src, "<mb>")
+    return [d.code for d in check_marker_boundary(ast)]
+
+
+LAUNDER_SRC = """
+function logIt(msg: String) returns Unit
+  effects log
+do
+  print(msg)
+end
+
+function main(password: Secret<String>) returns Unit
+  effects log
+do
+  logIt(password)
+end
+"""
+
+
+def test_secret_laundered_rejected():
+    assert _mb_codes(LAUNDER_SRC) == ["E0729"], \
+        "Secret into a plain-String param erases the marker - must refuse"
+    print("E0729: secret laundered through helper rejected")
+
+
+def test_marked_param_clean():
+    src = """
+function logIt(msg: Secret<String>) returns Unit
+  effects log
+do
+  print(reveal(msg))
+end
+
+function main(password: Secret<String>) returns Unit
+  effects log
+do
+  logIt(password)
+end
+"""
+    assert _mb_codes(src) == [], \
+        "a Secret-typed callee param carries the marker - sanctioned"
+    print("E0729: marker-typed param passes clean")
+
+
+def test_revealed_arg_clean():
+    src = """
+function logIt(msg: String) returns Unit
+  effects log
+do
+  print(msg)
+end
+
+function main(password: Secret<String>) returns Unit
+  effects log
+do
+  logIt(reveal(password))
+end
+"""
+    assert _mb_codes(src) == [], "reveal() at the call site is sanctioned"
+    print("E0729: reveal() at boundary passes clean")
+
+
+def test_untrusted_laundered_rejected():
+    src = """
+function render(s: String) returns Unit
+  effects log
+do
+  print(s)
+end
+
+function main(form: Untrusted<String>) returns Unit
+  effects log
+do
+  render(form)
+end
+"""
+    assert _mb_codes(src) == ["E0729"], \
+        "Untrusted into a plain param blinds every sink check downstream"
+    print("E0729: untrusted laundered through helper rejected")
+
+
+def test_pii_source_call_laundered_rejected():
+    src = """
+function fetchEmail() returns PII<String>
+  effects pure
+do
+  return classifyPII("alice@example.com")
+end
+
+function send(addr: String) returns Unit
+  effects log
+do
+  print(addr)
+end
+
+function main() returns Unit
+  effects log
+do
+  send(fetchEmail())
+end
+"""
+    assert _mb_codes(src) == ["E0729"], \
+        "an inline PII-returning call into a plain param is laundering"
+    print("E0729: PII source call into plain param rejected")
+
+
+def test_stdlib_callee_not_flagged():
+    src = """
+function main(password: Secret<String>) returns Unit
+  effects log
+do
+  let _t: String = trim(password)
+  print("done")
+end
+"""
+    assert _mb_codes(src) == [], \
+        "stdlib callees are out of E0729 v1 scope (recorded residual)"
+    print("E0729: stdlib callee skipped (v1 scope)")
+
+
 if __name__ == "__main__":
     test_authority_predicate()
     test_broad_rejected()
@@ -1551,4 +1678,10 @@ if __name__ == "__main__":
     test_pii_return_taint_rejected()
     test_untrusted_return_taint_rejected()
     test_plain_return_still_clean()
-    print("E0710..E0728 ALL REACH-SCOPE TESTS PASS")
+    test_secret_laundered_rejected()
+    test_marked_param_clean()
+    test_revealed_arg_clean()
+    test_untrusted_laundered_rejected()
+    test_pii_source_call_laundered_rejected()
+    test_stdlib_callee_not_flagged()
+    print("E0710..E0729 ALL REACH-SCOPE TESTS PASS")
