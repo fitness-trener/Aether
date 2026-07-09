@@ -1141,6 +1141,91 @@ def check_csv_injection(ast: Dict[str, Any]) -> List[Diagnostic]:
 
 
 # ----------------------------------------------------------------------
+# E0729 — marker laundering: a marked value passed to an unmarked param
+# ----------------------------------------------------------------------
+# A value carrying a confidentiality/taint marker (Secret<T>, PII<T>,
+# Untrusted<T>) must not be passed to a user-function parameter typed
+# WITHOUT that marker: inside the callee the value carries no taint, so
+# every sink pass goes blind (the launder that lets `logIt(password)`
+# print the secret unflagged). Sanctioned exits: the marker's own
+# unwrappers at the call site, or declaring the callee parameter with the
+# marker type so taint travels with the value. v1 scope: user-declared
+# callees only (direct named calls); stdlib transforms and HOF /
+# function-typed callees are recorded residuals. Authorized<T> is
+# deliberately excluded — it is a proof marker, and dropping a proof only
+# over-restricts the callee.
+
+def _boundary_markers() -> Dict[str, frozenset]:
+    """Marker -> sanctioned call-site unwrappers. Built lazily because
+    _TRUSTED is defined further down the module (near its E0719/E0720
+    users)."""
+    return {
+        _SECRET_MARKER:    frozenset({_SECRET_REVEAL}),
+        _PII_MARKER:       frozenset({_PII_REDACT}),
+        _UNTRUSTED_MARKER: frozenset({_UNTRUSTED_SANITIZE, _HTML_ESCAPE,
+                                      _HEADER_SANITIZE, _CSV_ESCAPE,
+                                      _TRUSTED}),
+    }
+
+
+def check_marker_boundary(ast: Dict[str, Any]) -> List[Diagnostic]:
+    """Return E0729 diagnostics for a marker-carrying value passed to a
+    user-declared function parameter not typed with that marker."""
+    decls = {d["name"]: d for d in ast.get("decls", [])
+             if d.get("kind") == "FunctionDecl"}
+    diags: List[Diagnostic] = []
+    for marker, unwraps in _boundary_markers().items():
+        src_fns = _marker_source_fns(ast, marker)
+        pmask = _marker_param_mask(ast, marker)
+        for d in decls.values():
+            tainted = _marked_tainted_names(d, marker, unwraps, src_fns, pmask)
+            if not tainted and not src_fns:
+                continue
+            fn = d["name"]
+            fpos = d.get("pos") or {"line": 0, "column": 0}
+            for call in _walk_calls(d.get("body", [])):
+                callee = decls.get(_callee_name(call))
+                if callee is None:
+                    continue  # stdlib / unknown: covered by sink passes
+                params = callee.get("params", [])
+                for i, arg in enumerate(call.get("args") or []):
+                    if i >= len(params):
+                        break
+                    if _is_marker_type(params[i].get("type"), marker):
+                        continue  # marker declared — taint travels
+                    if not _expr_leaks_marked(arg, tainted, unwraps,
+                                              src_fns, pmask):
+                        continue
+                    pos = call.get("pos") or fpos
+                    diags.append(Diagnostic(
+                        code="E0729",
+                        category="capability",
+                        severity="error",
+                        message=(
+                            f"function {fn!r} passes a {marker}<...>-marked "
+                            f"value to parameter {params[i].get('name')!r} of "
+                            f"{callee['name']!r}, which is not typed "
+                            f"{marker}<...>; inside the callee the marker is "
+                            f"erased and every sink check goes blind "
+                            f"(taint laundering)"
+                        ),
+                        position=Position(pos.get("line", 0),
+                                          pos.get("column", 0)),
+                        suggestion=(
+                            f"type the parameter as {marker}<...> so the "
+                            f"marker travels with the value, or unwrap "
+                            f"explicitly at the call site via one of: "
+                            + ", ".join(sorted(unwraps)) + "(...)"
+                        ),
+                        confidence=1.0,
+                        extra={"function": fn, "callee": callee["name"],
+                               "param": params[i].get("name"),
+                               "marker": marker},
+                    ))
+    return diags
+
+
+# ----------------------------------------------------------------------
 # E0202 — non-exhaustive match on a union (unhandled variant)
 # ----------------------------------------------------------------------
 # Aether's `match` is exhaustive at RUNTIME (a missed variant raises). This

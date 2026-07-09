@@ -38,13 +38,62 @@ what's in `extra`, and what an agent fix-loop is supposed to do.
 
 ## Parse (E02xx)
 
-| Code | Description |
-|------|-------------|
-| **E0201** | parse error (unified code for every "expected X, got Y") |
+| Code | Description | `extra` keys |
+|------|-------------|--------------|
+| **E0201** | parse error (unified code for every "expected X, got Y") | — |
+| **E0202** | a `match` on a union omits a case and has no wildcard catch-all — non-exhaustive match / unhandled variant (static, was runtime-only) | `function`, `union`, `missing` |
+| **E0203** | a `match` arm can never be reached — it follows a wildcard catch-all, or duplicates an earlier case (dead code, CWE-561) | `function`, `reason` |
+| **E0204** | a statement follows an unconditional `return`/`break`/`continue` in the same block — unreachable dead code (CWE-561) | `function`, `after` |
+| **E0205** | a `let` binding (not `_`-prefixed) is never read — a dead store, usually a mistaken variable (CWE-563) | `function`, `binding` |
+| **E0206** | a bare statement discards the `Result<...>` of a call — an unchecked error (e.g. a failed write silently ignored, CWE-252) | `function`, `callee` |
+| **E0207** | a refinement type's predicate is unsatisfiable (e.g. `Int where self >= 10 and self <= 5`) — an uninhabitable / impossible type | `type`, `lo`, `hi` |
 
-Emitted by `Parser.err`. The lenient `parse_collect` (C.6) accumulates
-all E0201 diagnostics it can recover past; strict `parse` raises on
-the first.
+E0201 is emitted by `Parser.err`. The lenient `parse_collect` (C.6)
+accumulates all E0201 diagnostics it can recover past; strict `parse`
+raises on the first.
+
+E0202 lifts match exhaustiveness from a RUNTIME trap to a STATIC guarantee
+(default-on; opt out with `--no-exhaustiveness-check`). When a match's
+scrutinee has a statically-resolvable union type (from a parameter or
+`let` annotation), every case of that union must be handled or a wildcard
+`case _` present; otherwise the missing variants are named at check time.
+Adding a new variant to a union then forces every match to be updated
+before the program compiles. Conservative: if the scrutinee's union type
+cannot be resolved statically, the check stays silent (no false positive).
+
+E0203 is the complement of E0202 (same default-on step / opt-out): E0202
+catches too FEW arms, E0203 catches redundant ones — an arm after a
+wildcard catch-all (which already matches everything) or a duplicate
+constructor case. Purely about arm ordering, so it needs no type
+information and applies to every match. Together the two make match
+handling total-and-minimal: every variant handled exactly once.
+
+E0204 generalizes the reachability idea beyond match (same default-on
+step / opt-out): any statement after an unconditional `return`, `break`,
+or `continue` in the same block is unreachable. Purely structural — it
+scans every statement list for a terminator that is not last. Always a
+logic error (a stray early return, a merge artifact).
+
+E0205 completes the static-semantic cluster with a use/def check: a `let`
+binding whose name is never read is a dead store. The `_`-prefix is the
+sanctioned intentional-discard convention (`let _r = writeFile(...)` keeps
+the effect, drops the value) and is exempt. Same default-on step / opt-out.
+
+E0206 is the error-handling member of the cluster (CWE-252): a bare
+statement calling a `Result<...>`-returning function (stdlib `writeFile`/
+`readFile`/`readLine`/`parseInt`/`parseFloat`, or any user function with a
+`Result` return type) silently drops the error case. Bind and `match` it,
+or use `let _r = ...` to discard explicitly. Same default-on step /
+opt-out. (Scanning AI-generated candidates, this flagged 12 real ignored-
+error bugs — see `bench/SCAN_FINDINGS.md`.)
+
+E0207 closes the cluster with a light satisfiability check on refinement
+types: it intersects the analyzable `self OP const` clauses of the
+predicate's conjunction and refuses a type whose bounds admit no value
+(reversed bounds, contradictory `==`, exclusive-touch). It is SOUND by
+construction — unanalyzable clauses widen to unbounded, so it never
+false-positives, at the cost of missing non-interval contradictions. Same
+default-on step / opt-out.
 
 ## Contract / refinement (E03xx)
 
@@ -91,13 +140,24 @@ Bench-harness only. The CLI does not currently enforce timeouts;
 | **E0704** | module requires a capability outside the known vocabulary (D.3) | `module`, `capability`, `known` |
 | **E0710** | a `net.fetch` effect leaves the host/authority unpinned (bare `*`, `scheme://*`, wildcard scheme, or leading `*` that is not a `*.subdomain` pin), admitting SSRF to internal hosts like `169.254.169.254` | `function`, `effect_arg`, `reason` |
 | **E0711** | `readFile`/`writeFile` is called with a path that is neither a fixed string literal nor routed through `safeJoin(...)`, i.e. a path steerable by untrusted input (path-traversal / Zip-Slip precondition) | `function`, `sink`, `reason` |
-| **E0712** | a `Secret<...>`-marked value reaches a log sink (`print`) without an explicit `reveal(...)` — the "secret/PII accidentally logged" class (CWE-532) | `function`, `sink` |
+| **E0712** | a `Secret<...>`-marked value reaches a log sink (`print`) or is persisted to disk (`writeFile` contents) without an explicit `reveal(...)` — the "secret accidentally logged/written" class (CWE-532) | `function`, `sink` |
 | **E0713** | a `sqlQuery`/`sqlExec` query argument is built by raw string concatenation (or another dynamic expression) instead of a fixed literal or `sqlBind(...)` parameterized query — SQL injection (CWE-89) | `function`, `sink`, `reason` |
 | **E0714** | a `shellExec` argument is built by raw string concatenation (or another dynamic expression) instead of a fixed literal or `shellArg(...)`-quoted command — command injection (CWE-78) | `function`, `sink`, `reason` |
 | **E0715** | a `PII<...>`-marked value reaches a log sink (`print`) or the contents of `writeFile` without `redact(...)` — personal data persisted/logged in the clear (data-residency / GDPR leak) | `function`, `sink` |
 | **E0716** | a data-mutating sink (`sqlExec`) is called without an authorization proof in its dataflow — the auth argument is absent or not a proven `Authorized<...>` value (an `authorize(...)` call, an `Authorized<T>` parameter, or a binding of one) — missing authorization (CWE-862/863) | `function`, `sink`, `reason` |
 | **E0717** | a resource-scoped mutation (`sqlByOwner(stmt, resourceId, proof)`) whose `proof` is not an `authorizeResource(principal, action, resourceId)` result bound to the SAME `resourceId` the sink mutates — missing, unbound, or wrong-resource authorization — IDOR / cross-tenant data access (CWE-639) | `function`, `sink`, `reason` |
 | **E0718** | a `redirect` target is neither a fixed literal nor a `safeRedirect(host, path)` result — an untrusted/dynamic redirect target (open redirect, CWE-601) | `function`, `sink`, `reason` |
+| **E0719** | a `renderTemplate` template argument is not a fixed string literal (built by concatenation or from a parameter) — server-side template injection (SSTI / RCE, CWE-94) | `function`, `sink`, `reason` |
+| **E0720** | a `deserialize` argument is untrusted (non-literal) data instead of a `schemaDecode(schema, data)` call — insecure deserialization (pickle/readObject RCE, CWE-502) | `function`, `sink`, `reason` |
+| **E0721** | a `net.fetch` scope uses the `http://` scheme to a non-loopback host — cleartext transmission of credentials/PII (CWE-319) | `function`, `effect_arg`, `reason` |
+| **E0722** | a `net.fetch` scope is pinned to the link-local range `169.254.0.0/16` (cloud metadata / IMDS) — server-side metadata request / IAM-credential theft (CWE-918) | `function`, `effect_arg`, `reason` |
+| **E0723** | a string literal matches a known provider-credential shape (AWS `AKIA…`, GitHub `ghp_…`, Google `AIza…`, Slack `xox…`, Stripe `sk_live_…`, PEM private key) — a hardcoded secret in source (CWE-798) | `credential_kind` |
+| **E0724** | an `Untrusted<...>`-marked value reaches a log sink (`print`) without `sanitizeLog(...)` — log injection / forging via embedded CR/LF (CWE-117) | `function`, `sink` |
+| **E0725** | an `Untrusted<...>`-marked value reaches an HTML response (`htmlResponse`) without `htmlEscape(...)` — reflected cross-site scripting (CWE-79) | `function`, `sink` |
+| **E0726** | an `Untrusted<...>`-marked value reaches a response header (`setHeader`) without `sanitizeHeader(...)` — HTTP response splitting / header injection (CWE-113) | `function`, `sink` |
+| **E0727** | a `parseXml` argument is untrusted (non-literal) instead of a `parseXmlSafe(data)` call — XML external entity injection (file read / SSRF, CWE-611) | `function`, `sink`, `reason` |
+| **E0728** | an `Untrusted<...>`-marked value reaches a CSV cell (`csvCell`) without `csvEscape(...)` — spreadsheet formula injection (CWE-1236) | `function`, `sink` |
+| **E0729** | a `Secret<...>`/`PII<...>`/`Untrusted<...>`-marked value is passed to a user-function parameter not typed with that marker — the callee holds the value with the marker erased, blinding every downstream sink check (taint laundering). Sanctioned exits: the marker's unwrapper (`reveal`/`redact`/the per-sink sanitizers/`trusted`) at the call site, or a marker-typed parameter | `function`, `callee`, `param`, `marker` |
 
 E0701 comes from the B.3 default-on capability pass. E0702/E0703/E0704
 come from the D.3 module-validation pass — also default-on, opt out
@@ -121,9 +181,11 @@ closing the path-traversal / Zip-Slip precondition.
 E0712 is the taint sibling in the same reach-scope pass. `Secret<T>` is
 a compile-time-only marker type (erased at runtime); taint originates at
 `Secret`-typed parameters and propagates through straight-line bindings.
-A value still carrying the marker cannot reach `print`; `reveal(...)` is
-the sanctioned, auditable disclosure that clears it. `classify(x)` wraps
-a value as `Secret<T>`. Same `--no-scope-check` opt-out.
+A value still carrying the marker cannot reach `print` nor the contents
+of `writeFile` (persisting a credential to disk is the same leak as
+logging it); `reveal(...)` is the sanctioned, auditable disclosure that
+clears it. `classify(x)` wraps a value as `Secret<T>`. Same
+`--no-scope-check` opt-out.
 
 E0713 is the injection sibling in the same reach-scope pass. The
 `sqlQuery` sink (effect `db.query`) must receive a fixed string literal
@@ -189,6 +251,100 @@ result, which strips any scheme/authority and leading slashes from
 absolute-url and protocol-relative `//evil.com` redirects). A bare
 parameter, a concatenation, or any other dynamic target is refused.
 Same `--no-scope-check` opt-out.
+
+E0719 is the template-injection sibling of E0713 in the same reach-scope
+pass (CWE-94, the Jinja2/Flask/Handlebars SSTI shape). `renderTemplate`'s
+first argument — the template — must be a fixed string literal (or a name
+bound only to literals). Untrusted input belongs in the second (data)
+argument, which the engine escapes rather than evaluates; a template
+built by concatenation or from a parameter lets user input steer template
+syntax (arbitrary code execution) and is refused. No sanitizer — the fix
+is a fixed template. Same `--no-scope-check` opt-out.
+
+E0720 is the deserialization sibling in the same reach-scope pass
+(CWE-502, the pickle / Java `readObject` / unsafe-YAML gadget class).
+Feeding untrusted bytes to an unrestricted decoder that can instantiate
+arbitrary types is remote code execution. Like SSTI there is no safe way
+to `deserialize` untrusted input — the sanctioned form is
+`schemaDecode(schema, data)`, a decoder pinned to a fixed schema that can
+only produce the declared shape. `deserialize` on any non-literal
+argument is refused; `schemaDecode(...)` on any data passes. Same
+`--no-scope-check` opt-out.
+
+E0721 is the cleartext-transmission sibling of E0710 in the same
+reach-scope pass (CWE-319). E0710 checks that a `net.fetch` host is
+*pinned*; E0721 checks the *scheme* — a pinned `http://` host satisfies
+E0710 but still sends credentials and PII unencrypted, readable by any
+passive network observer. Loopback hosts (`localhost`, `127.0.0.0/8`,
+`::1`, `0.0.0.0`) are exempt — that traffic never leaves the machine. The
+fix is the `https://` scheme. Same `--no-scope-check` opt-out.
+
+E0722 is the metadata-fetch sibling of E0710 in the same reach-scope pass
+(CWE-918). E0710 refuses an *unpinned* scope; E0722 refuses a scope
+*pinned* to the link-local range `169.254.0.0/16`, which holds the cloud
+metadata endpoint `169.254.169.254` (AWS/GCP/Azure IMDS) — a pinned
+metadata host satisfies E0710/E0721 yet is the crown-jewel SSRF target for
+IAM-credential theft. Application code should obtain credentials through
+the SDK/credential provider, never a raw metadata request. Private
+RFC-1918 ranges are deliberately NOT flagged (legitimate in service
+meshes). Same `--no-scope-check` opt-out.
+
+E0723 is a new detector family — a **literal-content scan** (not effect
+or dataflow): every string literal is matched against high-confidence
+provider-credential shapes (AWS/GitHub/Google/Slack/Stripe/PEM). A match
+is a hardcoded secret (CWE-798) — committed to version control forever,
+shipped in every build. The patterns are deliberately narrow so false
+positives are near zero (a demo password like `"hunter2"` does not match;
+a real `AKIA…` key does). Fix: load the secret at runtime from the
+environment / a secret manager. Same `--no-scope-check` opt-out.
+
+E0724 introduces the taint-SOURCE marker `Untrusted<T>` — the sound,
+explicit dual of provenance inference. A value crossing a trust boundary
+(a request field, an uploaded filename) is marked `Untrusted` there;
+logging it raw lets embedded CR/LF forge fake log lines (audit-log
+poisoning). It reuses the same taint machinery as E0712/E0715 (origin at
+`Untrusted`-typed params, straight-line propagation); `sanitizeLog(...)`
+strips the control characters and is the sanctioned exit. `classifyUntrusted(x)`
+marks a value. Same `--no-scope-check` opt-out.
+
+E0725 is the second sink for the `Untrusted<T>` marker (CWE-79, reflected
+XSS): an untrusted value written into an HTML response (`htmlResponse`)
+without escaping executes as markup in the victim's browser. The sanctioned
+exit is `htmlEscape(...)` — and it is sink-SPECIFIC: `sanitizeLog` (which
+clears E0724) does NOT clear E0725, because stripping CR/LF does not
+neutralize `<script>`. This is the key property of per-sink sanitizers —
+the right exit for one sink is not the right exit for another. Same
+`--no-scope-check` opt-out.
+
+E0726 is the third `Untrusted<T>` sink (CWE-113, response splitting): an
+untrusted value in a response header whose embedded CR/LF injects headers
+or a second response (cache poisoning, forged Set-Cookie). The sanctioned
+exit is `sanitizeHeader(...)`. The three Untrusted sinks now cover the
+common HTTP-output contexts — log (E0724), HTML body (E0725), header
+(E0726) — each with its own context-correct sanitizer. Same
+`--no-scope-check` opt-out.
+
+E0727 is the XXE sibling of E0720 (CWE-611) — a parser-CONFIG class, not a
+content-escaping one. `parseXml` (external entities enabled) reads local
+files and reaches internal URLs from a crafted `<!ENTITY SYSTEM ...>`; it
+is refused on untrusted (non-literal) input. `parseXmlSafe(data)` disables
+entity resolution and is the sanctioned alternative. Same `--no-scope-check`
+opt-out.
+
+E0728 is the fourth `Untrusted<T>` sink (CWE-1236) and the first in a
+NON-HTTP context — proving the marker generalizes past web output. A CSV
+cell of exported data that begins with `=` `+` `-` `@` is interpreted as a
+formula when opened in Excel / Google Sheets (`=WEBSERVICE(...)` exfil,
+DDE → code execution). `csvEscape(...)` neutralizes a leading trigger and
+is the sanctioned exit. Same `--no-scope-check` opt-out.
+
+Both E0719 and E0720 also accept an explicit `trusted(...)` argument —
+the auditable trust boundary (the dual of `reveal`/`redact`) for a vetted
+dynamic source (a config bundle, a template from a trusted store). It is
+deliberately narrow: only these two no-sanitizer sinks honor it, and it
+only relaxes the check, so it is strictly non-breaking. Wrapping
+attacker-controlled input in `trusted()` is the one misuse — visible in
+review by construction.
 
 ## Effect — static (E08xx)
 

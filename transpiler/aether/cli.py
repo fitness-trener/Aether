@@ -31,6 +31,13 @@ from .passes.effects import (
     check_effects, check_effect_scope, check_fs_path_safety, check_secret_flow,
     check_injection, check_command_injection, check_pii_flow,
     check_authorization, check_resource_authorization, check_open_redirect,
+    check_template_injection, check_deserialization, check_cleartext_transmission,
+    check_metadata_fetch, check_hardcoded_secret, check_log_injection,
+    check_reflected_xss, check_header_injection, check_xxe,
+    check_csv_injection, check_marker_boundary,
+    check_exhaustiveness, check_unreachable_arms,
+    check_dead_code, check_unused_binding, check_ignored_result,
+    check_unsatisfiable_refinement,
 )
 from .passes.modules import check_modules
 from .passes.imports import resolve_imports
@@ -210,7 +217,25 @@ def _run_effect_scope_check(ast, as_json) -> int:
              + check_secret_flow(ast) + check_injection(ast)
              + check_command_injection(ast) + check_pii_flow(ast)
              + check_authorization(ast) + check_resource_authorization(ast)
-             + check_open_redirect(ast))
+             + check_open_redirect(ast) + check_template_injection(ast)
+             + check_deserialization(ast) + check_cleartext_transmission(ast)
+             + check_metadata_fetch(ast) + check_hardcoded_secret(ast)
+             + check_log_injection(ast) + check_reflected_xss(ast)
+             + check_header_injection(ast) + check_xxe(ast)
+             + check_csv_injection(ast) + check_marker_boundary(ast))
+    if not diags:
+        return 0
+    for d in diags:
+        _emit_error(d, as_json)
+    return 2
+
+
+def _run_exhaustiveness_check(ast, as_json) -> int:
+    """Static semantic checks: E0202 non-exhaustive match + E0203
+    unreachable arm + E0204 dead code after a terminator. 0 if clean."""
+    diags = (check_exhaustiveness(ast) + check_unreachable_arms(ast)
+             + check_dead_code(ast) + check_unused_binding(ast)
+             + check_ignored_result(ast) + check_unsatisfiable_refinement(ast))
     if not diags:
         return 0
     for d in diags:
@@ -283,6 +308,12 @@ def cmd_check(args) -> int:
     # that admit SSRF. Opt out with --no-scope-check.
     if not getattr(args, "no_scope_check", False):
         rc = _run_effect_scope_check(ast, args.json)
+        if rc != 0:
+            return rc
+    # Default-on match-exhaustiveness check (E0202). Opt out with
+    # --no-exhaustiveness-check.
+    if not getattr(args, "no_exhaustiveness_check", False):
+        rc = _run_exhaustiveness_check(ast, args.json)
         if rc != 0:
             return rc
     # Default-on transitive capability check (B.3). No-op when no modules.
@@ -533,6 +564,8 @@ def main(argv=None) -> int:
                          "allows unpinned hosts + dynamic fs paths")
     sp.add_argument("--no-capability-check", action="store_true",
                     help="opt out of default-on capability check (B.3)")
+    sp.add_argument("--no-exhaustiveness-check", action="store_true",
+                    help="opt out of default-on match-exhaustiveness check (E0202)")
     sp.add_argument("--capability-strict", action="store_true",
                     help="(deprecated; capability check is now default-on, "
                          "this flag is a no-op alias kept for backward compat)")
@@ -571,6 +604,8 @@ def main(argv=None) -> int:
                          "allows unpinned hosts + dynamic fs paths")
     sp.add_argument("--no-capability-check", action="store_true",
                     help="opt out of default-on capability check (B.3)")
+    sp.add_argument("--no-exhaustiveness-check", action="store_true",
+                    help="opt out of default-on match-exhaustiveness check (E0202)")
     sp.add_argument("--capability-strict", action="store_true",
                     help="(deprecated; capability check is now default-on, "
                          "this flag is a no-op alias kept for backward compat)")
