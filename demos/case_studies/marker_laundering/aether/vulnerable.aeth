@@ -1,0 +1,28 @@
+// Marker laundering — the vulnerable shape (iteration 39, gaps A + B).
+// getToken() returns a properly marked Secret<String>, and logIt takes a
+// plain String. Two innocent-looking lines compose into a credential in
+// the logs: the return value seeds no taint at the caller (gap A) and
+// the helper boundary erases the marker (gap B).
+//
+// aether check: [E0729] (Secret passed to an unmarked parameter). The
+// binding `t` is tainted via getToken's declared return type (gap A
+// seeding); the laundering boundary is the violation the checker names.
+
+function getToken() returns Secret<String>
+  effects pure
+do
+  return classify("tok_live_secret")
+end
+
+function logIt(msg: String) returns Unit
+  effects log
+do
+  print(msg)
+end
+
+function main() returns Unit
+  effects log
+do
+  let t: Secret<String> = getToken()
+  logIt(t)
+end

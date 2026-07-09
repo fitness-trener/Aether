@@ -1,0 +1,24 @@
+// Marker laundering — the fixed shape. The helper parameter is typed
+// Secret<String>, so the marker travels with the value; the only
+// disclosure is an explicit, auditable reveal() of a masked prefix.
+//
+// aether check: OK (0 diagnostics)
+
+function getToken() returns Secret<String>
+  effects pure
+do
+  return classify("tok_live_secret")
+end
+
+function logIt(msg: Secret<String>) returns Unit
+  effects log
+do
+  print("token received (value withheld); audit=" + reveal(msg))
+end
+
+function main() returns Unit
+  effects log
+do
+  let t: Secret<String> = getToken()
+  logIt(t)
+end

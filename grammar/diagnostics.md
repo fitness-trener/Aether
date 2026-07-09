@@ -187,6 +187,20 @@ logging it); `reveal(...)` is the sanctioned, auditable disclosure that
 clears it. `classify(x)` wraps a value as `Secret<T>`. Same
 `--no-scope-check` opt-out.
 
+Since iteration 39, taint for the confidentiality markers (`Secret<T>`,
+`PII<T>`, `Untrusted<T>`) ALSO originates at calls to functions whose
+declared return type carries the marker — the stdlib constructors
+(`classify`/`classifyPII`/`classifyUntrusted`) and any user function
+declared `returns Secret<...>` etc. This is signature-level
+interprocedural seeding: declared types are trusted, bodies are not
+analyzed. An argument consumed by a marker-typed parameter of a
+user-declared callee is a sanctioned crossing (the callee's own body is
+checked; what escapes is its return, covered by the same seeding). The
+dual guard is **E0729**: a marked value passed to a parameter NOT typed
+with the marker is refused as laundering. `Authorized<T>` (E0716/E0717)
+keeps its own machinery and is deliberately outside both rules — it is a
+proof marker, and widening acceptance there would relax, not tighten.
+
 E0713 is the injection sibling in the same reach-scope pass. The
 `sqlQuery` sink (effect `db.query`) must receive a fixed string literal
 or a `sqlBind(template, value)` parameterized query (which escapes the
