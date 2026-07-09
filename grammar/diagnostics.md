@@ -205,6 +205,11 @@ Iteration 40 closes the remaining direction with **E0730**: a body that
 returns a marker-carrying value under a plain declared return type is
 refused, so declared signatures are enforced on the way out as well as
 trusted on the way in.
+Iteration 41 fixed a false accept in the shared dataflow: `match`-arm
+pattern bindings destructured from a tainted scrutinee are now tainted
+(every arm, every binding — conservative), so wrapping a marked value
+in `Some(...)`/`Ok(...)` and unwrapping it via `match` no longer washes
+the marker.
 
 E0713 is the injection sibling in the same reach-scope pass. The
 `sqlQuery` sink (effect `db.query`) must receive a fixed string literal

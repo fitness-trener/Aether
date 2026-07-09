@@ -1,0 +1,25 @@
+// Example 26 — Match-destructure leak (iter 41). The Secret is wrapped
+// in an Option and unwrapped via match: the arm binding `v` is a fresh
+// name, and before iteration 41 it silently dropped the marker - this
+// exact program checked CLEAN (a false accept, the one failure the
+// over-flag contract forbids). Now the destructured binding stays
+// tainted: [E0712]. The sanctioned exit is reveal(v) inside the arm.
+
+module TokenCache
+  requires capability log
+  exports main
+end
+
+function main(pw: Secret<String>) returns Unit
+  effects log
+do
+  let o: Option<Secret<String>> = Some(pw)
+  match o do
+    case Some(v) do
+      print(v)
+    end
+    case None() do
+      print("none")
+    end
+  end
+end
