@@ -553,22 +553,46 @@ def _expr_leaks_marked(node: Any, tainted: Set[str], unwrap,
     return False
 
 
+def _pattern_bind_names(pat: Any) -> Set[str]:
+    """Names bound by a match pattern (BindPat leaves, recursively —
+    nested constructor patterns included)."""
+    out: Set[str] = set()
+    if isinstance(pat, dict):
+        if pat.get("kind") == "BindPat" and "name" in pat:
+            out.add(pat["name"])
+        for v in pat.values():
+            out |= _pattern_bind_names(v)
+    elif isinstance(pat, list):
+        for x in pat:
+            out |= _pattern_bind_names(x)
+    return out
+
+
 def _marked_tainted_names(fn_decl: Dict[str, Any], marker: str, unwrap,
                           source_fns: frozenset = frozenset(),
                           param_mask: Optional[Dict[str, Tuple[bool, ...]]] = None) -> Set[str]:
     """Names holding a `marker`-typed value: marker-typed params, plus any
     let/assign target bound to an expression carrying a tainted name
     (fixpoint; an `unwrap(...)` call breaks the taint). A call to a
-    `source_fns` member seeds taint (signature-level interprocedural)."""
+    `source_fns` member seeds taint (signature-level interprocedural).
+    Match-arm pattern bindings over a tainted scrutinee are tainted
+    (every arm, every binding — conservative)."""
     tainted: Set[str] = {
         p["name"] for p in fn_decl.get("params", []) if _is_marker_type(p.get("type"), marker)
     }
     binds: List[Tuple[str, Any]] = []
+    destructures: List[Tuple[Set[str], Any]] = []  # (arm-bound names, scrutinee)
 
     def collect(node: Any):
         if isinstance(node, dict):
             if node.get("kind") in ("Let", "Assign") and "name" in node and "value" in node:
                 binds.append((node["name"], node["value"]))
+            if node.get("kind") == "Match" and "scrutinee" in node:
+                names: Set[str] = set()
+                for arm in node.get("arms", []):
+                    names |= _pattern_bind_names(arm.get("pattern"))
+                if names:
+                    destructures.append((names, node["scrutinee"]))
             for v in node.values():
                 collect(v)
         elif isinstance(node, list):
@@ -582,6 +606,10 @@ def _marked_tainted_names(fn_decl: Dict[str, Any], marker: str, unwrap,
         for name, value in binds:
             if name not in tainted and _expr_leaks_marked(value, tainted, unwrap, source_fns, param_mask):
                 tainted.add(name)
+                changed = True
+        for names, scrut in destructures:
+            if not names <= tainted and _expr_leaks_marked(scrut, tainted, unwrap, source_fns, param_mask):
+                tainted |= names
                 changed = True
     return tainted
 
