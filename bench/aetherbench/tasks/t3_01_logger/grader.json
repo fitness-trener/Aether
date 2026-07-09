@@ -1,0 +1,12 @@
+{
+  "expected_stdout": "LOG startup\nLOG ready\n",
+  "stdin": "",
+  "timeout_ms": 5000,
+  "tags": [
+    "module",
+    "capability"
+  ],
+  "difficulty": "aetherbench",
+  "tier": 3,
+  "check_required": true
+}

@@ -1,0 +1,18 @@
+module Thumbnailer
+  requires capability exec
+  requires capability log
+  exports convert
+end
+
+function convert(filename: String) returns Unit
+  effects exec.run, log
+do
+  let _r: String = shellExec(shellArg("convert ? out.png", filename))
+  print("CONVERTED " + filename)
+end
+
+function main() returns Unit
+  effects exec.run, log
+do
+  convert("photo.jpg")
+end

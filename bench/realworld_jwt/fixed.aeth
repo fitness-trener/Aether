@@ -1,0 +1,91 @@
+// The fix. A genuine verification produces an Authorized<String> proof,
+// and the protected mutation will not type past E0716 without one. The
+// verify pins the algorithm (the CVE-2022-29217 defense: never let the
+// token's own `alg` header pick the scheme) and only then mints the proof
+// via authorize(). A path that skips verification — an unverified decode,
+// an alg=none token, a confused-deputy HS/RS forgery — has no way to
+// obtain the proof, so it cannot reach the sink.
+//
+// The security property is structural, not stylistic: the compiler
+// refuses the composition, so the check cannot be forgotten on any
+// mutating path. A helper that mutates on behalf of a caller takes
+// Authorized<String> as a parameter, carrying the proof across the call
+// boundary instead of re-deriving (or skipping) it.
+//
+// Run:  aether check fixed.aeth   -> OK
+//       aether run   fixed.aeth   -> mutation performed with the proof
+
+module Auth
+  requires capability db
+  exports deleteAccount
+end
+
+// Pinned-algorithm verification. `expectedAlg` is compared to the token's
+// header alg; on a genuine match + signature check the caller is
+// authenticated and a proof token is minted. (The signature/HMAC step is
+// modeled; the point is that the proof is producible ONLY here, so no
+// unverified path can fabricate it.)
+function verifyToken(token: String, expectedAlg: String) returns Result<Authorized<String>, String>
+  effects pure
+do
+  let parts = split(token, ".")
+  if length(parts) != 3 then
+    return Err("malformed token")
+  end
+  let headerAlg = decodeAlg(unwrapOrElse(get(parts, 0), ""))
+  // Reject the token's attempt to choose the algorithm — the core of the
+  // alg-confusion / alg=none defense.
+  if headerAlg != expectedAlg then
+    return Err("algorithm mismatch")
+  end
+  if headerAlg == "none" then
+    return Err("unsigned token")
+  end
+  let subject: String = decodeClaims(unwrapOrElse(get(parts, 1), ""))
+  // Signature verified against the server's pinned key (modeled). Only now
+  // is the caller authenticated, and only here is the proof minted.
+  return Ok(authorize(subject, "authenticated"))
+end
+
+function decodeAlg(headerSegment: String) returns String
+  effects pure
+do
+  // Modeled header decode; a real impl base64url-decodes and reads "alg".
+  return headerSegment
+end
+
+function decodeClaims(claimsSegment: String) returns String
+  effects pure
+do
+  return claimsSegment
+end
+
+// The mutation takes the proof as a parameter: whoever calls it must have
+// verified. There is no non-proof path to this sink.
+function applyDelete(subject: String, auth: Authorized<String>) returns Unit
+  effects db.exec
+do
+  let stmt: String = sqlBind("DELETE FROM accounts WHERE owner = ?", subject)
+  let _r: String = sqlExec(stmt, auth)
+end
+
+function deleteAccount(token: String) returns Unit
+  effects db.exec
+do
+  let v = verifyToken(token, "RS256")
+  match v do
+    case Ok(proof) do
+      applyDelete("alice", proof)
+    end
+    case Err(e) do
+      // Rejected before any mutation. No proof, no sink.
+      return
+    end
+  end
+end
+
+function main() returns Unit
+  effects db.exec
+do
+  deleteAccount("RS256.alice.c2ln")
+end

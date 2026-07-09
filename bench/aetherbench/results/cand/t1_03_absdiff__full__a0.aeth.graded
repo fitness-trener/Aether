@@ -1,0 +1,17 @@
+function absDiff(a: Int, b: Int) returns Int
+  ensures result >= 0
+  effects pure
+do
+  if a >= b then
+    return a - b
+  else
+    return b - a
+  end
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(absDiff(3, 10)))
+  print(intToString(absDiff(10, 3)))
+end

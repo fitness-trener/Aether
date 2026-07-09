@@ -1,0 +1,21 @@
+// Example 05 — B.4 refinement-boundary violation.
+// `Percentage` is `Int where 0 <= self <= 100`. The caller passes
+// 120. Aether catches this AT THE CALL SITE with [E0302] naming
+// the binding, the value, and the predicate.
+//
+// Click "run" — the diagnostic fires at boundary-check time, before
+// any of the arithmetic executes.
+
+type Percentage = Int where self >= 0 and self <= 100
+
+function applyDiscount(basePrice: Int, pct: Percentage) returns Int
+  effects pure
+do
+  return basePrice - (basePrice * pct / 100)
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(applyDiscount(100, 120)))
+end

@@ -1,0 +1,47 @@
+function sorted?(xs: List<Int>) returns Bool
+  effects pure
+do
+  if length(xs) < 2 then
+    return true
+  end
+  var i: Int = 1
+  while i < length(xs) do
+    if xs[i - 1] > xs[i] then
+      return false
+    end
+    i = i + 1
+  end
+  return true
+end
+
+function binarySearch(xs: List<Int>, target: Int) returns Option<Int>
+  requires sorted?(xs)
+  effects pure
+do
+  var lo: Int = 0
+  var hi: Int = length(xs) - 1
+  while lo <= hi do
+    let mid: Int = (lo + hi) / 2
+    if xs[mid] == target then
+      return Some(mid)
+    elif xs[mid] < target then
+      lo = mid + 1
+    else
+      hi = mid - 1
+    end
+  end
+  return None()
+end
+
+function main() returns Unit
+  effects log
+do
+  match binarySearch([5, 2, 8, 1, 9], 1) do
+    case Some(i) do
+      print(intToString(i))
+    end
+    case None() do
+      print("not found")
+    end
+  end
+end

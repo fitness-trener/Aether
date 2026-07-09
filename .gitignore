@@ -10,3 +10,11 @@ venv/
 
 .DS_Store
 Thumbs.db
+
+# Local Claude Code working state (session config, worktrees, scratch)
+.claude/
+
+# Build / packaging artifacts
+build/
+dist/
+*.egg-info/

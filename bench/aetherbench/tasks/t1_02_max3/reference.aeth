@@ -1,0 +1,21 @@
+function max3(a: Int, b: Int, c: Int) returns Int
+  ensures result >= a and result >= b and result >= c
+  ensures result == a or result == b or result == c
+  effects pure
+do
+  var m: Int = a
+  if b > m then
+    m = b
+  end
+  if c > m then
+    m = c
+  end
+  return m
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(max3(3, 9, 2)))
+  print(intToString(max3(-1, -5, -2)))
+end

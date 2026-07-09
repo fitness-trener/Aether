@@ -1,0 +1,23 @@
+// Insecure deserialization (CWE-502). BROKEN on purpose.
+//
+// The pickle / Java readObject / unsafe-YAML gadget class: a session
+// cookie (attacker-controlled bytes) is fed to an unrestricted decoder.
+// A crafted payload makes the decoder instantiate arbitrary types and
+// run code during construction — remote code execution, no auth needed.
+//
+// `loadSession` type-checks and looks like plain decoding. The lie is
+// that `raw` is untrusted and `deserialize` is unrestricted. Aether
+// refuses it with E0720 — run `aether check`.
+
+function loadSession(raw: String) returns String
+  effects pure
+do
+  // raw is attacker-controlled; deserialize can build any type => RCE.
+  return deserialize(raw)
+end
+
+function main() returns Unit
+  effects log
+do
+  print(loadSession("cookie=abc;__reduce__=os.system('rm -rf /')"))
+end

@@ -1,0 +1,13 @@
+type SmallInt = Int where self < 10
+
+function tally(n: SmallInt) returns Int
+  effects pure
+do
+  return n + 1
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(tally(50)))
+end

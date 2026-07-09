@@ -1,0 +1,24 @@
+module Reporter
+  requires capability log
+  requires capability fs
+  exports report
+end
+
+function save(body: String) returns Unit
+  effects fs.write
+do
+  writeFile("aetherbench_report.tmp", body)
+end
+
+function report(body: String) returns Unit
+  effects log, fs.write
+do
+  print("REPORT " + body)
+  save(body)
+end
+
+function main() returns Unit
+  effects log, fs.write
+do
+  report("q3-numbers")
+end

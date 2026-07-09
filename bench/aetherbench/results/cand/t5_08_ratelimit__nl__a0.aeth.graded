@@ -1,0 +1,21 @@
+function allow(count: Int, limit: Int) returns Bool
+  requires limit >= 0
+  ensures result == (count < limit)
+  effects pure
+do
+  return count < limit
+end
+
+function main() returns Unit
+  effects log
+do
+  var i: Int = 0
+  while i < 5 do
+    if allow(i, 3) then
+      print("allow")
+    else
+      print("deny")
+    end
+    i = i + 1
+  end
+end

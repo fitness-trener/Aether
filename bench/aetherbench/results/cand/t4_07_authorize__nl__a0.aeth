@@ -1,0 +1,19 @@
+module OrderRepo
+  requires capability db
+  requires capability log
+  exports cancelOrder
+end
+
+function cancelOrder(orderId: String, user: String) returns Unit
+  effects db.exec, log
+do
+  let proof: Authorized<Unit> = authorize(user, "orders:cancel")
+  sqlExec(sqlBind("UPDATE orders SET status = 'cancelled' WHERE id = ?", orderId), proof)
+  print("CANCELLED " + orderId)
+end
+
+function main() returns Unit
+  effects db.exec, log
+do
+  cancelOrder("42", "alice")
+end

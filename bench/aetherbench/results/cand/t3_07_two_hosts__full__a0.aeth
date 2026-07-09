@@ -1,0 +1,24 @@
+function syncA() returns String
+  effects net.fetch("https://a.example.com/*")
+do
+  return "a-ok"
+end
+
+function syncB() returns String
+  effects net.fetch("https://b.example.com/*")
+do
+  return "b-ok"
+end
+
+function syncBoth() returns Unit
+  effects log, net.fetch("https://a.example.com/*"), net.fetch("https://b.example.com/*")
+do
+  print(syncA())
+  print(syncB())
+end
+
+function main() returns Unit
+  effects log, net.fetch("https://a.example.com/*"), net.fetch("https://b.example.com/*")
+do
+  syncBoth()
+end

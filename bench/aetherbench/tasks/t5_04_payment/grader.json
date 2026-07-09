@@ -1,0 +1,12 @@
+{
+  "expected_stdout": "OK 100\nREJECTED\n",
+  "stdin": "",
+  "timeout_ms": 5000,
+  "tags": [
+    "module",
+    "effects"
+  ],
+  "difficulty": "aetherbench",
+  "tier": 5,
+  "check_required": true
+}

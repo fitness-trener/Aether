@@ -1,0 +1,23 @@
+type Score = Int where self >= 0 and self <= 100
+
+function grade(s: Score) returns String
+  effects pure
+do
+  if s >= 90 then
+    return "A"
+  elif s >= 80 then
+    return "B"
+  elif s >= 70 then
+    return "C"
+  else
+    return "F"
+  end
+end
+
+function main() returns Unit
+  effects log
+do
+  print(grade(95))
+  print(grade(71))
+  print(grade(10))
+end

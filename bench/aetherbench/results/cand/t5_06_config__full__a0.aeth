@@ -1,0 +1,17 @@
+module Config
+  requires capability fs
+  requires capability log
+  exports loadConfig
+end
+
+function loadConfig(path: String) returns String
+  effects fs.read
+do
+  return unwrapOr(readFile(safeJoin(".", path)), "default-config")
+end
+
+function main() returns Unit
+  effects fs.read, log
+do
+  print(loadConfig("aetherbench_no_such_file.cfg"))
+end

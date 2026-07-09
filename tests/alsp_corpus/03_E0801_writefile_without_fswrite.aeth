@@ -1,0 +1,5 @@
+function saver() returns Unit
+  effects pure
+do
+  let _r: Result<Unit, String> = writeFile("/tmp/x", "x")
+end

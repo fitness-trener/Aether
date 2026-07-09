@@ -1,0 +1,12 @@
+function shout(s: String) returns String
+  requires length(s) > 0
+  effects pure
+do
+  return s + "!"
+end
+
+function main() returns Unit
+  effects log
+do
+  print(shout(""))
+end

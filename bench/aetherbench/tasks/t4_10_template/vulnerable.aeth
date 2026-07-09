@@ -1,0 +1,11 @@
+function greetingPage(userName: String) returns String
+  effects pure
+do
+  return renderTemplate("<h1>Hello " + userName + "</h1>", "")
+end
+
+function main() returns Unit
+  effects log
+do
+  print(greetingPage("mallory"))
+end

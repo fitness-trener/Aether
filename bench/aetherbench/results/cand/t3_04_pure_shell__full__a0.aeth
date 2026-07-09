@@ -1,0 +1,18 @@
+function square(x: Int) returns Int
+  effects pure
+do
+  return x * x
+end
+
+function cube(x: Int) returns Int
+  effects pure
+do
+  return x * x * x
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(square(7)))
+  print(intToString(cube(3)))
+end

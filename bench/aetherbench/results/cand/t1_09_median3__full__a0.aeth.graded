@@ -1,0 +1,29 @@
+function median3(a: Int, b: Int, c: Int) returns Int
+  ensures result == a or result == b or result == c
+  effects pure
+do
+  if a <= b then
+    if b <= c then
+      return b
+    elif a <= c then
+      return c
+    else
+      return a
+    end
+  else
+    if a <= c then
+      return a
+    elif b <= c then
+      return c
+    else
+      return b
+    end
+  end
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(median3(3, 1, 2)))
+  print(intToString(median3(9, 9, 1)))
+end

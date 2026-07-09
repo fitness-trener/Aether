@@ -1,0 +1,182 @@
+// Aether port of croniter's cron field matcher (the core of "does this
+// schedule fire at this instant"). croniter drives scheduling across
+// Airflow, Jenkins-style pipelines, and countless job runners; a matcher
+// off-by-one is a missed or double-fired job. croniter also has a DoS
+// history (crafted expressions causing pathological expansion), which is
+// exactly the class a `requires`-bounded parser is meant to contain.
+//
+// Scope: standard 5-field numeric cron — `*`, `a`, `a-b`, `*/s`, `a-b/s`,
+// and comma lists of those, with the Vixie dom/dow OR rule (when both day
+// fields are restricted, fire if EITHER matches). Out of scope: names
+// (JAN/MON), `L`/`W`/`#`/`?`, `@`-keywords, seconds, timezones/DST.
+//
+// The five time components are the caller's already-extracted values
+// (minute, hour, day-of-month, month, day-of-week with Sun=0); all
+// parsing and matching logic is in Aether.
+
+function parseIntOr(s: String, dflt: Int) returns Int
+  effects pure
+do
+  let r = parseInt(s)
+  match r do
+    case Ok(v) do
+      return v
+    end
+    case Err(e) do
+      return dflt
+    end
+  end
+end
+
+function memberOf(v: Int, xs: List<Int>) returns Bool
+  effects pure
+do
+  for x in xs do
+    if x == v then
+      return true
+    end
+  end
+  return false
+end
+
+// Expand a single field part (no commas) into the list of values it covers
+// within [lo, hi]. Handles "*", "a", "a-b", "*/s", "a-b/s", "a/s".
+function expandPart(part: String, lo: Int, hi: Int) returns List<Int>
+  effects pure
+do
+  var rangePart = part
+  var step = 1
+  let slashPieces = split(part, "/")
+  if length(slashPieces) == 2 then
+    rangePart = unwrapOrElse(get(slashPieces, 0), "*")
+    step = parseIntOr(unwrapOrElse(get(slashPieces, 1), "1"), 1)
+    if step < 1 then
+      step = 1
+    end
+  end
+
+  var a = lo
+  var b = hi
+  if rangePart == "*" then
+    a = lo
+    b = hi
+  else
+    let dashPieces = split(rangePart, "-")
+    if length(dashPieces) == 2 then
+      a = parseIntOr(unwrapOrElse(get(dashPieces, 0), "0"), lo)
+      b = parseIntOr(unwrapOrElse(get(dashPieces, 1), "0"), hi)
+    else
+      a = parseIntOr(rangePart, lo)
+      // "a" alone: single value; "a/s" (step present): a..hi step s
+      if length(slashPieces) == 2 then
+        b = hi
+      else
+        b = a
+      end
+    end
+  end
+
+  var out = []
+  var v = a
+  while v <= b do
+    if v >= lo and v <= hi then
+      out = append(out, v)
+    end
+    v = v + step
+  end
+  return out
+end
+
+// Expand a whole field spec (comma list) into covered values.
+function fieldValues(spec: String, lo: Int, hi: Int) returns List<Int>
+  effects pure
+do
+  var out = []
+  let parts = split(spec, ",")
+  for p in parts do
+    out = concat(out, expandPart(p, lo, hi))
+  end
+  return out
+end
+
+// day-of-week normalization: cron 7 == Sunday == 0.
+function normalizeDow(xs: List<Int>) returns List<Int>
+  effects pure
+do
+  var out = []
+  for x in xs do
+    out = append(out, x % 7)
+  end
+  return out
+end
+
+// A field is "unrestricted" iff it covers its whole range — croniter
+// collapses `*/1`, `0-6`, `1-31` etc. to `*`, and keys the dom/dow OR rule
+// off that, not off the literal `*`.
+function coversAll(xs: List<Int>, lo: Int, hi: Int) returns Bool
+  effects pure
+do
+  for v in range(lo, hi + 1) do
+    if not memberOf(v, xs) then
+      return false
+    end
+  end
+  return true
+end
+
+function cronMatch(expr: String, minute: Int, hour: Int, dom: Int, month: Int, dow: Int) returns Bool
+  effects pure
+do
+  let fields = split(trim(expr), " ")
+  if length(fields) != 5 then
+    return false
+  end
+  let fMin = unwrapOrElse(get(fields, 0), "*")
+  let fHour = unwrapOrElse(get(fields, 1), "*")
+  let fDom = unwrapOrElse(get(fields, 2), "*")
+  let fMon = unwrapOrElse(get(fields, 3), "*")
+  let fDow = unwrapOrElse(get(fields, 4), "*")
+
+  if not memberOf(minute, fieldValues(fMin, 0, 59)) then
+    return false
+  end
+  if not memberOf(hour, fieldValues(fHour, 0, 23)) then
+    return false
+  end
+  if not memberOf(month, fieldValues(fMon, 1, 12)) then
+    return false
+  end
+
+  let domVals = fieldValues(fDom, 1, 31)
+  let dowVals = normalizeDow(fieldValues(fDow, 0, 7))
+  let domRestricted = not coversAll(domVals, 1, 31)
+  let dowRestricted = not coversAll(dowVals, 0, 6)
+  let domHit = memberOf(dom, domVals)
+  let dowHit = memberOf(dow, dowVals)
+
+  if domRestricted and dowRestricted then
+    return domHit or dowHit
+  end
+  return domHit and dowHit
+end
+
+function main() returns Unit
+  effects log
+do
+  // 2026-07-05 12:30 is a Sunday (dow=0).
+  print(boolToStr(cronMatch("* * * * *", 30, 12, 5, 7, 0)))       // true
+  print(boolToStr(cronMatch("30 12 * * 0", 30, 12, 5, 7, 0)))     // true
+  print(boolToStr(cronMatch("30 12 1 * 0", 30, 12, 5, 7, 0)))     // true (dom/dow OR)
+  print(boolToStr(cronMatch("*/15 9-17 * * 1-5", 30, 12, 5, 7, 0))) // false (Sunday)
+  print(boolToStr(cronMatch("*/15 9-17 * * *", 30, 12, 5, 7, 0)))   // true
+end
+
+function boolToStr(b: Bool) returns String
+  effects pure
+do
+  if b then
+    return "true"
+  else
+    return "false"
+  end
+end

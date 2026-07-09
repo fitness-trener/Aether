@@ -1,0 +1,37 @@
+// `Percentage = Int where self >= 0 and self <= 100`. A pricing
+// function takes a `Percentage` and applies it to a price. A caller
+// computes the discount from a coupon and passes the raw int through.
+// On a stale coupon (or a unit test that didn't think about clamping),
+// the raw int is 120 — meaning "discount more than the entire price"
+// and producing a NEGATIVE final price.
+//
+// Aether's B.4 refinement-boundary check rejects the call at runtime
+// with [E0302], a structured diagnostic that names the type, the
+// binding, the failing value, and the predicate. The Python equivalent
+// happily multiplies and prints a nonsense -20 final price.
+
+type Percentage = Int where self >= 0 and self <= 100
+
+function applyDiscount(basePrice: Int, pct: Percentage) returns Int
+  effects pure
+do
+  return basePrice - (basePrice * pct / 100)
+end
+
+function couponDiscountPct(code: String) returns Int
+  effects pure
+do
+  if code == "BLACKFRIDAY" then
+    return 120
+  else
+    return 10
+  end
+end
+
+function main() returns Unit
+  effects log
+do
+  let pct: Int = couponDiscountPct("BLACKFRIDAY")
+  let final: Int = applyDiscount(100, pct)
+  print(intToString(final))
+end

@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Aether Playground</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/editor/editor.main.css">
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #161922;
+      --panel2: #1d212c;
+      --border: #2a2f3c;
+      --text: #e6e8ee;
+      --muted: #93a0b5;
+      --accent: #7aa2f7;
+      --green: #9ece6a;
+      --red: #f7768e;
+      --yellow: #e0af68;
+      --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; background: var(--bg); color: var(--text);
+      font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    header { padding: 12px 18px; border-bottom: 1px solid var(--border); display: flex;
+      align-items: center; justify-content: space-between; }
+    header h1 { font-size: 16px; margin: 0; letter-spacing: 0.2px; font-weight: 600; }
+    header .badge { color: var(--muted); font-family: var(--mono); font-size: 12px; }
+    header a { color: var(--accent); text-decoration: none; margin-left: 16px; }
+    main { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; height: calc(100% - 50px);
+      background: var(--border); }
+    .pane { background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
+    .pane h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em;
+      color: var(--muted); margin: 0; padding: 10px 16px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between; }
+    .controls { display: flex; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--border);
+      background: var(--panel2); align-items: center; flex-wrap: wrap; }
+    .controls select, .controls button {
+      background: var(--bg); color: var(--text); border: 1px solid var(--border);
+      padding: 6px 10px; border-radius: 4px; font: inherit; cursor: pointer;
+    }
+    .controls button:hover { border-color: var(--accent); }
+    .controls button[disabled] { opacity: 0.5; cursor: wait; }
+    .controls .grow { flex: 1; }
+    .controls .pill { font-family: var(--mono); font-size: 11px; color: var(--muted);
+      padding: 4px 8px; border: 1px solid var(--border); border-radius: 999px; }
+    #editor { flex: 1; min-height: 0; }
+    #output { flex: 1; min-height: 0; overflow: auto; padding: 14px 18px; font: 12.5px/1.45 var(--mono); }
+    #output .row { margin: 0 0 4px; white-space: pre-wrap; word-break: break-word; }
+    #output .ok { color: var(--green); }
+    #output .err { color: var(--red); }
+    #output .dim { color: var(--muted); }
+    #output .label { color: var(--yellow); }
+    #status { padding: 8px 18px; border-top: 1px solid var(--border); background: var(--panel2);
+      font: 12px var(--mono); color: var(--muted); }
+    footer { padding: 8px 18px; border-top: 1px solid var(--border); background: var(--panel2);
+      font-size: 12px; color: var(--muted); display: flex; gap: 18px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Aether Playground <span class="badge">v0.3 · server-sandboxed</span></h1>
+    <nav>
+      <a href="https://github.com/aether-lang/aether" target="_blank" rel="noopener">GitHub</a>
+      <a href="/api/health" target="_blank" rel="noopener">health</a>
+    </nav>
+  </header>
+  <main>
+    <div class="pane">
+      <h2>Source <span class="pill" id="size">0 / 8192 B</span></h2>
+      <div class="controls">
+        <select id="examples"><option value="">— example —</option></select>
+        <button id="check">aether check</button>
+        <button id="run">aether run</button>
+        <button id="fix">fix-loop</button>
+        <div class="grow"></div>
+        <span class="pill" id="last">idle</span>
+      </div>
+      <div id="editor"></div>
+    </div>
+    <div class="pane">
+      <h2>Output</h2>
+      <div id="output"><div class="row dim">Pick an example, edit, and click <em>aether check</em>.</div></div>
+      <div id="status">no run yet</div>
+    </div>
+  </main>
+  <footer>
+    <span>Sandboxed: subprocess with 5s CPU + 256MB RSS + 1MB FSIZE caps.</span>
+    <span>Source ≤ 8KB · Output ≤ 100KB.</span>
+    <span>Read the docs at <a href="https://github.com/aether-lang/aether/blob/main/playground/SECURITY.md" target="_blank" rel="noopener">SECURITY.md</a>.</span>
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
+  <script>
+    if (window.require) {
+      require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' } });
+    }
+    const out = document.getElementById('output');
+    const status = document.getElementById('status');
+    const sizeEl = document.getElementById('size');
+    const lastEl = document.getElementById('last');
+    const ex = document.getElementById('examples');
+    let editor = null;
+
+    function row(kind, text) {
+      const d = document.createElement('div');
+      d.className = 'row' + (kind ? ' ' + kind : '');
+      d.textContent = text;
+      out.appendChild(d);
+      out.scrollTop = out.scrollHeight;
+    }
+    function clearOut() { out.innerHTML = ''; }
+
+    function updateSize() {
+      if (!editor) return;
+      const bytes = new TextEncoder().encode(editor.getValue()).length;
+      sizeEl.textContent = bytes + ' / 8192 B';
+      sizeEl.style.color = bytes > 8000 ? 'var(--red)' : 'var(--muted)';
+    }
+
+    async function runCmd(subcommand) {
+      if (!editor) return;
+      const source = editor.getValue();
+      const buttons = document.querySelectorAll('button');
+      buttons.forEach(b => b.disabled = true);
+      lastEl.textContent = subcommand + '…';
+      const t0 = performance.now();
+      try {
+        const resp = await fetch('/api/run', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({source, subcommand}),
+        });
+        const data = await resp.json();
+        const ms = Math.round(performance.now() - t0);
+        clearOut();
+        if (data.error) {
+          row('err', '[reject] ' + data.error);
+        } else {
+          row('label', '$ aether ' + data.subcommand + '  (rc=' + data.exit_code + ', ' + data.elapsed_ms + 'ms)');
+          if (data.stdout) {
+            row(data.ok ? 'ok' : 'dim', data.stdout.trimEnd());
+          }
+          if (data.stderr) {
+            row(data.ok ? 'dim' : 'err', data.stderr.trimEnd());
+          }
+          if (!data.stdout && !data.stderr) {
+            row('dim', '(no output)');
+          }
+          if (data.output_truncated) {
+            row('dim', '— output truncated at 100KB —');
+          }
+        }
+        status.textContent = subcommand + '  ·  rc ' + (data.exit_code ?? '?') + '  ·  ' + ms + 'ms wall';
+        lastEl.textContent = (data.ok ? 'ok ' : 'fail ') + ms + 'ms';
+        lastEl.style.color = data.ok ? 'var(--green)' : 'var(--red)';
+      } catch (e) {
+        clearOut();
+        row('err', 'network error: ' + e.message);
+        lastEl.textContent = 'error';
+        lastEl.style.color = 'var(--red)';
+      } finally {
+        buttons.forEach(b => b.disabled = false);
+      }
+    }
+
+    async function loadExamples() {
+      try {
+        const resp = await fetch('/api/examples');
+        const data = await resp.json();
+        for (const e of (data.examples || [])) {
+          const opt = document.createElement('option');
+          opt.value = e.id;
+          opt.textContent = e.id + ' — ' + e.title;
+          opt.dataset.source = e.source;
+          ex.appendChild(opt);
+        }
+        // Auto-load the first example so the playground isn't empty.
+        if (ex.options.length > 1) {
+          ex.selectedIndex = 1;
+          editor.setValue(ex.options[1].dataset.source);
+        }
+      } catch (e) {
+        row('err', 'failed to load examples: ' + e.message);
+      }
+    }
+
+    // Offline fallback: if the Monaco CDN is unreachable, swap in a plain
+    // textarea with the same getValue/setValue surface so the playground
+    // stays fully functional (examples, check, run, fix-loop).
+    function fallbackEditor() {
+      if (editor) return;
+      const host = document.getElementById('editor');
+      host.innerHTML = '';
+      const ta = document.createElement('textarea');
+      ta.spellcheck = false;
+      ta.style.cssText = 'width:100%;height:100%;background:#1e1e1e;color:#d4d4d4;'
+        + 'border:0;outline:0;font:14px/1.5 Consolas,monospace;resize:none;'
+        + 'padding:8px;box-sizing:border-box';
+      ta.value = '// Pick an example or paste your own Aether source.\n';
+      host.appendChild(ta);
+      editor = {
+        getValue: () => ta.value,
+        setValue: (v) => { ta.value = v; updateSize(); },
+      };
+      ta.addEventListener('input', updateSize);
+      updateSize();
+      loadExamples();
+    }
+
+    function initMonaco() {
+      if (editor) return;
+      editor = monaco.editor.create(document.getElementById('editor'), {
+        value: '// Pick an example or paste your own Aether source.\n',
+        language: 'rust',  // close-enough syntax highlight for our keywords
+        theme: 'vs-dark',
+        fontSize: 14,
+        minimap: { enabled: false },
+        scrollBeyondLastLine: false,
+        automaticLayout: true,
+      });
+      editor.onDidChangeModelContent(updateSize);
+      updateSize();
+      loadExamples();
+    }
+
+    if (window.require) {
+      require(['vs/editor/editor.main'], initMonaco, fallbackEditor);
+      setTimeout(fallbackEditor, 4000);   // stalled CDN, no errback
+    } else {
+      fallbackEditor();                   // loader.js itself failed
+    }
+
+    document.getElementById('check').onclick = () => runCmd('check');
+    document.getElementById('run').onclick = () => runCmd('run');
+    document.getElementById('fix').onclick = () => runCmd('fix-loop');
+    ex.onchange = (e) => {
+      const opt = ex.options[ex.selectedIndex];
+      if (opt && opt.dataset.source && editor) {
+        editor.setValue(opt.dataset.source);
+      }
+    };
+  </script>
+</body>
+</html>

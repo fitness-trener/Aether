@@ -1,0 +1,30 @@
+// The fix. Pin the redirect to your own host with safeRedirect: the
+// untrusted `returnTo` is treated as a PATH under app.example.com, with
+// any scheme/authority and leading slashes stripped. An attacker's
+// "https://evil.example/phish" or "//evil.example/phish" can only ever
+// become a path segment on your origin — never an off-site jump. This
+// is the allow-list-by-construction discipline hardened auth flows use,
+// and the only shape E0718 accepts for a dynamic redirect target.
+//
+// Run:  aether check fixed.aeth   -> OK
+//       aether run   fixed.aeth   -> target stays on app.example.com
+
+module Auth
+  requires capability net
+  requires capability log
+  exports login
+end
+
+function login(returnTo: String) returns String
+  effects net.redirect
+do
+  let target: String = safeRedirect("app.example.com", returnTo)
+  return redirect(target)
+end
+
+function main() returns Unit
+  effects net.redirect, log
+do
+  print(login("https://evil.example/phish"))
+  print(login("/account/settings"))
+end

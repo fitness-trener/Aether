@@ -1,0 +1,24 @@
+type Percentage = Int where self >= 0 and self <= 100
+
+function applyDiscount(basePrice: Int, pct: Percentage) returns Int
+  effects pure
+do
+  return basePrice - (basePrice * pct / 100)
+end
+
+function tierDiscountPct(tier: String) returns Int
+  effects pure
+do
+  if tier == "PLATINUM" then
+    return 120
+  else
+    return 10
+  end
+end
+
+function main() returns Unit
+  effects log
+do
+  let pct: Int = tierDiscountPct("PLATINUM")
+  print(intToString(applyDiscount(100, pct)))
+end

@@ -1,0 +1,18 @@
+module Auth
+  requires capability net
+  requires capability log
+  exports login
+end
+
+function login(returnTo: String) returns Unit
+  effects net.redirect, log
+do
+  let _r: String = redirect(returnTo)
+  print("REDIRECTED")
+end
+
+function main() returns Unit
+  effects net.redirect, log
+do
+  login("/dashboard")
+end

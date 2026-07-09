@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Aether — Capability &amp; Effect Surface</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2230; --line:#30363d;
+    --ink:#e6edf3; --mut:#8b949e; --dim:#6e7681;
+    --clean:#3fb950; --clean-bg:#1b3326;
+    --viol:#f85149;  --viol-bg:#3a1d1d;
+    --unp:#d29922;   --unp-bg:#352a12;
+    --acc:#58a6ff;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  a{color:var(--acc)}
+  .wrap{max-width:1080px;margin:0 auto;padding:28px 22px 80px}
+  header.top{border-bottom:1px solid var(--line);padding-bottom:18px;margin-bottom:22px}
+  h1{font-size:20px;margin:0 0 4px;letter-spacing:.2px}
+  .scope{color:var(--mut);font-size:13px;max-width:760px}
+  .scope b{color:var(--ink);font-weight:600}
+  .proves{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
+  .proves .tag{font-size:11px;padding:3px 9px;border-radius:999px;border:1px solid var(--line);
+    color:var(--mut);background:var(--panel)}
+  .proves .yes{border-color:#2c5a38;color:#8ddfa3;background:var(--clean-bg)}
+  .proves .no{border-color:#5a2c2c;color:#f0a8a4;background:var(--viol-bg)}
+
+  .controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0 14px}
+  .chip{cursor:pointer;font-size:12.5px;padding:6px 11px;border-radius:8px;border:1px solid var(--line);
+    background:var(--panel);color:var(--ink)}
+  .chip:hover{border-color:var(--acc)}
+  .chip.active{border-color:var(--acc);background:#13243b}
+  .chip .st{font-size:10px;text-transform:uppercase;letter-spacing:.4px;margin-left:6px;color:var(--dim)}
+  textarea{width:100%;min-height:150px;background:#0a0d12;color:var(--ink);border:1px solid var(--line);
+    border-radius:10px;padding:12px 14px;font-family:var(--mono);font-size:12.5px;line-height:1.55;resize:vertical}
+  .row{display:flex;gap:10px;align-items:center;margin:12px 0;flex-wrap:wrap}
+  button.prove{background:var(--acc);color:#04121f;border:0;font-weight:650;font-size:13.5px;
+    padding:9px 18px;border-radius:9px;cursor:pointer}
+  button.prove:hover{filter:brightness(1.08)}
+  button.ghost{background:transparent;color:var(--mut);border:1px solid var(--line);
+    padding:9px 14px;border-radius:9px;cursor:pointer}
+  button.ghost:hover{color:var(--ink);border-color:var(--acc)}
+  .err{color:var(--viol);font-family:var(--mono);font-size:12.5px;white-space:pre-wrap}
+
+  .headline{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:18px 0}
+  .hl-stmt{font-size:15px;color:var(--ink);margin-bottom:14px}
+  .hl-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}
+  .stat{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .stat .n{font-size:24px;font-weight:700;font-family:var(--mono)}
+  .stat .l{font-size:11.5px;color:var(--mut);margin-top:2px}
+  .stat.clean .n{color:var(--clean)} .stat.viol .n{color:var(--viol)} .stat.unp .n{color:var(--unp)}
+  .bar{height:8px;border-radius:6px;background:#0a0d12;overflow:hidden;margin-top:14px;display:flex}
+  .bar .seg-clean{background:var(--clean)} .bar .seg-rev{background:#26303d}
+
+  h2.sec{font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--mut);
+    margin:26px 0 10px;font-weight:650}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;margin-bottom:14px;overflow:hidden}
+  .card.s-clean{border-left:3px solid var(--clean)}
+  .card.s-viol{border-left:3px solid var(--viol)}
+  .card.s-unp{border-left:3px solid var(--unp)}
+  .card-h{display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .mod-name{font-family:var(--mono);font-weight:650;font-size:14px}
+  .badge{font-size:10.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;padding:3px 8px;border-radius:6px}
+  .badge.clean{color:var(--clean);background:var(--clean-bg)}
+  .badge.viol{color:var(--viol);background:var(--viol-bg)}
+  .badge.unp{color:var(--unp);background:var(--unp-bg)}
+  .caps{display:flex;gap:6px;flex-wrap:wrap;margin-left:auto;align-items:center}
+  .caps .lbl{font-size:11px;color:var(--dim)}
+  .cap{font-family:var(--mono);font-size:11.5px;padding:2px 8px;border-radius:6px;
+    border:1px solid #2b3a55;color:#9cc4ff;background:#0f1b2d}
+  .cap.none{border-color:var(--line);color:var(--dim);background:transparent}
+
+  .fn{padding:12px 16px;border-bottom:1px solid #21262d}
+  .fn:last-child{border-bottom:0}
+  .fn-h{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+  .fn-name{font-family:var(--mono);font-size:13px}
+  .fn-line{font-size:11px;color:var(--dim)}
+  .fn-eff{margin-left:auto;font-size:11.5px;color:var(--mut)}
+  .fn-eff .cap{margin-left:5px}
+
+  .viobox{margin-top:10px;border:1px solid var(--line);border-radius:9px;background:var(--panel2);padding:11px 13px}
+  .vio-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .code{font-family:var(--mono);font-size:11px;font-weight:700;padding:2px 7px;border-radius:5px;
+    background:#0a0d12;border:1px solid var(--line)}
+  .code.e07{color:var(--viol)} .code.e08{color:#ff9e64}
+  .kind{font-size:12px;color:var(--ink);font-weight:600}
+  .vio-msg{font-size:12.5px;color:var(--mut);margin-top:6px}
+
+  .chain{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;margin:11px 0 4px;font-family:var(--mono)}
+  .hop{display:flex;align-items:center}
+  .node{background:#0a0d12;border:1px solid var(--line);border-radius:7px;padding:6px 10px;font-size:12px}
+  .node .nm{color:var(--ink)} .node .ln{color:var(--dim);font-size:10.5px;margin-left:5px}
+  .node.leaf{border-color:#5a2c2c;background:#1f1314}
+  .node.leaf .eff{color:#ff9e64}
+  .arrow{color:var(--dim);padding:0 8px;align-self:center;font-size:13px}
+  .lbl-chain{font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--dim);margin:8px 0 2px}
+  .fix{margin-top:8px;font-size:12px;color:#9cc4ff}
+  .fix b{color:var(--mut);font-weight:600}
+
+  .unpbox{margin-top:10px;border:1px solid #5a4a1e;border-radius:9px;background:var(--unp-bg);padding:11px 13px}
+  .unpbox .h{font-size:12.5px;color:var(--unp);font-weight:650}
+  .unpbox .d{font-size:12.5px;color:#e8d8a8;margin-top:5px}
+  .unpbox .needs{font-size:11.5px;color:var(--mut);margin-top:6px}
+  .clean-note{margin-top:9px;font-size:12.5px;color:#8ddfa3}
+
+  .note{font-size:12.5px;color:var(--mut);background:var(--panel);border:1px dashed var(--line);
+    border-radius:10px;padding:12px 14px;margin-bottom:14px}
+  .empty{color:var(--dim);font-size:12.5px;padding:6px 2px}
+
+  /* policy editor */
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:14px 0}
+  .panel h3{margin:0 0 4px;font-size:14px}
+  .panel .sub{font-size:12px;color:var(--mut);margin-bottom:12px}
+  .toggles{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  .tog{cursor:pointer;font-family:var(--mono);font-size:12px;padding:5px 11px;border-radius:7px;
+    border:1px solid var(--line);background:#0a0d12;color:var(--dim);user-select:none}
+  .tog.on{border-color:#2b5a8c;background:#0f1b2d;color:#9cc4ff}
+  .tog .x{margin-left:6px;opacity:.6}
+  .diffstrip{display:flex;gap:18px;flex-wrap:wrap;margin-top:6px;align-items:center}
+  .delta{font-family:var(--mono);font-size:13px}
+  .delta b{font-size:16px}
+  .delta .from{color:var(--mut)} .delta .to.good{color:var(--clean)} .delta .to.bad{color:var(--viol)}
+  .chgs{margin-top:10px;font-size:12.5px;color:var(--mut)}
+  .chg{font-family:var(--mono)}
+  .chg .ar{color:var(--dim)}
+
+  /* timeline */
+  .tl{position:relative;margin-top:6px;padding-left:8px}
+  .step{display:flex;gap:14px;padding:10px 0;border-bottom:1px solid #21262d}
+  .step:last-child{border-bottom:0}
+  .dot{flex:0 0 auto;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+    font-family:var(--mono);font-size:12px;font-weight:700;border:2px solid var(--line)}
+  .dot.viol{border-color:var(--viol);color:var(--viol);background:var(--viol-bg)}
+  .dot.clean{border-color:var(--clean);color:var(--clean);background:var(--clean-bg)}
+  .step .body{flex:1}
+  .step .t{font-size:13px;font-weight:600}
+  .step .d{font-size:12.5px;color:var(--mut);margin-top:2px}
+  .step .meta{display:flex;gap:10px;margin-top:7px;flex-wrap:wrap;align-items:center}
+  .gate{font-size:10.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;padding:3px 9px;border-radius:6px}
+  .gate.blocked{color:var(--viol);background:var(--viol-bg)}
+  .gate.signed{color:var(--clean);background:var(--clean-bg)}
+  .vcount{font-family:var(--mono);font-size:12px;color:var(--mut)}
+  .miniopen{font-size:11.5px;color:var(--acc);cursor:pointer}
+
+  /* 60s intro */
+  .intro{display:flex;gap:14px;flex-wrap:wrap;background:linear-gradient(90deg,#10202f,#13243b);
+    border:1px solid #21364d;border-radius:12px;padding:14px 16px;margin:0 0 16px}
+  .intro .step60{flex:1;min-width:170px}
+  .intro .k{font-family:var(--mono);font-size:11px;color:var(--acc);font-weight:700}
+  .intro .v{font-size:12.5px;color:var(--mut);margin-top:3px}
+
+  /* manifest */
+  .manifest{background:var(--panel);border:1px solid var(--line);border-radius:12px;margin:14px 0;overflow:hidden}
+  .manifest .mh{display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .manifest .mh .ttl{font-weight:650}
+  .seal{margin-left:auto;font-family:var(--mono);font-size:11px;color:#8ddfa3;background:var(--clean-bg);
+    border:1px solid #2c5a38;border-radius:6px;padding:3px 8px}
+  .mbody{padding:12px 16px}
+  .mrow{font-size:12.5px;margin:3px 0;color:var(--mut)}
+  .mrow .mono{font-family:var(--mono);color:var(--ink);font-size:11.5px;word-break:break-all}
+  .mcert{border:1px solid #2c5a38;border-radius:9px;padding:9px 12px;margin:8px 0;background:var(--clean-bg)}
+  .mcert .nm{font-family:var(--mono);color:#8ddfa3;font-weight:650}
+  .mwith{border:1px dashed #5a4a1e;border-radius:9px;padding:9px 12px;margin:8px 0;background:var(--unp-bg);color:#e8d8a8;font-size:12.5px}
+  .mnote{font-size:11.5px;color:var(--dim);margin-top:10px;font-style:italic}
+
+  /* limits & roadmap */
+  .lr{margin-top:30px}
+  .lr-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
+  .lrcol{border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:var(--panel)}
+  .lrcol.proves{border-top:3px solid var(--clean)}
+  .lrcol.never{border-top:3px solid var(--viol)}
+  .lrcol.extend{border-top:3px solid var(--acc)}
+  .lrcol h4{margin:0 0 8px;font-size:13px}
+  .lrcol.proves h4{color:var(--clean)} .lrcol.never h4{color:var(--viol)} .lrcol.extend h4{color:var(--acc)}
+  .lrcol ul{margin:0;padding-left:16px} .lrcol li{font-size:12.5px;color:var(--mut);margin:5px 0}
+  .gaps{margin-top:14px;font-size:12px;color:var(--dim);border:1px dashed var(--line);border-radius:10px;padding:11px 14px}
+  .gaps b{color:var(--mut)}
+
+  .lang-badge{font-size:9.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;
+    padding:2px 6px;border-radius:5px;margin-right:7px;vertical-align:middle}
+  .lang-badge.python{color:#ffd866;background:#3a3411;border:1px solid #5a4a1e}
+  .lang-badge.aether{color:#9cc4ff;background:#0f1b2d;border:1px solid #2b3a55}
+  .modesw{display:inline-flex;align-items:center;gap:4px;margin-left:4px}
+  .modesw .mlbl{font-size:11px;color:var(--dim);margin-right:2px}
+  .mbtn{font-family:var(--mono);font-size:11.5px;padding:4px 10px;border:1px solid var(--line);
+    background:#0a0d12;color:var(--dim);border-radius:6px;cursor:pointer}
+  .mbtn.on{border-color:var(--acc);background:#13243b;color:#9cc4ff}
+  .unp-line{font-family:var(--mono);font-size:11px;color:var(--unp);background:#241d0a;
+    border:1px solid #5a4a1e;border-radius:5px;padding:1px 7px;margin-left:6px}
+  .unp-construct{font-size:11.5px;color:#e8d8a8;margin-top:5px;font-family:var(--mono)}
+  footer.scopefoot{margin-top:34px;border-top:1px solid var(--line);padding-top:16px;color:var(--dim);font-size:12px;max-width:800px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>Aether — Capability &amp; Effect Surface</h1>
+    <div class="scope">Aether <b>proves</b> what your code can reach — for code written in <b>Aether</b> or <b>Python</b>: the capabilities it requires and the effects it produces, traced through the call graph against a declared boundary. It does not look for logic bugs, algorithm errors, or design flaws — and it never will.</div>
+    <div class="proves">
+      <span class="tag yes">Proves: capability surface</span>
+      <span class="tag yes">Proves: effect composition</span>
+      <span class="tag yes">Shows: what it cannot prove</span>
+      <span class="tag no">Not: a bug finder</span>
+      <span class="tag no">Not: logic / design review</span>
+    </div>
+  </header>
+
+  <div class="intro">
+    <div class="step60"><div class="k">1 · PICK</div><div class="v">Choose an example below — each is a real Aether program, one per proof state.</div></div>
+    <div class="step60"><div class="k">2 · READ</div><div class="v">The surface map shows every module's declared boundary and what its code can actually reach, with the traced witness for any breach.</div></div>
+    <div class="step60"><div class="k">3 · CONTAIN</div><div class="v">Run the agent-containment loop, or edit the boundary policy, and watch the engine hold the line on every revision.</div></div>
+    <div class="step60"><div class="k">4 · EXPORT</div><div class="v">Export a signed manifest — it certifies only what was proven clean, and names what it withholds.</div></div>
+  </div>
+
+  <div id="examples" class="controls"></div>
+  <textarea id="src" spellcheck="false" placeholder="Paste Aether source, or pick an example above…"></textarea>
+  <div class="row">
+    <button class="prove" id="go">Prove surface</button>
+    <button class="ghost" id="manifestBtn">Export manifest</button>
+    <button class="ghost" id="containBtn">Run agent-containment loop</button>
+    <span class="modesw" id="modeToggle" title="Python soundness mode: strict floor vs pure-method ceiling">
+      <span class="mlbl">python mode</span>
+      <button class="mbtn on" data-mode="strict">strict</button>
+      <button class="mbtn" data-mode="pragmatic">pragmatic</button>
+    </span>
+    <span id="status" class="err"></span>
+  </div>
+
+  <div id="policy"></div>
+  <div id="timeline"></div>
+  <div id="manifest"></div>
+  <div id="out"></div>
+
+  <section class="lr">
+    <h2 class="sec">What this proves — and what it never will</h2>
+    <div class="lr-grid">
+      <div class="lrcol proves">
+        <h4>Proves today (decidable)</h4>
+        <ul>
+          <li>The capability surface of every function — what it can reach, transitively through the call graph.</li>
+          <li>Effect composition: a caller must declare every effect its callees perform.</li>
+          <li>Whether a module's reachable code stays inside its declared capability boundary.</li>
+          <li>Exactly where it cannot decide — shown as UNPROVABLE, never hidden.</li>
+        </ul>
+      </div>
+      <div class="lrcol never">
+        <h4>Will never do</h4>
+        <ul>
+          <li>Find logic bugs or wrong algorithms — undecidable in general (Rice's theorem).</li>
+          <li>Judge architectural or design quality.</li>
+          <li>Tell you whether the code does the <i>right</i> thing — only what it <i>can reach</i>.</li>
+          <li>Guess intent. It proves boundaries; humans own meaning.</li>
+        </ul>
+      </div>
+      <div class="lrcol extend">
+        <h4>Can extend (decidable only)</h4>
+        <ul>
+          <li>More decidable boundary properties: resource limits, data-flow / PII boundaries, temporal effect ordering.</li>
+          <li>More source languages (e.g. TypeScript) behind the same surface.</li>
+          <li>Hybrid static + runtime checks for what static analysis must leave UNPROVABLE.</li>
+          <li>Cross-file module composition as a real unit.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="gaps"><b>Known gaps in this build:</b> analysis is single-file (one AST); calls through function-valued parameters and let-bound functions are reported as UNPROVABLE rather than assumed safe; programs with no module declaration are treated as an implicit all-capability grant and prove nothing until a module governs them.</div>
+    <div class="gaps"><b>On Python specifically:</b> soundness holds for the statically-analyzable fraction. A call is treated as capability-free ONLY when it is a local function, a known-pure builtin, or a mapped import; every other call — unmapped imports, methods on values whose type is not tracked, and dynamic constructs (<span style="font-family:var(--mono)">eval, exec, getattr, importlib</span>) — is flagged UNPROVABLE, never assumed clean. A VIOLATION is a sound positive (the capability really is reachable) but not a complete inventory: more capability can hide behind an UNPROVABLE region in the same function. <b>Strict</b> mode is the honest floor; <b>pragmatic</b> mode additionally trusts an allowlist of unambiguously-pure builtin-type methods (excluding capability homonyms like <span style="font-family:var(--mono)">get/read/execute</span>) and is sound on tested code but not guaranteed sound in general.</div>
+  </section>
+
+  <footer class="scopefoot">
+    Every claim on this page maps to a diagnostic the Aether engine emitted over your exact source — including each step of the containment loop, which is a live re-proof of a real source revision, not a script.
+    Regions the engine cannot decide are shown as <b style="color:var(--unp)">UNPROVABLE</b>, never hidden to inflate coverage.
+    The roadmap extends only to other <i>decidable boundary</i> properties (resource limits, data-flow boundaries, effect ordering) and more languages — never toward undecidable bug classes.
+  </footer>
+</div>
+
+<script>
+const API = (window.location.protocol === "http:" || window.location.protocol === "https:")
+  ? window.location.origin : "http://127.0.0.1:8765";
+const $ = s => document.querySelector(s);
+const el = (t,c,txt)=>{const e=document.createElement(t);if(c)e.className=c;if(txt!=null)e.textContent=txt;return e;};
+const CAP_VOCAB = ["log","net","fs","db","time","random","process","env"];
+let CURRENT_LANG = "aether";
+let STRICT = true;
+
+// Real firewall revisions — the agent-containment fix-loop. Each step is
+// re-proven live by the engine; the numbers are whatever it emits.
+const REVISIONS = [
+  { id:"A", title:"Agent ships a log formatter that secretly reaches the network",
+    note:"The module declares only `log`. A helper performs net.fetch. The engine blocks the build.",
+    source:`module LogFormatter
+  requires capability log
+  exports log_formatter
+end
+
+function exfil(formatted: String) returns Unit
+  effects net.fetch("http://127.0.0.1:9999/*")
+do
+  let _n = length(formatted)
+end
+
+function log_formatter(level: String, body: String) returns String
+  effects log
+do
+  let formatted = level
+  exfil(formatted)
+  return formatted
+end
+
+function main() returns Unit
+  effects log
+do
+  let _r = log_formatter("ERROR", "something broke")
+  print("done")
+end
+` },
+  { id:"B", title:"Agent grants ITSELF the net capability to get past the gate",
+    note:"Widening the module boundary to `log, net` clears the capability breach — but the engine still rejects the composition: log_formatter never declares the net effect it inherits. Containment holds.",
+    source:`module LogFormatter
+  requires capability log
+  requires capability net
+  exports log_formatter
+end
+
+function exfil(formatted: String) returns Unit
+  effects net.fetch("http://127.0.0.1:9999/*")
+do
+  let _n = length(formatted)
+end
+
+function log_formatter(level: String, body: String) returns String
+  effects log
+do
+  let formatted = level
+  exfil(formatted)
+  return formatted
+end
+
+function main() returns Unit
+  effects log
+do
+  let _r = log_formatter("ERROR", "something broke")
+  print("done")
+end
+` },
+  { id:"C", title:"Agent removes the network call — the real fix",
+    note:"No effect escapes the declared boundary. The module is PROVEN CLEAN and the manifest will sign it.",
+    source:`module LogFormatter
+  requires capability log
+  exports log_formatter
+end
+
+function log_formatter(level: String, body: String) returns String
+  effects log
+do
+  let formatted = level
+  print(formatted)
+  return formatted
+end
+
+function main() returns Unit
+  effects log
+do
+  let _r = log_formatter("ERROR", "something broke")
+  print("done")
+end
+` },
+];
+
+async function api(path, body){
+  const opt = body===undefined ? {} : {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)};
+  const r = await fetch(API+path, opt);
+  return await r.json();
+}
+
+function capChips(caps){
+  const wrap = el("div","caps");
+  wrap.appendChild(el("span","lbl","boundary"));
+  if(!caps || !caps.length){ wrap.appendChild(el("span","cap none","— none declared")); return wrap; }
+  caps.forEach(c=>wrap.appendChild(el("span","cap",c)));
+  return wrap;
+}
+function chainView(chain){
+  const box = el("div","chain");
+  chain.forEach((h,i)=>{
+    const hop = el("div","hop");
+    const leaf = !!h.effect && i===chain.length-1;
+    const node = el("div","node"+(leaf?" leaf":""));
+    node.appendChild(el("span","nm",h.fn));
+    if(h.line!=null) node.appendChild(el("span","ln","L"+h.line));
+    if(h.effect){ const e=el("div","eff",h.effect); e.style.fontSize="10.5px"; e.style.marginTop="3px"; node.appendChild(e); }
+    hop.appendChild(node);
+    if(i<chain.length-1) hop.appendChild(el("span","arrow","→"));
+    box.appendChild(hop);
+  });
+  return box;
+}
+function violView(v){
+  const b = el("div","viobox");
+  const top = el("div","vio-top");
+  const isE08 = (v.code||"").startsWith("E08");
+  top.appendChild(el("span","code "+(isE08?"e08":"e07"),v.code));
+  const kindLabel = v.kind==="effect_not_composed" ? "Composition rejected — effect not declared"
+    : v.kind==="capability_not_granted" ? "Capability breach — not granted by boundary" : v.kind;
+  top.appendChild(el("span","kind",kindLabel));
+  b.appendChild(top);
+  if(v.capability) b.appendChild(el("div","vio-msg","Requires capability '"+v.capability+"' via effect "+(v.effect||"")+", which no module declares."));
+  else if(v.effect) b.appendChild(el("div","vio-msg","Caller does not declare effect "+v.effect+" produced by '"+(v.callee||"")+"'."));
+  if(v.call_chain && v.call_chain.length){ b.appendChild(el("div","lbl-chain","traced witness")); b.appendChild(chainView(v.call_chain)); }
+  if(v.suggestion){ const f=el("div","fix"); f.appendChild(el("b",null,"fix: ")); f.appendChild(document.createTextNode(v.suggestion)); b.appendChild(f); }
+  return b;
+}
+function unpView(u){
+  const b = el("div","unpbox");
+  const h = el("div","h"); h.appendChild(document.createTextNode("UNPROVABLE — "+(u.reason||"undecidable")+" in "+u.fn));
+  const ln = (u.construct_line!=null ? u.construct_line : u.line);
+  if(ln!=null){ const lt=el("span","unp-line","line "+ln); h.appendChild(lt); }
+  b.appendChild(h);
+  b.appendChild(el("div","d",u.detail||("callee `"+(u.callee||"?")+"` cannot be resolved statically")));
+  if(u.callee) b.appendChild(el("div","unp-construct","↳ "+u.callee));
+  b.appendChild(el("div","needs","A human still owns this exact spot: "+(u.needs||"manual review")));
+  return b;
+}
+function fnView(f){
+  const fn = el("div","fn");
+  const h = el("div","fn-h");
+  h.appendChild(el("span","fn-name",f.name));
+  h.appendChild(el("span","fn-line","L"+f.line));
+  const eff = el("span","fn-eff");
+  eff.appendChild(document.createTextNode("effective:"));
+  (f.effective_capabilities&&f.effective_capabilities.length?f.effective_capabilities:["pure"]).forEach(c=>eff.appendChild(el("span","cap",c)));
+  h.appendChild(eff);
+  fn.appendChild(h);
+  (f.violations||[]).forEach(v=>fn.appendChild(violView(v)));
+  (f.unprovable||[]).forEach(u=>fn.appendChild(unpView(u)));
+  if(f.state==="PROVEN_CLEAN") fn.appendChild(el("div","clean-note","✓ Proven within the declared boundary — no effect escapes its capability grant."));
+  return fn;
+}
+const stateClass = s => s==="PROVEN_CLEAN"?"clean":s==="VIOLATION"?"viol":"unp";
+const stateBadge = s => s==="PROVEN_CLEAN"?"PROVEN CLEAN":s;
+function moduleCard(m){
+  const card = el("div","card s-"+stateClass(m.state));
+  const h = el("div","card-h");
+  h.appendChild(el("span","mod-name","module "+m.module));
+  h.appendChild(el("span","badge "+stateClass(m.state),stateBadge(m.state)));
+  h.appendChild(capChips(m.declared_capabilities));
+  card.appendChild(h);
+  (m.functions||[]).forEach(f=>card.appendChild(fnView(f)));
+  return card;
+}
+function headlineView(hl){
+  const w = el("div","headline");
+  w.appendChild(el("div","hl-stmt",hl.statement));
+  const g = el("div","hl-grid");
+  const mk=(cls,n,l)=>{const s=el("div","stat "+cls);s.appendChild(el("div","n",String(n)));s.appendChild(el("div","l",l));return s;};
+  g.appendChild(mk("clean",hl.modules_proven_clean+"/"+hl.modules_total,"modules proven clean"));
+  g.appendChild(mk("viol",hl.boundary_violations,"boundary violations"));
+  g.appendChild(mk("unp",hl.unprovable_regions,"unprovable regions"));
+  g.appendChild(mk("",hl.review_reduction_pct+"%","review surface reduced"));
+  w.appendChild(g);
+  const total = Math.max(hl.lines_total,1);
+  const bar = el("div","bar");
+  const c = el("div","seg-clean"); c.style.width=(100*hl.lines_proven_clean/total)+"%";
+  const rv = el("div","seg-rev"); rv.style.width=(100*hl.lines_needing_review/total)+"%";
+  bar.appendChild(c); bar.appendChild(rv); w.appendChild(bar);
+  return w;
+}
+function render(s){
+  const out = $("#out"); out.innerHTML="";
+  if(!s.parse_ok){
+    out.appendChild(el("div","note","Source did not parse — nothing can be proven. "+
+      (s.raw_diagnostics&&s.raw_diagnostics[0]?s.raw_diagnostics[0].message:"")));
+    return;
+  }
+  out.appendChild(headlineView(s.headline));
+  out.appendChild(el("h2","sec","Governed modules"));
+  if(s.modules && s.modules.length) s.modules.forEach(m=>out.appendChild(moduleCard(m)));
+  else out.appendChild(el("div","empty","No module declares a capability boundary in this program."));
+  const ung = s.ungoverned && s.ungoverned.functions || [];
+  if(ung.length){
+    out.appendChild(el("h2","sec","Ungoverned functions"));
+    if(s.ungoverned.note) out.appendChild(el("div","note",s.ungoverned.note));
+    const card = el("div","card s-viol"); ung.forEach(f=>card.appendChild(fnView(f))); out.appendChild(card);
+  }
+  if(s.unprovable && s.unprovable.length){
+    out.appendChild(el("h2","sec","Unprovable regions (a human still owns these)"));
+    const card = el("div","card s-unp"); s.unprovable.forEach(u=>card.appendChild(unpView(u))); out.appendChild(card);
+  }
+}
+
+/* ---------- policy editor ---------- */
+let SELECTED_CAPS = null;     // null until first surface known
+function buildPolicyEditor(surface){
+  const host = $("#policy"); host.innerHTML="";
+  const gov = (surface.modules||[]).filter(m=>m.declared_capabilities!=null);
+  if(!gov.length){ return; } // nothing to govern
+  const declared = new Set();
+  gov.forEach(m=>(m.declared_capabilities||[]).forEach(c=>declared.add(c)));
+  if(SELECTED_CAPS===null) SELECTED_CAPS = new Set(declared);
+
+  const p = el("div","panel");
+  p.appendChild(el("h3","Boundary policy"));
+  p.appendChild(el("div","sub","Re-prove this program against a boundary you choose. Granting a capability clears a capability breach — but never silences a composition rejection: a function must still declare every effect it performs."));
+  const togs = el("div","toggles");
+  CAP_VOCAB.forEach(cap=>{
+    const t = el("div","tog"+(SELECTED_CAPS.has(cap)?" on":""));
+    t.appendChild(el("span","",cap));
+    t.appendChild(el("span","x",SELECTED_CAPS.has(cap)?"✓":"+"));
+    t.onclick=()=>{ if(SELECTED_CAPS.has(cap))SELECTED_CAPS.delete(cap); else SELECTED_CAPS.add(cap);
+      t.classList.toggle("on"); t.querySelector(".x").textContent=SELECTED_CAPS.has(cap)?"✓":"+"; };
+    togs.appendChild(t);
+  });
+  p.appendChild(togs);
+  const btn = el("button","prove","Re-prove against this boundary"); btn.style.padding="7px 14px"; btn.style.fontSize="12.5px";
+  const result = el("div","chgs"); result.style.marginTop="0";
+  btn.onclick=async()=>{
+    result.textContent="Re-proving…";
+    const caps=[...SELECTED_CAPS];
+    const d = await api("/policy",{source:CURRENT, lang:CURRENT_LANG, strict:STRICT, policy:{capabilities:caps}});
+    renderPolicyResult(result, d);
+  };
+  const r = el("div","row"); r.style.margin="4px 0 0"; r.appendChild(btn); p.appendChild(r);
+  p.appendChild(result);
+  host.appendChild(p);
+}
+function renderPolicyResult(host, d){
+  host.innerHTML="";
+  const s=d.summary;
+  const strip = el("div","diffstrip");
+  const mkDelta=(label,from,to,goodIfLower)=>{
+    const w=el("div","delta");
+    w.appendChild(document.createTextNode(label+" "));
+    w.appendChild(el("span","from",String(from)));
+    w.appendChild(document.createTextNode(" → "));
+    const cls = goodIfLower ? (to<from?"to good":(to>from?"to bad":"to")) : (to>from?"to good":(to<from?"to bad":"to"));
+    const b=el("b",cls,String(to)); w.appendChild(b);
+    return w;
+  };
+  strip.appendChild(mkDelta("violations",s.before_violations,s.after_violations,true));
+  strip.appendChild(mkDelta("proven clean",s.before_proven_clean,s.after_proven_clean,false));
+  host.appendChild(strip);
+  if(d.changed_modules && d.changed_modules.length){
+    const cw=el("div","chgs");
+    d.changed_modules.forEach(c=>{
+      const line=el("div","chg");
+      line.appendChild(document.createTextNode(c.module+": "+(c.from||"—")));
+      line.appendChild(el("span","ar"," → "));
+      line.appendChild(document.createTextNode(c.to||"—"));
+      cw.appendChild(line);
+    });
+    host.appendChild(cw);
+  }
+  // honesty footnote when a composition rejection survives a grant
+  if(s.after_violations>0){
+    host.appendChild(el("div","sub","Violations remain under this boundary — the engine will not certify until they reach zero (or are acknowledged as UNPROVABLE). Granting capability cannot paper over an undeclared effect."));
+  } else {
+    host.appendChild(el("div","sub","Zero violations under this boundary — the manifest would sign every governed module."));
+  }
+}
+
+/* ---------- containment timeline ---------- */
+async function runContainment(){
+  const host=$("#timeline"); host.innerHTML="";
+  $("#policy").innerHTML=""; $("#out").innerHTML=""; $("#manifest").innerHTML="";
+  const panel=el("div","panel");
+  panel.appendChild(el("h3","Agent-containment fix-loop"));
+  panel.appendChild(el("div","sub","Each step is a live re-proof of a real source revision. The engine holds the declared boundary on every iteration — the agent cannot widen its own capability surface past it. Numbers are whatever the engine emits."));
+  const tl=el("div","tl"); panel.appendChild(tl); host.appendChild(panel);
+  $("#status").textContent="Running containment loop…";
+  for(let i=0;i<REVISIONS.length;i++){
+    const rev=REVISIONS[i];
+    const s=await api("/analyze",{source:rev.source});
+    const hl=s.headline; const v=hl.boundary_violations;
+    const clean = s.ok && v===0;
+    const step=el("div","step");
+    const dot=el("div","dot "+(clean?"clean":"viol"),clean?"✓":String(i+1)); step.appendChild(dot);
+    const body=el("div","body");
+    body.appendChild(el("div","t","Revision "+rev.id+" — "+rev.title));
+    body.appendChild(el("div","d",rev.note));
+    const meta=el("div","meta");
+    const gate=el("span","gate "+(clean?"signed":"blocked"),clean?"manifest signed":"build blocked");
+    meta.appendChild(gate);
+    let vtxt = v+" boundary violation"+(v===1?"":"s");
+    if(hl.composition_rejections) vtxt+=" ("+hl.composition_rejections+" composition";
+    if(hl.capability_breaches&&hl.capability_breaches.length) vtxt+=(hl.composition_rejections?", ":" (")+hl.capability_breaches.length+" capability";
+    if(hl.composition_rejections||(hl.capability_breaches&&hl.capability_breaches.length)) vtxt+=")";
+    meta.appendChild(el("span","vcount",vtxt));
+    const open=el("span","miniopen","load this revision ▸");
+    open.onclick=()=>{ $("#src").value=rev.source; prove(); window.scrollTo({top:document.body.scrollHeight,behavior:"smooth"}); };
+    meta.appendChild(open);
+    body.appendChild(meta);
+    step.appendChild(body); tl.appendChild(step);
+  }
+  $("#status").textContent="";
+}
+
+/* ---------- drivers ---------- */
+let CURRENT = "";
+async function prove(){
+  const src = $("#src").value;
+  if(!src.trim()){ $("#status").textContent="Paste or pick a program first."; return; }
+  CURRENT = src; SELECTED_CAPS=null;
+  $("#status").textContent="Proving…";
+  try{
+    const s = await api("/analyze",{source:src, lang:CURRENT_LANG, strict:STRICT});
+    $("#status").textContent="";
+    $("#timeline").innerHTML=""; $("#manifest").innerHTML="";
+    render(s);
+    buildPolicyEditor(s);
+  }catch(e){ $("#status").textContent="Error: "+e.message; }
+}
+function renderManifest(m){
+  const host=$("#manifest"); host.innerHTML="";
+  const body=m.manifest||{};
+  const cert=body.certified_modules||[]; const wit=body.withheld_modules||[];
+  const card=el("div","manifest");
+  const mh=el("div","mh");
+  mh.appendChild(el("span","ttl","Signed capability manifest"));
+  mh.appendChild(el("span","badge "+(cert.length?"clean":"unp"), cert.length?(cert.length+" certified"):"nothing to certify"));
+  if(m.signature) mh.appendChild(el("span","seal",(m.signature.alg||"")+" · "+(m.signature.value||"").slice(0,16)+"…"));
+  card.appendChild(mh);
+  const mb=el("div","mbody");
+  const meta=el("div","mrow"); meta.appendChild(document.createTextNode("source sha256 "));
+  meta.appendChild(el("span","mono",(body.source_sha256||"").slice(0,32)+"…")); mb.appendChild(meta);
+  mb.appendChild(el("div","mrow","property: "+(body.engine_property||"capability/effect boundaries")));
+  cert.forEach(c=>{
+    const box=el("div","mcert");
+    box.appendChild(el("span","nm","module "+c.module));
+    box.appendChild(el("div","mrow","boundary: "+(c.declared_capabilities||[]).join(", ")+"  ·  exports: "+(c.exports||[]).join(", ")));
+    (c.proven_surface||[]).forEach(p=>box.appendChild(el("div","mrow","✓ "+p.function+" — effective: "+(p.effective_capabilities||["pure"]).join(", "))));
+    mb.appendChild(box);
+  });
+  wit.forEach(w=>{
+    mb.appendChild(el("div","mwith","withheld — module "+w.module+" ("+w.state+"): "+(w.reason||"not proven clean")));
+  });
+  if(!cert.length && !wit.length) mb.appendChild(el("div","mrow","No module declares a boundary, so there is nothing to certify."));
+  if(m.note) mb.appendChild(el("div","mnote",m.note));
+  const dl=el("button","ghost","Download manifest.json"); dl.style.marginTop="10px";
+  dl.onclick=()=>{
+    const blob=new window.Blob([JSON.stringify(m,null,2)],{type:"application/json"});
+    const a=window.document.createElement("a"); a.href=URL.createObjectURL(blob);
+    a.download="aether-manifest.json"; window.document.body.appendChild(a); a.click(); a.remove();
+  };
+  mb.appendChild(dl);
+  card.appendChild(mb); host.appendChild(card);
+  host.scrollIntoView({behavior:"smooth",block:"start"});
+}
+async function manifest(){
+  if(!CURRENT.trim()){ $("#status").textContent="Prove a program first."; return; }
+  $("#status").textContent="Building manifest…";
+  try{
+    const m = await api("/manifest",{source:CURRENT, lang:CURRENT_LANG, strict:STRICT});
+    $("#status").textContent="";
+    renderManifest(m);
+  }catch(e){ $("#status").textContent="Error: "+e.message; }
+}
+async function loadExamples(){
+  const box=$("#examples");
+  try{
+    const j = await api("/examples");
+    (j.examples||[]).forEach((ex,i)=>{
+      const c=el("button","chip");
+      const lng = ex.lang||"aether";
+      c.appendChild(el("span","lang-badge "+lng, lng));
+      c.appendChild(el("span","",ex.title||ex.id));
+      c.appendChild(el("span","st",ex.highlights||""));
+      c.onclick=()=>{ document.querySelectorAll(".chip").forEach(x=>x.classList.remove("active"));
+        c.classList.add("active"); CURRENT_LANG=lng; $("#src").value=ex.source; prove(); };
+      box.appendChild(c);
+      if(i===0){ c.classList.add("active"); CURRENT_LANG=lng; $("#src").value=ex.source; }
+    });
+    if((j.examples||[]).length) prove();
+  }catch(e){ box.appendChild(el("span","err","Could not reach engine at "+API+" — start alsp_http.py.")); }
+}
+$("#go").onclick=prove;
+$("#manifestBtn").onclick=manifest;
+$("#containBtn").onclick=runContainment;
+document.querySelectorAll("#modeToggle .mbtn").forEach(btn=>{
+  btn.onclick=()=>{
+    document.querySelectorAll("#modeToggle .mbtn").forEach(b=>b.classList.remove("on"));
+    btn.classList.add("on");
+    STRICT = (btn.dataset.mode==="strict");
+    if(CURRENT.trim()) prove();
+  };
+});
+loadExamples();
+</script>
+</body>
+</html>

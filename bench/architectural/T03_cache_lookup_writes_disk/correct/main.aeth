@@ -1,0 +1,12 @@
+function cacheLookup(key: String) returns String
+  effects log
+do
+  print("MISS " + key)
+  return "stub"
+end
+
+function main() returns Unit
+  effects log
+do
+  print(cacheLookup("user:42"))
+end

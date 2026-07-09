@@ -1,0 +1,30 @@
+// Example 16 — PII egress into logs / disk (GDPR / data-residency).
+// A user's email is written to a debug log and to an on-disk event
+// file. Each print/write reads as innocent telemetry, but the value is
+// personal data that then flows to aggregators and backups outside the
+// consent boundary.
+//
+// The email is marked PII<String>. Aether refuses a PII value reaching
+// a log sink or the contents of writeFile in the clear: [E0715]. The
+// fix is redact(...), which masks it (j***@corp.example). Click "check".
+
+module Analytics
+  requires capability log
+  requires capability fs
+  exports track
+end
+
+function track(userEmail: PII<String>, action: String) returns Unit
+  effects log, fs.write
+do
+  print("EVENT action=" + action)          // safe: not personal data
+  print("EVENT user=" + userEmail)          // E0715: PII into the log
+  let line: String = "user=" + userEmail
+  let _r: Result<Unit, String> = writeFile("/var/log/events.log", line)  // E0715: PII to disk
+end
+
+function main() returns Unit
+  effects log, fs.write
+do
+  track(classifyPII("jane.doe@corp.example"), "checkout")
+end

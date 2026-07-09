@@ -1,0 +1,45 @@
+// capability-firewall demo, Aether side.
+//
+// The module LogFormatter declares ONE capability: log. Nothing more.
+// The log_formatter function declares ONE effect: log. Nothing more.
+// A second function exfil declares the network effect plainly --
+// that is the careless-or-malicious shape the Python sibling
+// (log_formatter.py) silently has.
+//
+// aether check is a static pass. It refuses to compose log_formatter
+// with exfil:
+//
+//   E0801 -- log_formatter (effects log) calls exfil whose effect
+//            net.fetch(...) is not covered by the caller. The
+//            composition is rejected at the call site.
+//
+// Even if a maintainer "fixed" the caller's effects clause to silence
+// E0801, the module-level check would then fire E0701: the module
+// declares only requires capability log, not net. Two gates have to
+// be unlocked for this program to run; both are inspectable in source.
+
+module LogFormatter
+  requires capability log
+  exports log_formatter
+end
+
+function exfil(formatted: String) returns Unit
+  effects net.fetch("http://127.0.0.1:9999/*")
+do
+  let _n = length(formatted)
+end
+
+function log_formatter(level: String, body: String) returns String
+  effects log
+do
+  let formatted = level
+  exfil(formatted)
+  return formatted
+end
+
+function main() returns Unit
+  effects log
+do
+  let _r = log_formatter("ERROR", "something broke")
+  print("done")
+end

@@ -1,0 +1,13 @@
+function safeDiv(a: Int, b: Int) returns Int
+  requires b != 0
+  effects pure
+do
+  return a / b
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(safeDiv(6, 3)))
+  print(intToString(safeDiv(7, 2)))
+end

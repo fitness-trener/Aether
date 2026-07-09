@@ -1,0 +1,18 @@
+// Real-world validation — XXE (CWE-611), the lxml entity-resolving parse
+// shape in `lxml_repro.py`: untrusted XML parsed with external entities
+// enabled reads local files and reaches internal URLs.
+//
+// Run:  aether check vulnerable.aeth   -> E0727
+
+function loadConfig(raw: String) returns String
+  effects pure
+do
+  // Models etree.fromstring(raw, resolve_entities=True).
+  return parseXml(raw)
+end
+
+function main() returns Unit
+  effects log
+do
+  print(loadConfig("<!DOCTYPE r [<!ENTITY x SYSTEM 'file:///etc/passwd'>]><r>&x;</r>"))
+end

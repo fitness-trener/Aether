@@ -3,7 +3,7 @@ a human-readable message, and a machine-readable suggestion."""
 
 from __future__ import annotations
 from dataclasses import dataclass, asdict, field
-from typing import Optional
+from typing import Optional, List
 
 
 @dataclass
@@ -40,10 +40,27 @@ class Diagnostic:
 
 
 class AetherError(Exception):
-    """Wrapped diagnostic. Always carries a single Diagnostic.
+    """Wrapped diagnostic. Carries either a single Diagnostic (legacy
+    single-error API) or a non-empty list of Diagnostics (multi-error
+    parser-recovery API, C.6). The `.diag` attribute is the first
+    diagnostic and remains stable for code that expected one error.
 
     The CLI catches these and emits structured JSON when --json is set."""
 
-    def __init__(self, diag: Diagnostic):
-        super().__init__(f"[{diag.code}] {diag.message} at line {diag.position.line}, col {diag.position.column}")
+    def __init__(self, diag, diagnostics: Optional[List[Diagnostic]] = None):
+        if diagnostics is None:
+            diagnostics = [diag]
+        if not diagnostics:
+            raise ValueError("AetherError needs at least one Diagnostic")
+        if diag is None:
+            diag = diagnostics[0]
+        n = len(diagnostics)
+        head = (
+            f"[{diag.code}] {diag.message} "
+            f"at line {diag.position.line}, col {diag.position.column}"
+        )
+        if n > 1:
+            head = f"{head} (+ {n - 1} more)"
+        super().__init__(head)
         self.diag = diag
+        self.diagnostics: List[Diagnostic] = list(diagnostics)

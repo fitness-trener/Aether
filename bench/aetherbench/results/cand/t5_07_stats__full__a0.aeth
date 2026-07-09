@@ -1,0 +1,40 @@
+function total(xs: List<Int>) returns Int
+  effects pure
+do
+  return sum(xs)
+end
+
+function minimum(xs: List<Int>) returns Int
+  requires length(xs) > 0
+  effects pure
+do
+  var m: Int = xs[0]
+  for i in range(0, length(xs)) do
+    if xs[i] < m then
+      m = xs[i]
+    end
+  end
+  return m
+end
+
+function maximum(xs: List<Int>) returns Int
+  requires length(xs) > 0
+  effects pure
+do
+  var m: Int = xs[0]
+  for i in range(0, length(xs)) do
+    if xs[i] > m then
+      m = xs[i]
+    end
+  end
+  return m
+end
+
+function main() returns Unit
+  effects log
+do
+  let xs: List<Int> = [4, 9, 1, 6]
+  print(intToString(total(xs)))
+  print(intToString(minimum(xs)))
+  print(intToString(maximum(xs)))
+end

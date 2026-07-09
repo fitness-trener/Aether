@@ -1,0 +1,11 @@
+{
+  "expected_stdout": "27\n-273\n",
+  "stdin": "",
+  "timeout_ms": 5000,
+  "tags": [
+    "refinement"
+  ],
+  "difficulty": "aetherbench",
+  "tier": 2,
+  "check_required": true
+}

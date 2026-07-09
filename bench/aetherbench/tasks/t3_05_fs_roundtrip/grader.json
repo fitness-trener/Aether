@@ -1,0 +1,12 @@
+{
+  "expected_stdout": "hello-fs\n",
+  "stdin": "",
+  "timeout_ms": 5000,
+  "tags": [
+    "effects",
+    "fs"
+  ],
+  "difficulty": "aetherbench",
+  "tier": 3,
+  "check_required": true
+}

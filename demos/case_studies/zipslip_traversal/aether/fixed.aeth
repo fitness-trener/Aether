@@ -1,0 +1,39 @@
+// The fix. Route the untrusted entry name through `safeJoin`, which
+// strips `..`, absolute roots, and drive prefixes so the result is
+// guaranteed to stay under baseDir. This is the same containment the
+// hardened archive libraries adopted after Zip-Slip — here it is the
+// only shape E0711 accepts for a dynamic path, so the compiler steers
+// every agent to it.
+//
+// Run:  aether check fixed.aeth   -> OK
+//       aether run   fixed.aeth   -> the malicious "../" is neutralized
+
+module Extractor
+  requires capability fs
+  requires capability log
+  exports extract
+end
+
+function writeEntry(baseDir: String, entryName: String, body: String) returns Unit
+  effects fs.write
+do
+  // safeJoin("...", "../../../../etc/cron.d/evil") stays under baseDir.
+  // E0711 accepts writeFile here because `safe` is proven to hold a
+  // safeJoin result (per-function dataflow), not raw input.
+  let safe: String = safeJoin(baseDir, entryName)
+  let _r: Result<Unit, String> = writeFile(safe, body)
+end
+
+function extract(baseDir: String) returns Unit
+  effects log, fs.write
+do
+  writeEntry(baseDir, "../../../../etc/cron.d/evil", "payload")
+  writeEntry(baseDir, "docs/readme.txt", "ok")
+  print("EXTRACTED into " + baseDir)
+end
+
+function main() returns Unit
+  effects log, fs.write
+do
+  extract("/var/app/unzip")
+end

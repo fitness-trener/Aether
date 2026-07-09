@@ -1,0 +1,18 @@
+// Real-world validation — SSRF via user-controlled URL in `requests`
+// (CWE-918). Models the vulnerable shape in `requests_repro.py`: a
+// preview fetcher that can reach ANY host, so an attacker steers it to
+// the cloud-metadata service (169.254.169.254) or an internal API.
+//
+// In Aether the reachable host set is the effect annotation. A fetcher
+// that reaches an arbitrary user authority must declare net.fetch("*") —
+// an unpinned scope — which E0710 refuses at check time (the SSRF
+// precondition), before any request is made.
+//
+// Run:  aether check vulnerable.aeth   -> E0710
+
+function fetchPreview(userUrl: String) returns String
+  effects net.fetch("*")
+do
+  // Models requests.get(user_url): unbounded host reach.
+  return userUrl
+end

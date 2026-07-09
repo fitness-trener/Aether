@@ -1,0 +1,19 @@
+module DocRepo
+  requires capability db
+  requires capability log
+  exports updateDoc
+end
+
+function updateDoc(docId: String, user: String) returns String
+  effects db.exec, log
+do
+  let proof: Authorized<String> = authorizeResource(user, "docs:edit", docId)
+  sqlByOwner("UPDATE docs SET updated = 1 WHERE id = ?", docId, proof)
+  return "UPDATED " + docId
+end
+
+function main() returns Unit
+  effects db.exec, log
+do
+  print(updateDoc("doc-1", "alice"))
+end

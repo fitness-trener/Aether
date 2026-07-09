@@ -1,0 +1,14 @@
+type Quantity = Int where self >= 1
+
+function total(price: Int, qty: Quantity) returns Int
+  effects pure
+do
+  return price * qty
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(total(7, 3)))
+  print(intToString(total(10, 1)))
+end

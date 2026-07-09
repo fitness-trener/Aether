@@ -1,0 +1,32 @@
+// Case study — command injection (CWE-78). The OpenSSL c_rehash shape
+// (CVE-2022-1292, CVSS 9.8): a script concatenated certificate file
+// names into a shell command line, so a crafted filename like
+// `x.jpg; rm -rf /` executes attacker commands. Every "build the
+// command string by hand" path over user-supplied names is a candidate.
+//
+// The command below is built by raw concatenation of `filename`.
+// Aether refuses it with [E0714] and points at the quoted form.
+//
+// Run:  aether check vulnerable.aeth   -> E0714
+
+module Thumbnailer
+  requires capability exec
+  requires capability log
+  exports convert
+end
+
+// filename is attacker-controlled (an uploaded file's name).
+// Concatenating it into the command line is the injection precondition.
+function convert(filename: String) returns String
+  effects exec.run
+do
+  return shellExec("convert " + filename + " out.png")
+end
+
+function main() returns Unit
+  effects log, exec.run
+do
+  // A crafted filename turns one image conversion into arbitrary
+  // command execution.
+  print(convert("x.jpg; rm -rf /"))
+end

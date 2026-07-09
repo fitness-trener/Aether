@@ -1,0 +1,12 @@
+function myAbs(x: Int) returns Int
+  ensures result >= 0
+  effects pure
+do
+  return x
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(myAbs(-5)))
+end

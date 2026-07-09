@@ -1,0 +1,52 @@
+# Aether scan — gate AI-generated .aeth code on every push / PR.
+#
+# Runs the full Aether detector suite (19 security + 6 architectural
+# checks) over the repository, uploads findings to GitHub Code Scanning as
+# SARIF, and fails the build if any finding is present. Drop this file in
+# `.github/workflows/` of a repo that contains `.aeth` source.
+#
+# Aether is stdlib-only (Python 3.10+), so there is nothing to install.
+
+name: aether-scan
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+  security-events: write   # required to upload SARIF to Code Scanning
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # SCAN_PATH defaults to the whole repo; override to a src dir if you
+      # keep .aeth files under one folder.
+      - name: Run Aether scan
+        id: scan
+        run: |
+          set +e
+          python -m tools.scan "${SCAN_PATH:-.}" --sarif > aether.sarif
+          code=$?
+          set -e
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+
+      - name: Upload SARIF to Code Scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: aether.sarif
+
+      - name: Fail if findings
+        if: steps.scan.outputs.exit_code != '0'
+        run: |
+          echo "Aether found architectural/security violations — see the"
+          echo "Code Scanning tab or the SARIF artifact."
+          exit 1

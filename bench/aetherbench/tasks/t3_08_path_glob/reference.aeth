@@ -1,0 +1,11 @@
+function charge(amount: Int) returns String
+  effects net.fetch("https://api.payments.example.com/charge/*")
+do
+  return "charged:" + intToString(amount)
+end
+
+function main() returns Unit
+  effects log, net.fetch("https://api.payments.example.com/charge/*")
+do
+  print(charge(100))
+end

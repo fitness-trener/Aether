@@ -1,0 +1,13 @@
+type Email = String where contains?(self, "@") and length(self) > 3
+
+function sendEmail(to: Email) returns Unit
+  effects log
+do
+  print("SENT to " + to)
+end
+
+function main() returns Unit
+  effects log
+do
+  sendEmail("alice@example.com")
+end

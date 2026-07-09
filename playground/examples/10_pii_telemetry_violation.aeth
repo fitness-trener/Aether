@@ -1,0 +1,82 @@
+// Example 10 — PII telemetry service (bigtech-shaped, BROKEN on purpose).
+// A data-governance nightmare in one file. Every function passes
+// review in isolation; the composition violates four architectural
+// promises. Python ships this and leaks PII in production. Aether
+// refuses to compile — click "check" to see the effect violations;
+// fix those and the capability + refinement violations are caught
+// next (the passes run in order, each one a locked door).
+//
+//   1. (B.1) `redactEmail` is declared pure, but a debug print leaks
+//      the RAW email to logs — the classic GDPR incident.
+//   2. (B.2) the exporter promises it only reaches /v1/events/*, but
+//      routes through an internal /admin/ endpoint.
+//   3. (B.3) the module declares only `log`; the transitive call
+//      chain performs net.fetch — a capability the module never got.
+//   4. (B.4) RetentionDays is refined to [1,365]; compliance config
+//      passes 3650. Dies at the boundary the moment it's called.
+
+module TelemetryService
+  requires capability log
+  exports main
+end
+
+type RetentionDays = Int where self >= 1 and self <= 365
+
+record Event do
+  userId: Int
+  email: String
+  action: String
+end
+
+// (B.1 violation) Redaction MUST be pure — it sits on the hot path
+// of every event. The stray print ships the raw email to the log
+// pipeline, which is exactly what redaction exists to prevent.
+function redactEmail(email: String) returns String
+  effects pure
+do
+  print("DEBUG redacting " + email)
+  let parts: List<String> = split(email, "@")
+  return "***@" + join(tail(parts), "@")
+end
+
+function sanitize(e: Event) returns Event
+  effects pure
+do
+  return Event(e.userId, redactEmail(e.email), e.action)
+end
+
+// (B.2 violation) The effect clause promises this function only
+// talks to the public events endpoint. The body routes through an
+// internal admin API "just this once".
+function flushViaAdminBackdoor(payload: String) returns String
+  effects net.fetch("https://telemetry.corp.example/admin/requeue")
+do
+  return "requeued"
+end
+
+function exportEvents(payload: String) returns String
+  effects net.fetch("https://telemetry.corp.example/v1/events/*")
+do
+  return flushViaAdminBackdoor(payload)
+end
+
+// (B.4 violation waiting at the call site in main)
+function scheduleDeletion(e: Event, keepFor: RetentionDays) returns String
+  effects pure
+do
+  return "delete user=" + intToString(e.userId)
+    + " after=" + intToString(keepFor) + "d"
+end
+
+// (B.3 violation) The module only declared `log`, but this chain
+// transitively needs the `net` capability via exportEvents.
+function main() returns Unit
+  effects log, net.fetch("https://telemetry.corp.example/v1/events/*")
+do
+  let raw: Event = Event(42, "jane.doe@corp.example", "login")
+  let clean: Event = sanitize(raw)
+  let _resp: String = exportEvents(clean.action)
+  // Compliance asked for "10 years" — 3650 days. RetentionDays says
+  // no such policy can exist. Boundary check kills it at runtime.
+  print(scheduleDeletion(clean, 3650))
+end

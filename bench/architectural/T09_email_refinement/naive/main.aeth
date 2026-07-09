@@ -1,0 +1,19 @@
+type Email = String where contains?(self, "@") and length(self) > 3
+
+function sendEmail(to: Email) returns Unit
+  effects log
+do
+  print("SENT to " + to)
+end
+
+function sanitize(s: String) returns String
+  effects pure
+do
+  return replace(s, "@", "")
+end
+
+function main() returns Unit
+  effects log
+do
+  sendEmail(sanitize("alice@example.com"))
+end

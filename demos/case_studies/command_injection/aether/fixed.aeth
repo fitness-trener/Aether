@@ -1,0 +1,28 @@
+// The fix. Quote with shellArg: the untrusted value is bound into a `?`
+// placeholder as a single shell argument, so it can never inject
+// `;`/`|`/`$( )` syntax and change what the command does. This is the
+// argv-discipline every hardened exec path uses — and the only shape
+// E0714 accepts for a command carrying a dynamic value.
+//
+// Run:  aether check fixed.aeth   -> OK
+//       aether run   fixed.aeth   -> the injection payload is neutralized
+
+module Thumbnailer
+  requires capability exec
+  requires capability log
+  exports convert
+end
+
+function convert(filename: String) returns String
+  effects exec.run
+do
+  let cmd: String = shellArg("convert ? out.png", filename)
+  return shellExec(cmd)
+end
+
+function main() returns Unit
+  effects log, exec.run
+do
+  // The same crafted filename is now one inert quoted argument.
+  print(convert("x.jpg; rm -rf /"))
+end

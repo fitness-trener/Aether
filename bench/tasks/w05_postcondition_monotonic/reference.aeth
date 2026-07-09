@@ -1,0 +1,12 @@
+function nextSeq(n: Int) returns Int
+  ensures result > old(n)
+  effects pure
+do
+  return n
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(nextSeq(10)))
+end

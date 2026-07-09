@@ -1,0 +1,7 @@
+function main() returns Unit
+  effects log
+do
+  let xs: List<Int> = []
+  let ys: List<Int> = tail(xs)
+  print(intToString(length(ys)))
+end

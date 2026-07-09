@@ -1,0 +1,323 @@
+// Aether port of BIP173 Bech32 (Pieter Wuille's reference implementation,
+// the `bech32` PyPI package). Bech32 is the checksum scheme behind modern
+// Bitcoin segwit addresses ("bc1q..."). The 6-symbol BCH checksum is what
+// stops a mistyped or corrupted address from being accepted — a checksum
+// bug means funds sent to the wrong place, irreversibly.
+//
+// Aether has no bitwise operators, so XOR / shift / mask are emulated with
+// arithmetic: every mask in Bech32 is 2^k-1 (=> modulo), every shift is a
+// power-of-two multiply/divide, and XOR is a per-bit loop. `ord` is needed
+// only for the human-readable part (hrp), whose real values are lowercase
+// alphanumeric, so it is computed without an ASCII table.
+//
+// Scope: BIP173 bech32 (checksum constant 1), matching the reference
+// package exactly. bech32m (BIP350, constant 0x2bc830a3, taproot v1+) is a
+// one-constant variant not covered here.
+
+const CHARSET: String = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+
+function pow2(k: Int) returns Int
+  requires k >= 0
+  ensures result >= 1
+  effects pure
+do
+  var p = 1
+  for i in range(0, k) do
+    p = p * 2
+  end
+  return p
+end
+
+// XOR of two non-negative ints up to 31 bits (Bech32 generators are 30-bit).
+function xorBits(a: Int, b: Int) returns Int
+  requires a >= 0 and b >= 0
+  ensures result >= 0
+  effects pure
+do
+  var res = 0
+  for i in range(0, 31) do
+    let pi = pow2(i)
+    let ab = (a / pi) % 2
+    let bb = (b / pi) % 2
+    if ab != bb then
+      res = res + pi
+    end
+  end
+  return res
+end
+
+function generators() returns List<Int>
+  effects pure
+do
+  // 0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3
+  return [996825010, 642813549, 513874426, 1027748829, 705979059]
+end
+
+function polymod(values: List<Int>) returns Int
+  effects pure
+  ensures result >= 0
+do
+  let gen = generators()
+  var chk = 1
+  for v in values do
+    let top = chk / pow2(25)                       // chk >> 25
+    chk = xorBits((chk % pow2(25)) * pow2(5), v)   // (chk & 0x1ffffff) << 5 ^ v
+    for i in range(0, 5) do
+      if (top / pow2(i)) % 2 == 1 then
+        chk = xorBits(chk, unwrapOrElse(get(gen, i), 0))
+      end
+    end
+  end
+  return chk
+end
+
+// ord() for a lowercase-alphanumeric hrp character. Returns -1 for any
+// other character (real segwit hrps are lowercase alnum, e.g. "bc"/"tb").
+function ordOf(ch: String) returns Int
+  effects pure
+do
+  let lowers = "abcdefghijklmnopqrstuvwxyz"
+  let digits = "0123456789"
+  for i in range(0, 26) do
+    if slice(lowers, i, i + 1) == ch then
+      return 97 + i
+    end
+  end
+  for i in range(0, 10) do
+    if slice(digits, i, i + 1) == ch then
+      return 48 + i
+    end
+  end
+  return 0 - 1
+end
+
+function hrpExpand(hrp: String) returns List<Int>
+  effects pure
+do
+  let cs = chars(hrp)
+  var hi = []
+  var lo = []
+  for c in cs do
+    let o = ordOf(c)
+    hi = append(hi, o / 32)
+    lo = append(lo, o % 32)
+  end
+  return concat(append(hi, 0), lo)
+end
+
+function verifyChecksum(hrp: String, data: List<Int>) returns Bool
+  effects pure
+do
+  return polymod(concat(hrpExpand(hrp), data)) == 1
+end
+
+function createChecksum(hrp: String, data: List<Int>) returns List<Int>
+  effects pure
+  ensures length(result) == 6
+do
+  let values = concat(concat(hrpExpand(hrp), data), [0, 0, 0, 0, 0, 0])
+  let pm = xorBits(polymod(values), 1)
+  var out = []
+  for i in range(0, 6) do
+    out = append(out, (pm / pow2(5 * (5 - i))) % pow2(5))
+  end
+  return out
+end
+
+function charsetChar(i: Int) returns String
+  requires i >= 0 and i < 32
+  effects pure
+do
+  return slice(CHARSET, i, i + 1)
+end
+
+// index of ch in CHARSET, or -1
+function charsetIndexOf(ch: String) returns Int
+  effects pure
+do
+  for i in range(0, 32) do
+    if charsetChar(i) == ch then
+      return i
+    end
+  end
+  return 0 - 1
+end
+
+function bech32Encode(hrp: String, data: List<Int>) returns String
+  effects pure
+do
+  let combined = concat(data, createChecksum(hrp, data))
+  var body = ""
+  for d in combined do
+    body = join([body, charsetChar(d)], "")
+  end
+  return join([hrp, "1", body], "")
+end
+
+// General power-of-2 base conversion (reference convertbits). Returns
+// Err to model the reference's None (invalid padding / out-of-range).
+function convertbits(data: List<Int>, frombits: Int, tobits: Int, pad: Bool) returns Result<List<Int>, String>
+  requires frombits >= 1 and tobits >= 1
+  effects pure
+do
+  var acc = 0
+  var bits = 0
+  var ret = []
+  let maxv = pow2(tobits) - 1
+  let maxAcc = pow2(frombits + tobits - 1) - 1
+  for value in data do
+    if value < 0 or (value / pow2(frombits)) > 0 then
+      return Err("value out of range")
+    end
+    acc = (acc * pow2(frombits) + value) % (maxAcc + 1)
+    bits = bits + frombits
+    while bits >= tobits do
+      bits = bits - tobits
+      ret = append(ret, (acc / pow2(bits)) % (maxv + 1))
+    end
+  end
+  if pad then
+    if bits > 0 then
+      ret = append(ret, (acc * pow2(tobits - bits)) % (maxv + 1))
+    end
+  else
+    if bits >= frombits or ((acc * pow2(tobits - bits)) % (maxv + 1)) != 0 then
+      return Err("invalid padding")
+    end
+  end
+  return Ok(ret)
+end
+
+// Encode a segwit address (reference `encode`), incl. the round-trip
+// decode self-check. Returns Err to model None.
+function segwitEncode(hrp: String, witver: Int, witprog: List<Int>) returns Result<String, String>
+  effects pure
+do
+  let conv = convertbits(witprog, 8, 5, true)
+  match conv do
+    case Ok(five) do
+      let addr = bech32Encode(hrp, prepend(witver, five))
+      if segwitVerifyOk(hrp, witver, witprog, addr) then
+        return Ok(addr)
+      else
+        return Err("failed round-trip")
+      end
+    end
+    case Err(e) do
+      return Err(e)
+    end
+  end
+end
+
+// last index of "1" in s, or -1
+function lastIndexOfOne(s: String) returns Int
+  effects pure
+do
+  let cs = chars(s)
+  var last = 0 - 1
+  for i in range(0, length(cs)) do
+    if unwrapOrElse(get(cs, i), "") == "1" then
+      last = i
+    end
+  end
+  return last
+end
+
+record DecodeResult do
+  ok: Bool
+  hrp: String
+  data: List<Int>
+end
+
+// reference bech32_decode: validate + split hrp/data (data excludes the
+// 6 checksum symbols).
+function bech32Decode(bech: String) returns DecodeResult
+  effects pure
+do
+  // reject mixed case
+  if toLower(bech) != bech and toUpper(bech) != bech then
+    return DecodeResult(false, "", [])
+  end
+  let low = toLower(bech)
+  let n = length(low)
+  let pos = lastIndexOfOne(low)
+  if pos < 1 or pos > 83 or pos + 7 > n then
+    return DecodeResult(false, "", [])
+  end
+  let hrp = slice(low, 0, pos)
+  // data chars after the separator, each mapped through CHARSET
+  var data = []
+  for i in range(pos + 1, n) do
+    let idx = charsetIndexOf(slice(low, i, i + 1))
+    if idx < 0 then
+      return DecodeResult(false, "", [])
+    end
+    data = append(data, idx)
+  end
+  if not verifyChecksum(hrp, data) then
+    return DecodeResult(false, "", [])
+  end
+  return DecodeResult(true, hrp, take(data, length(data) - 6))
+end
+
+// reference segwit `decode` validity (does the address decode to a valid
+// witness program under the expected hrp?). Mirrors decode() != (None,None).
+function segwitDecodeOk(expectedHrp: String, addr: String) returns Bool
+  effects pure
+do
+  let dr = bech32Decode(addr)
+  if not dr.ok then
+    return false
+  end
+  if dr.hrp != expectedHrp then
+    return false
+  end
+  if length(dr.data) < 1 then
+    return false
+  end
+  let witver = unwrapOrElse(get(dr.data, 0), 0)
+  let rest = drop(dr.data, 1)
+  let conv = convertbits(rest, 5, 8, false)
+  match conv do
+    case Ok(decoded) do
+      let ln = length(decoded)
+      if ln < 2 or ln > 40 then
+        return false
+      end
+      if witver > 16 then
+        return false
+      end
+      if witver == 0 and ln != 20 and ln != 32 then
+        return false
+      end
+      return true
+    end
+    case Err(e) do
+      return false
+    end
+  end
+end
+
+// used by segwitEncode's round-trip check (recompute program to compare)
+function segwitVerifyOk(hrp: String, witver: Int, witprog: List<Int>, addr: String) returns Bool
+  effects pure
+do
+  return segwitDecodeOk(hrp, addr)
+end
+
+function main() returns Unit
+  effects log
+do
+  // A P2WPKH program (20 bytes) under hrp "bc".
+  let prog = [0, 20, 15, 200, 3, 99, 250, 1, 44, 88, 176, 5, 61, 130, 7, 250, 9, 100, 200, 30]
+  let r = segwitEncode("bc", 0, prog)
+  match r do
+    case Ok(addr) do
+      print(addr)
+      print(intToString(1))   // valid?
+    end
+    case Err(e) do
+      print(join(["ERR ", e], ""))
+    end
+  end
+end

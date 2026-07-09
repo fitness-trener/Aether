@@ -1,0 +1,125 @@
+// Reproduction of the intword carry defect PRESENT in humanize 4.16.0
+// (current PyPI release, found by this differential run — see
+// differential.py). humanize's rollover check is:
+//
+//     if rounded_value * power == powers[ordinal + 1]:   # float == int
+//
+// `rounded_value * power` is a float. For boundaries >= 10**24 the power's
+// 5**k factor exceeds 2**53, the target power is not double-representable,
+// the equality is always False, and the carry never happens:
+//
+//     humanize.intword(10**24 - 1)  == '1000.0 sextillion'   (not '1.0 septillion')
+//     humanize.intword(10**100 - 1) == '99999...336.0 decillion' (67-digit coefficient)
+//
+// This file ports that float-mediated carry faithfully (floor() of the
+// float product vs the exact integer power — the same representability
+// failure) and declares the normalization contract. The contract fires
+// at exactly the inputs where the real library misbehaves.
+
+function pow10(k: Int) returns Int
+  requires k >= 0
+  ensures result >= 1
+  effects pure
+do
+  var p = 1
+  for i in range(0, k) do
+    p = p * 10
+  end
+  return p
+end
+
+function intToFloat(n: Int) returns Float
+  effects pure
+do
+  return unwrapOr(parseFloat(intToString(n)), 0.0)
+end
+
+function tenthsHalfEven(n: Int, d: Int) returns Int
+  requires n >= 0 and d >= 1
+  ensures result >= 0
+  effects pure
+do
+  let q = (n * 10) / d
+  let r = (n * 10) % d
+  let twice = r * 2
+  if twice > d then
+    return q + 1
+  elif twice < d then
+    return q
+  elif q % 2 == 0 then
+    return q
+  else
+    return q + 1
+  end
+end
+
+function tenthsToString(t: Int) returns String
+  requires t >= 0
+  effects pure
+do
+  return join([intToString(t / 10), ".", intToString(t % 10)], "")
+end
+
+function intwordExponents() returns List<Int>
+  effects pure
+do
+  return [3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 100]
+end
+
+function intwordNames() returns List<String>
+  effects pure
+do
+  return ["thousand", "million", "billion", "trillion", "quadrillion",
+          "quintillion", "sextillion", "septillion", "octillion",
+          "nonillion", "decillion", "googol"]
+end
+
+// humanize 4.16.0 logic with its float-mediated carry comparison.
+// Contract: below the decillion tail, a rendered coefficient must stay
+// under 1000 — the normalization humanize itself applies at e.g. 10**9.
+function intwordFloatCarry(n: Int) returns String
+  requires n >= 0
+  ensures (n >= 1000 and n < pow10(36)) implies (not startsWith?(result, "1000."))
+  effects pure
+do
+  if n < 1000 then
+    return intToString(n)
+  end
+  let exps = intwordExponents()
+  let names = intwordNames()
+  var ordinal = 0
+  while ordinal < length(exps) do
+    let e = unwrapOrElse(get(exps, ordinal), 0)
+    if pow10(e) <= n then
+      ordinal = ordinal + 1
+    else
+      break
+    end
+  end
+  ordinal = ordinal - 1
+  let power = pow10(unwrapOrElse(get(exps, ordinal), 0))
+  var t = tenthsHalfEven(n, power)
+  if ordinal + 1 < length(exps) then
+    let nextPower = pow10(unwrapOrElse(get(exps, ordinal + 1), 0))
+    // BUG (humanize 4.16.0): the carry condition goes through a float
+    // product. When nextPower is not double-representable (>= 10**24)
+    // the comparison is always false and the carry is skipped.
+    let roundedF = intToFloat(t) / 10.0
+    if floor(roundedF * intToFloat(power)) == nextPower then
+      ordinal = ordinal + 1
+      t = 10
+    end
+  end
+  let unit = unwrapOrElse(get(names, ordinal), "")
+  return join([tenthsToString(t), " ", unit], "")
+end
+
+function main() returns Unit
+  effects log
+do
+  // below 10**24 the float carry still works: same output as the fixed port
+  print(intwordFloatCarry(999999999))
+  print(intwordFloatCarry(999999999999999999))
+  // first broken boundary: 10**24 - 1 -> "1000.0 sextillion" in humanize 4.16.0
+  print(intwordFloatCarry(999999999999999999999999))
+end

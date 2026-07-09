@@ -1,0 +1,13 @@
+type NonNeg = Int where self >= 0
+
+function display(n: NonNeg) returns String
+  effects pure
+do
+  return intToString(n)
+end
+
+function main() returns Unit
+  effects log
+do
+  print(display(-5))
+end

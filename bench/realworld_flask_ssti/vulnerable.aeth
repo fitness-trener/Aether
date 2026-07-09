@@ -1,0 +1,20 @@
+// Real-world validation — Flask/Jinja2 server-side template injection
+// (CWE-94). Models the vulnerable shape in `flask_repro.py`: a request
+// parameter concatenated into the template string of
+// render_template_string, so `{{7*7}}` is evaluated → RCE.
+//
+// Run:  aether check vulnerable.aeth   -> E0719
+
+function greeting(name: String) returns String
+  effects pure
+do
+  // Models render_template_string("<h1>Hello " + name + "</h1>"):
+  // user input steers template SYNTAX.
+  return renderTemplate("<h1>Hello " + name + "</h1>", "")
+end
+
+function main() returns Unit
+  effects log
+do
+  print(greeting("{{7*7}}"))
+end

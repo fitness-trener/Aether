@@ -1,0 +1,24 @@
+module Auth
+  requires capability db
+  exports go
+end
+
+function sink(auth: Authorized<String>) returns String
+  effects db.exec
+do
+  return sqlExec("DELETE FROM t WHERE id=1", auth)
+end
+
+function go(raw: String) returns Unit
+  effects db.exec
+do
+  // Direct annotation: bind a plain String into an Authorized<String> slot.
+  let p: Authorized<String> = raw
+  let _r: String = sink(p)
+end
+
+function main() returns Unit
+  effects db.exec
+do
+  go("not-a-proof")
+end

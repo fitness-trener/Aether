@@ -1,0 +1,15 @@
+{
+  "id": "T03_cache_lookup_writes_disk",
+  "axis": "B.1",
+  "summary": "log-only cache helper transitively performs fs.write",
+  "naive_aether": {"stage": "check", "expected_exit_code": 2,
+                   "expected_diagnostic_code": "E0801",
+                   "expected_stderr_pattern": "E0801.*cacheLookup.*fs.write"},
+  "naive_python": {"stage": "run", "expected_exit_code": 0,
+                   "expected_stdout_pattern": "MISS user:42\\nstub\\n",
+                   "silently_violates": true},
+  "correct_aether": {"stage": "run", "expected_exit_code": 0,
+                     "expected_stdout": "MISS user:42\nstub\n"},
+  "correct_python": {"stage": "run", "expected_exit_code": 0,
+                     "expected_stdout": "MISS user:42\nstub\n"}
+}

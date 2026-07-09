@@ -1,0 +1,23 @@
+module PinnedFetch
+  requires capability net
+  requires capability log
+  exports fetchStatus, report
+end
+
+function fetchStatus() returns String
+  effects net.fetch("https://api.example.com/status")
+do
+  return "UP"
+end
+
+function report() returns Unit
+  effects log, net.fetch("https://api.example.com/status")
+do
+  print("STATUS " + fetchStatus())
+end
+
+function main() returns Unit
+  effects log, net.fetch("https://api.example.com/status")
+do
+  report()
+end

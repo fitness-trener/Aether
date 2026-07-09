@@ -1,0 +1,22 @@
+// subprocess command-injection validation — the fixed shape. The command
+// is a fixed template and the untrusted filename is quoted as a single
+// argument via shellArg. Models the argv-list form
+// subprocess.call(["convert", filename, ...]). `aether check` passes;
+// `aether run` shows the payload quoted inert as one argument.
+//
+// Run:  aether check fixed.aeth   -> OK
+//       aether run   fixed.aeth   -> EXEC(convert 'x.jpg; rm -rf /' ...)
+
+function makeThumbnail(filename: String) returns String
+  effects exec.run
+do
+  let cmd: String = shellArg("convert ? -resize 100x100 thumb.png", filename)
+  return shellExec(cmd)
+end
+
+function main() returns Unit
+  effects exec.run, log
+do
+  let r: String = makeThumbnail("x.jpg; rm -rf /")
+  print(r)
+end

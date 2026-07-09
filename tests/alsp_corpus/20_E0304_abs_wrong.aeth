@@ -1,0 +1,12 @@
+function absVal(x: Int) returns Int
+  ensures result >= 0
+  effects pure
+do
+  return x
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(absVal(-7)))
+end

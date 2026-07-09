@@ -1,0 +1,18 @@
+// SSTI — the fixed form. The template is a FIXED literal; the untrusted
+// value goes in the DATA argument, where the engine escapes it instead
+// of evaluating it. `aether check` passes; `aether run` shows the
+// payload rendered inert as text.
+
+function greetingPage(userName: String) returns String
+  effects pure
+do
+  // Template is a constant; userName is data, not syntax.
+  return renderTemplate("<h1>Hello {}</h1>", userName)
+end
+
+function main() returns Unit
+  effects log
+do
+  // The {{7*7}} payload is printed literally — never evaluated to 49.
+  print(greetingPage("{{7*7}}"))
+end

@@ -1,0 +1,11 @@
+function chargeGateway(amount: Int) returns String
+  effects net.fetch("https://api.payments.com/charge/*")
+do
+  return "charged"
+end
+
+function main() returns Unit
+  effects log, net.fetch("https://api.payments.com/charge/*")
+do
+  print(chargeGateway(100))
+end

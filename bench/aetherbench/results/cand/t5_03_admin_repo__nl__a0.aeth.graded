@@ -1,0 +1,19 @@
+module AdminRepo
+  requires capability db
+  requires capability log
+  exports deleteUser
+end
+
+function deleteUser(userId: String, admin: String) returns String
+  effects db.exec
+do
+  let proof: Authorized<String> = authorize(admin, "users:delete")
+  sqlExec(sqlBind("DELETE FROM users WHERE id = ?", userId), proof)
+  return "DELETED " + userId
+end
+
+function main() returns Unit
+  effects log, db.exec
+do
+  print(deleteUser("7", "root"))
+end

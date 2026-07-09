@@ -1,0 +1,28 @@
+// The fix. Parameterize with sqlBind: the untrusted value is escaped
+// and bound into a `?` placeholder, so it can never break out of the
+// string literal and change the query's structure. This is the
+// prepared-statement discipline every hardened data layer uses — and
+// the only shape E0713 accepts for a query carrying a dynamic value.
+//
+// Run:  aether check fixed.aeth   -> OK
+//       aether run   fixed.aeth   -> the injection payload is neutralized
+
+module UserRepo
+  requires capability db
+  requires capability log
+  exports findUser
+end
+
+function findUser(userId: String) returns String
+  effects db.query
+do
+  let q: String = sqlBind("SELECT * FROM users WHERE id = ?", userId)
+  return sqlQuery(q)
+end
+
+function main() returns Unit
+  effects log, db.query
+do
+  // The same crafted id is now escaped inside a quoted literal.
+  print(findUser("1 OR 1=1; DROP TABLE users"))
+end

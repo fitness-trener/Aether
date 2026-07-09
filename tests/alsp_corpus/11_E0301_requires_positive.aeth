@@ -1,0 +1,12 @@
+function reciprocal(x: Int) returns Int
+  requires x > 0
+  effects pure
+do
+  return 100 / x
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(reciprocal(0)))
+end

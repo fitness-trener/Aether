@@ -1,0 +1,19 @@
+// Flask SSTI validation — the fixed shape. Models
+// render_template_string("<h1>Hello {{ name }}</h1>", name=name): the
+// template is a FIXED literal and the request value is passed as escaped
+// DATA. `aether check` passes; `aether run` shows the payload inert.
+//
+// Run:  aether check fixed.aeth   -> OK
+//       aether run   fixed.aeth   -> <h1>Hello {{7*7}}</h1>  (inert)
+
+function greeting(name: String) returns String
+  effects pure
+do
+  return renderTemplate("<h1>Hello {}</h1>", name)
+end
+
+function main() returns Unit
+  effects log
+do
+  print(greeting("{{7*7}}"))
+end

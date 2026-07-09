@@ -1,0 +1,31 @@
+// Example 18 — cross-tenant data access / IDOR (CWE-639, OWASP API1).
+// The caller is authenticated and authorized for "docs:edit" — but the
+// id they were authorized for (requestedId) is NOT the id the UPDATE
+// mutates (victimId). This is broken object-level authorization: the
+// shape behind "delete any user's photo" bugs. Each function is locally
+// fine; the missing check is that two ids are the same.
+//
+// E0716 only proves *an* authorization exists on the path. E0717 is the
+// resource-binding extension: the sink sqlByOwner(stmt, resourceId,
+// proof) requires proof to be authorizeResource(...) bound to the SAME
+// id it mutates. Fix: authorize and mutate the identical id. Click
+// "check".
+
+module Docs
+  requires capability db
+  exports updateDoc
+end
+
+function updateDoc(requestedId: String, victimId: String, user: String) returns Unit
+  effects db.exec
+do
+  let proof: Authorized<String> = authorizeResource(user, "docs:edit", requestedId)
+  let stmt: String = sqlBind("UPDATE docs SET body='pwned' WHERE id = ?", victimId)
+  let _r: String = sqlByOwner(stmt, victimId, proof)   // E0717: id mismatch
+end
+
+function main() returns Unit
+  effects db.exec
+do
+  updateDoc("doc-1", "doc-9999", "mallory")
+end

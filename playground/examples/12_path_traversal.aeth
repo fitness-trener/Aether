@@ -1,0 +1,37 @@
+// Example 12 — Path traversal / Zip-Slip (Snyk 2018 class; thousands of
+// downstream CVEs in archive extractors and file-upload handlers).
+// An extractor writes each archive entry to baseDir + entryName. A
+// malicious entry named "../../../../etc/cron.d/evil" escapes baseDir
+// and overwrites an arbitrary file.
+//
+// The write's path is built from untrusted input with no containment,
+// so Aether refuses it with [E0711]. The fix is to route the untrusted
+// part through safeJoin(baseDir, entryName), which strips '..' and
+// absolute roots — the only shape E0711 accepts for a dynamic path.
+// Click "check".
+
+module Extractor
+  requires capability fs
+  requires capability log
+  exports extract
+end
+
+function writeEntry(baseDir: String, entryName: String, body: String) returns Unit
+  effects fs.write
+do
+  // Zip-Slip: entryName is attacker-controlled and can climb out.
+  let _r: Result<Unit, String> = writeFile(baseDir + "/" + entryName, body)
+end
+
+function extract(baseDir: String) returns Unit
+  effects log, fs.write
+do
+  writeEntry(baseDir, "../../../../etc/cron.d/evil", "payload")
+  print("EXTRACTED into " + baseDir)
+end
+
+function main() returns Unit
+  effects log, fs.write
+do
+  extract("/var/app/unzip")
+end

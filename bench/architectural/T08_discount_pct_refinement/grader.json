@@ -1,0 +1,15 @@
+{
+  "id": "T08_discount_pct_refinement",
+  "axis": "B.4",
+  "summary": "discount caller passes 120% to a Percentage parameter",
+  "naive_aether": {"stage": "run", "expected_exit_code": 2,
+                   "expected_diagnostic_code": "E0302",
+                   "expected_stderr_pattern": "E0302.*= 120.*Percentage"},
+  "naive_python": {"stage": "run", "expected_exit_code": 0,
+                   "expected_stdout": "-20\n",
+                   "silently_violates": true},
+  "correct_aether": {"stage": "run", "expected_exit_code": 0,
+                     "expected_stdout": "75\n"},
+  "correct_python": {"stage": "run", "expected_exit_code": 0,
+                     "expected_stdout": "75\n"}
+}

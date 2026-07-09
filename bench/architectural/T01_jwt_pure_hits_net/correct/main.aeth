@@ -1,0 +1,26 @@
+// Architecturally-correct reference. `validateJWT` is honestly pure
+// (signature verification against a JWKS passed in by the caller);
+// the network fetch happens in a separately-declared function that
+// owns the `net.fetch` effect, and `main` declares the right effect
+// set.
+
+function fetchJwks(uri: String) returns String
+  effects net.fetch("https://auth.example.com/jwks")
+do
+  return "stub-jwks-blob"
+end
+
+function validateJWT(token: String, jwks: String) returns Bool
+  effects pure
+do
+  return length(token) > 0 and length(jwks) > 0
+end
+
+function main() returns Unit
+  effects log, net.fetch("https://auth.example.com/jwks")
+do
+  let jwks: String = fetchJwks("https://auth.example.com/jwks")
+  if validateJWT("header.payload.sig", jwks) then
+    print("valid")
+  end
+end

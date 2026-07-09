@@ -1,0 +1,14 @@
+type Prob = Int where self >= 0 and self <= 1000
+
+function andProb(p: Prob, q: Prob) returns Int
+  effects pure
+do
+  return (p * q) / 1000
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(andProb(500, 500)))
+  print(intToString(andProb(1000, 250)))
+end

@@ -1,0 +1,13 @@
+{
+  "expected_stdout": "ORDER CONFIRMED\nORDER FAILED\n",
+  "stdin": "",
+  "timeout_ms": 5000,
+  "tags": [
+    "architecture",
+    "result",
+    "effects"
+  ],
+  "difficulty": "aetherbench",
+  "tier": 5,
+  "check_required": true
+}

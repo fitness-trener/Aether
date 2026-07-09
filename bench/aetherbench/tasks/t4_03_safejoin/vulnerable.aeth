@@ -1,0 +1,18 @@
+module Extractor
+  requires capability fs
+  requires capability log
+  exports writeEntry
+end
+
+function writeEntry(baseDir: String, entryName: String, body: String) returns Unit
+  effects fs.write, log
+do
+  let _r: Result<Unit, String> = writeFile(baseDir + "/" + entryName, body)
+  print("WROTE " + entryName)
+end
+
+function main() returns Unit
+  effects fs.write, log
+do
+  writeEntry(".", "aetherbench_entry.tmp", "data")
+end

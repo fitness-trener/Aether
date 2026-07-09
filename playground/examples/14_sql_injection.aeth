@@ -1,0 +1,28 @@
+// Example 14 — SQL injection (CWE-89). A request parameter is
+// concatenated straight into a query, so input like
+// "1 OR 1=1; DROP TABLE users" changes what the query does.
+//
+// Aether refuses a query built by raw concatenation: [E0713]. The fix
+// is sqlBind("... ? ...", value), which escapes and binds the value
+// into a placeholder so it can't break out of the string. Click
+// "check", then swap the sqlQuery line for the sqlBind form to see it
+// pass.
+
+module UserRepo
+  requires capability db
+  requires capability log
+  exports findUser
+end
+
+function findUser(userId: String) returns String
+  effects db.query
+do
+  // Injection precondition: untrusted userId concatenated into SQL.
+  return sqlQuery("SELECT * FROM users WHERE id = " + userId)
+end
+
+function main() returns Unit
+  effects log, db.query
+do
+  print(findUser("1 OR 1=1; DROP TABLE users"))
+end

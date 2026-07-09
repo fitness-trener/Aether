@@ -1,0 +1,12 @@
+{
+  "expected_stdout": "a-ok\nb-ok\n",
+  "stdin": "",
+  "timeout_ms": 5000,
+  "tags": [
+    "effects",
+    "net"
+  ],
+  "difficulty": "aetherbench",
+  "tier": 3,
+  "check_required": true
+}

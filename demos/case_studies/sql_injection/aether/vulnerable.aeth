@@ -1,0 +1,32 @@
+// Case study — SQL injection (CWE-89), still the most exploited web
+// vuln class two decades on. A request parameter is concatenated
+// straight into a query string, so input like `1 OR 1=1; DROP TABLE
+// users` changes the query's meaning. Every ORM-less "just build the
+// SQL" path and every logging/reporting query assembled by hand is a
+// candidate.
+//
+// The query below is built by raw concatenation of `userId`. Aether
+// refuses it with [E0713] and points at the parameterized form.
+//
+// Run:  aether check vulnerable.aeth   -> E0713
+
+module UserRepo
+  requires capability db
+  requires capability log
+  exports findUser
+end
+
+// userId is attacker-controlled (a URL/query parameter). Concatenating
+// it into the SQL is the injection precondition.
+function findUser(userId: String) returns String
+  effects db.query
+do
+  return sqlQuery("SELECT * FROM users WHERE id = " + userId)
+end
+
+function main() returns Unit
+  effects log, db.query
+do
+  // A crafted id turns one row lookup into a full dump / table drop.
+  print(findUser("1 OR 1=1; DROP TABLE users"))
+end

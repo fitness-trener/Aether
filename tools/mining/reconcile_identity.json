@@ -1,0 +1,1393 @@
+{
+ "engine": "inference_ON_default",
+ "per_region": [
+  {
+   "module_id": "fa_01_users_api.py",
+   "region_id": "read_user",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": [
+    "db"
+   ]
+  },
+  {
+   "module_id": "fa_01_users_api.py",
+   "region_id": "create_user",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": [
+    "db"
+   ]
+  },
+  {
+   "module_id": "fa_01_users_api.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "fa_02_health.py",
+   "region_id": "healthz",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": [
+    "env"
+   ]
+  },
+  {
+   "module_id": "fa_02_health.py",
+   "region_id": "readyz",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "fa_02_health.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "fa_03_webhook.py",
+   "region_id": "webhook",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": [
+    "net"
+   ]
+  },
+  {
+   "module_id": "fa_03_webhook.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "fa_04_upload.py",
+   "region_id": "upload",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": [
+    "fs"
+   ]
+  },
+  {
+   "module_id": "fa_04_upload.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "fa_05_search.py",
+   "region_id": "search",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": [
+    "db"
+   ]
+  },
+  {
+   "module_id": "fa_05_search.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": [
+    "db"
+   ]
+  },
+  {
+   "module_id": "fa_06_flask_orders.py",
+   "region_id": "get_order",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": [
+    "db"
+   ]
+  },
+  {
+   "module_id": "fa_06_flask_orders.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": [
+    "db"
+   ]
+  },
+  {
+   "module_id": "fa_07_flask_login.py",
+   "region_id": "login",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "fa_07_flask_login.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "fa_08_metrics_mw.py",
+   "region_id": "add_timing",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": [
+    "log",
+    "time"
+   ]
+  },
+  {
+   "module_id": "fa_08_metrics_mw.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": [
+    "log"
+   ]
+  },
+  {
+   "module_id": "orm_01_engine.py",
+   "region_id": "get_db",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "orm_01_engine.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": [
+    "db"
+   ]
+  },
+  {
+   "module_id": "orm_02_repository.py",
+   "region_id": "ProductRepository.__init__",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "orm_02_repository.py",
+   "region_id": "ProductRepository.find",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "orm_02_repository.py",
+   "region_id": "ProductRepository.search",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "orm_02_repository.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "orm_03_migrations.py",
+   "region_id": "apply_migration",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": [
+    "db",
+    "fs"
+   ]
+  },
+  {
+   "module_id": "orm_03_migrations.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "orm_04_raw_pg.py",
+   "region_id": "fetch_active_users",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": [
+    "db"
+   ]
+  },
+  {
+   "module_id": "orm_04_raw_pg.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "orm_05_mongo.py",
+   "region_id": "record_event",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "orm_05_mongo.py",
+   "region_id": "count_events",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "orm_05_mongo.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": [
+    "db",
+    "env"
+   ]
+  },
+  {
+   "module_id": "orm_06_unit_of_work.py",
+   "region_id": "unit_of_work",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "orm_06_unit_of_work.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "api_01_stripe_client.py",
+   "region_id": "StripeClient.__init__",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "api_01_stripe_client.py",
+   "region_id": "StripeClient.create_charge",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": [
+    "net"
+   ]
+  },
+  {
+   "module_id": "api_01_stripe_client.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "api_02_retry_client.py",
+   "region_id": "with_retry",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": [
+    "time"
+   ]
+  },
+  {
+   "module_id": "api_02_retry_client.py",
+   "region_id": "with_retry.deco",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "api_02_retry_client.py",
+   "region_id": "with_retry.deco.wrapper",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "api_02_retry_client.py",
+   "region_id": "fetch_json",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": [
+    "net",
+    "time"
+   ]
+  },
+  {
+   "module_id": "api_02_retry_client.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "api_03_github.py",
+   "region_id": "list_repos",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": [
+    "net"
+   ]
+  },
+  {
+   "module_id": "api_03_github.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "api_04_slack.py",
+   "region_id": "post_message",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": [
+    "net"
+   ]
+  },
+  {
+   "module_id": "api_04_slack.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "api_05_weather.py",
+   "region_id": "current_temp",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": [
+    "net"
+   ]
+  },
+  {
+   "module_id": "api_05_weather.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "api_06_graphql.py",
+   "region_id": "GraphQLClient.__init__",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": [
+    "net"
+   ]
+  },
+  {
+   "module_id": "api_06_graphql.py",
+   "region_id": "GraphQLClient.query",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": [
+    "net"
+   ]
+  },
+  {
+   "module_id": "api_06_graphql.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "wrk_01_celery_email.py",
+   "region_id": "send_welcome_email",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": [
+    "net"
+   ]
+  },
+  {
+   "module_id": "wrk_01_celery_email.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "wrk_02_dispatch.py",
+   "region_id": "handler",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "wrk_02_dispatch.py",
+   "region_id": "handler.deco",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "wrk_02_dispatch.py",
+   "region_id": "dispatch",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "wrk_02_dispatch.py",
+   "region_id": "on_ping",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "wrk_02_dispatch.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "wrk_03_image_worker.py",
+   "region_id": "make_thumbnail",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": [
+    "process"
+   ]
+  },
+  {
+   "module_id": "wrk_03_image_worker.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "wrk_04_scheduler.py",
+   "region_id": "run_jobs",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": [
+    "time"
+   ]
+  },
+  {
+   "module_id": "wrk_04_scheduler.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "wrk_05_rq_worker.py",
+   "region_id": "process_job",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": [
+    "env",
+    "fs"
+   ]
+  },
+  {
+   "module_id": "wrk_05_rq_worker.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "pipe_01_sales.py",
+   "region_id": "monthly_revenue",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": [
+    "fs"
+   ]
+  },
+  {
+   "module_id": "pipe_01_sales.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "pipe_02_dynamic_cols.py",
+   "region_id": "aggregate",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "pipe_02_dynamic_cols.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "pipe_03_etl.py",
+   "region_id": "load_to_warehouse",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": [
+    "db",
+    "fs"
+   ]
+  },
+  {
+   "module_id": "pipe_03_etl.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "pipe_04_parquet.py",
+   "region_id": "convert",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": [
+    "fs"
+   ]
+  },
+  {
+   "module_id": "pipe_04_parquet.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "pipe_05_clean.py",
+   "region_id": "normalize_records",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "auth_01_jwt.py",
+   "region_id": "issue_token",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": [
+    "time"
+   ]
+  },
+  {
+   "module_id": "auth_01_jwt.py",
+   "region_id": "verify_token",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "auth_01_jwt.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "auth_02_require_role.py",
+   "region_id": "require_role",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "auth_02_require_role.py",
+   "region_id": "require_role.deco",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "auth_02_require_role.py",
+   "region_id": "require_role.deco.wrapper",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "auth_02_require_role.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "auth_03_apikey.py",
+   "region_id": "check_api_key",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": [
+    "env"
+   ]
+  },
+  {
+   "module_id": "auth_03_apikey.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "auth_04_session_ctx.py",
+   "region_id": "acting_as",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "auth_04_session_ctx.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "auth_05_oauth.py",
+   "region_id": "exchange_code",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": [
+    "net"
+   ]
+  },
+  {
+   "module_id": "auth_05_oauth.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "cfg_01_settings.py",
+   "region_id": "Settings.__init__",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": [
+    "env"
+   ]
+  },
+  {
+   "module_id": "cfg_01_settings.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "cfg_02_plugin_loader.py",
+   "region_id": "load_plugins",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": [
+    "env"
+   ]
+  },
+  {
+   "module_id": "cfg_02_plugin_loader.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "cfg_03_feature_flags.py",
+   "region_id": "is_enabled",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": [
+    "fs"
+   ]
+  },
+  {
+   "module_id": "cfg_03_feature_flags.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "cfg_04_dynamic_factory.py",
+   "region_id": "make_backend",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "cfg_04_dynamic_factory.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "cfg_05_env_branch.py",
+   "region_id": "get_logger",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": [
+    "env"
+   ]
+  },
+  {
+   "module_id": "cfg_05_env_branch.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "trap_01_codecs_open.py",
+   "region_id": "read_utf16",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": [
+    "fs"
+   ]
+  },
+  {
+   "module_id": "trap_01_codecs_open.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "trap_02_pprint.py",
+   "region_id": "dump_state",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": [
+    "log"
+   ]
+  },
+  {
+   "module_id": "trap_02_pprint.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "trap_03_module_level_net.py",
+   "region_id": "get_setting",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "trap_03_module_level_net.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": [
+    "net"
+   ]
+  },
+  {
+   "module_id": "trap_04_pure_method_override.py",
+   "region_id": "AuditLog.__init__",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "trap_04_pure_method_override.py",
+   "region_id": "AuditLog.append",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": [
+    "fs"
+   ]
+  },
+  {
+   "module_id": "trap_04_pure_method_override.py",
+   "region_id": "record",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "trap_04_pure_method_override.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "trap_05_pickle.py",
+   "region_id": "load_model",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": [
+    "fs"
+   ]
+  },
+  {
+   "module_id": "trap_05_pickle.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "trap_06_from_subprocess.py",
+   "region_id": "backup",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": [
+    "process"
+   ]
+  },
+  {
+   "module_id": "trap_06_from_subprocess.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "ctrl_01_pure_math.py",
+   "region_id": "compound_interest",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "ctrl_01_pure_math.py",
+   "region_id": "amortization",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "ctrl_01_pure_math.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "ctrl_02_pure_validate.py",
+   "region_id": "validate_isbn",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "ctrl_03_mixed_report.py",
+   "region_id": "write_report",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": [
+    "fs"
+   ]
+  },
+  {
+   "module_id": "ctrl_03_mixed_report.py",
+   "region_id": "<module-scope>",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "ctrl_04_pure_graph.py",
+   "region_id": "topological_sort",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": true,
+   "filter_decision": "analyze",
+   "verdict_unprovable": true,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "ctrl_04_pure_graph.py",
+   "region_id": "topological_sort.visit",
+   "shape": "ADD_NEW_FILE",
+   "capability_relevant": false,
+   "filter_decision": "analyze",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "micro_pure_rename",
+   "region_id": "t",
+   "shape": "MODIFY_EXISTING",
+   "capability_relevant": false,
+   "filter_decision": "non_python",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "micro_pure_add_helper",
+   "region_id": "area",
+   "shape": "MODIFY_EXISTING",
+   "capability_relevant": false,
+   "filter_decision": "non_python",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "micro_pure_add_helper",
+   "region_id": "<module-scope>",
+   "shape": "MODIFY_EXISTING",
+   "capability_relevant": false,
+   "filter_decision": "non_python",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "micro_add_net_inline",
+   "region_id": "sync",
+   "shape": "MODIFY_EXISTING",
+   "capability_relevant": true,
+   "filter_decision": "non_python",
+   "verdict_unprovable": false,
+   "introduced_caps": [
+    "net"
+   ]
+  },
+  {
+   "module_id": "micro_add_fs_open",
+   "region_id": "save",
+   "shape": "MODIFY_EXISTING",
+   "capability_relevant": true,
+   "filter_decision": "non_python",
+   "verdict_unprovable": true,
+   "introduced_caps": [
+    "fs"
+   ]
+  },
+  {
+   "module_id": "micro_add_proc_subprocess",
+   "region_id": "run",
+   "shape": "MODIFY_EXISTING",
+   "capability_relevant": true,
+   "filter_decision": "non_python",
+   "verdict_unprovable": false,
+   "introduced_caps": [
+    "process"
+   ]
+  },
+  {
+   "module_id": "micro_add_log_print",
+   "region_id": "dbg",
+   "shape": "MODIFY_EXISTING",
+   "capability_relevant": true,
+   "filter_decision": "non_python",
+   "verdict_unprovable": false,
+   "introduced_caps": [
+    "log"
+   ]
+  },
+  {
+   "module_id": "micro_add_module_level_net",
+   "region_id": "<module-scope>",
+   "shape": "MODIFY_EXISTING",
+   "capability_relevant": true,
+   "filter_decision": "non_python",
+   "verdict_unprovable": false,
+   "introduced_caps": [
+    "net"
+   ]
+  },
+  {
+   "module_id": "micro_untyped_method_call",
+   "region_id": "g",
+   "shape": "MODIFY_EXISTING",
+   "capability_relevant": true,
+   "filter_decision": "non_python",
+   "verdict_unprovable": true,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "micro_untyped_self_method",
+   "region_id": "C.run",
+   "shape": "MODIFY_EXISTING",
+   "capability_relevant": true,
+   "filter_decision": "non_python",
+   "verdict_unprovable": true,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "micro_trap_pprint",
+   "region_id": "dump",
+   "shape": "MODIFY_EXISTING",
+   "capability_relevant": true,
+   "filter_decision": "non_python",
+   "verdict_unprovable": false,
+   "introduced_caps": [
+    "log"
+   ]
+  },
+  {
+   "module_id": "micro_trap_pprint",
+   "region_id": "<module-scope>",
+   "shape": "MODIFY_EXISTING",
+   "capability_relevant": false,
+   "filter_decision": "non_python",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "micro_trap_codecs_open",
+   "region_id": "rd",
+   "shape": "MODIFY_EXISTING",
+   "capability_relevant": true,
+   "filter_decision": "non_python",
+   "verdict_unprovable": true,
+   "introduced_caps": [
+    "fs"
+   ]
+  },
+  {
+   "module_id": "micro_trap_codecs_open",
+   "region_id": "<module-scope>",
+   "shape": "MODIFY_EXISTING",
+   "capability_relevant": false,
+   "filter_decision": "non_python",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "micro_trap_warn",
+   "region_id": "chk",
+   "shape": "MODIFY_EXISTING",
+   "capability_relevant": true,
+   "filter_decision": "non_python",
+   "verdict_unprovable": false,
+   "introduced_caps": [
+    "log"
+   ]
+  },
+  {
+   "module_id": "micro_trap_warn",
+   "region_id": "<module-scope>",
+   "shape": "MODIFY_EXISTING",
+   "capability_relevant": false,
+   "filter_decision": "non_python",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "micro_trap_method_override_append",
+   "region_id": "AuditLog.append",
+   "shape": "MODIFY_EXISTING",
+   "capability_relevant": true,
+   "filter_decision": "non_python",
+   "verdict_unprovable": true,
+   "introduced_caps": [
+    "fs"
+   ]
+  },
+  {
+   "module_id": "micro_trap_method_override_append",
+   "region_id": "record",
+   "shape": "MODIFY_EXISTING",
+   "capability_relevant": true,
+   "filter_decision": "non_python",
+   "verdict_unprovable": true,
+   "introduced_caps": []
+  },
+  {
+   "module_id": "micro_trap_from_subprocess",
+   "region_id": "work",
+   "shape": "MODIFY_EXISTING",
+   "capability_relevant": true,
+   "filter_decision": "non_python",
+   "verdict_unprovable": false,
+   "introduced_caps": [
+    "process"
+   ]
+  },
+  {
+   "module_id": "micro_trap_from_subprocess",
+   "region_id": "<module-scope>",
+   "shape": "MODIFY_EXISTING",
+   "capability_relevant": false,
+   "filter_decision": "non_python",
+   "verdict_unprovable": false,
+   "introduced_caps": []
+  }
+ ],
+ "aggregates": {
+  "ON": {
+   "per_region": [
+    58,
+    82,
+    0.7073
+   ],
+   "per_module": [
+    39,
+    50,
+    0.78
+   ],
+   "per_diff_over_64": [
+    44,
+    64,
+    0.6875
+   ]
+  },
+  "OFF": {
+   "per_region": [
+    34,
+    83,
+    0.4096
+   ],
+   "per_module": [
+    25,
+    50,
+    0.5
+   ],
+   "per_diff_over_64": [
+    28,
+    64,
+    0.4375
+   ]
+  }
+ },
+ "phase0_anchors": {
+  "per_module": "30/50=0.60",
+  "per_diff": "33/64=0.516"
+ },
+ "reproduced": false
+}

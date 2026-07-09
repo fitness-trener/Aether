@@ -1,0 +1,12 @@
+{
+  "expected_stdout": "REPORT q3-numbers\n",
+  "stdin": "",
+  "timeout_ms": 5000,
+  "tags": [
+    "module",
+    "capability"
+  ],
+  "difficulty": "aetherbench",
+  "tier": 5,
+  "check_required": true
+}

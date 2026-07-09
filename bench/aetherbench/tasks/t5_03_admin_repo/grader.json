@@ -1,0 +1,12 @@
+{
+  "expected_stdout": "DELETED 7\n",
+  "stdin": "",
+  "timeout_ms": 5000,
+  "tags": [
+    "module",
+    "security"
+  ],
+  "difficulty": "aetherbench",
+  "tier": 5,
+  "check_required": true
+}

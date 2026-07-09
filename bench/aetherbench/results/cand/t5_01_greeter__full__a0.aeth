@@ -1,0 +1,17 @@
+module Greeter
+  requires capability log
+  exports greet
+end
+
+function greet(name: String) returns Unit
+  effects log
+do
+  print("Hello, " + name)
+end
+
+function main() returns Unit
+  effects log
+do
+  greet("Ada")
+  greet("Alan")
+end

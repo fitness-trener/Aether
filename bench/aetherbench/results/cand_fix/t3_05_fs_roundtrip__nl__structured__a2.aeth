@@ -1,0 +1,29 @@
+module FsRoundtrip
+  requires capability fs
+  requires capability log
+  exports save, load
+end
+
+function save(path: String, body: String) returns Unit
+  effects fs.write
+do
+  writeFile(safeJoin(".", path), body)
+end
+
+function load(path: String) returns String
+  effects fs.read
+do
+  let readResult: Result<String, String> = readFile(safeJoin(".", path))
+  if isOk?(readResult) then
+    return unwrapOr(readResult, "ERR")
+  else
+    return "ERR"
+  end
+end
+
+function main() returns Unit
+  effects fs.write, fs.read, log
+do
+  save("aetherbench_scratch.tmp", "hello-fs")
+  print(load("aetherbench_scratch.tmp"))
+end

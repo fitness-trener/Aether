@@ -1,0 +1,88 @@
+// Example 07 — API-gateway rate limiter (Cloudflare-shaped, clean).
+// A token-bucket limiter with a pure decision core and an effectful
+// shell. The contracts are the interesting part: token counts are
+// refinement-typed so a refill bug can never mint more than the
+// bucket capacity, and `ensures` clauses pin the state machine.
+
+module RateLimiter
+  requires capability log
+  exports main
+end
+
+// A bucket can never hold a negative balance nor exceed capacity.
+type Tokens = Int where self >= 0 and self <= 100
+
+const CAPACITY: Int = 100
+const REFILL_PER_TICK: Int = 10
+const COST_PER_REQUEST: Int = 30
+
+record Bucket do
+  clientId: Int
+  tokens: Int
+  lastTick: Int
+end
+
+record Decision do
+  allowed: Bool
+  bucket: Bucket
+end
+
+// --- pure core ---------------------------------------------------------
+
+function min(a: Int, b: Int) returns Int
+  effects pure
+  ensures result <= a and result <= b
+do
+  if a < b then
+    return a
+  end
+  return b
+end
+
+// Refill is where limiter bugs live in production: an off-by-one
+// here mints free capacity. The Tokens refinement on the return
+// value makes over-minting a runtime boundary error, not an incident.
+function refill(tokens: Tokens, elapsedTicks: Int) returns Tokens
+  requires elapsedTicks >= 0
+  effects pure
+  ensures result >= tokens
+do
+  return min(CAPACITY, tokens + elapsedTicks * REFILL_PER_TICK)
+end
+
+function decide(b: Bucket, tick: Int) returns Decision
+  requires tick >= b.lastTick
+  effects pure
+do
+  let filled: Int = refill(b.tokens, tick - b.lastTick)
+  if filled >= COST_PER_REQUEST then
+    return Decision(true, Bucket(b.clientId, filled - COST_PER_REQUEST, tick))
+  end
+  return Decision(false, Bucket(b.clientId, filled, tick))
+end
+
+// --- effectful shell -----------------------------------------------------
+
+function logDecision(d: Decision, tick: Int) returns Unit
+  effects log
+do
+  let verdict: String = if d.allowed then "ALLOW" else "THROTTLE" end
+  print(verdict
+    + " client=" + intToString(d.bucket.clientId)
+    + " tick=" + intToString(tick)
+    + " tokens=" + intToString(d.bucket.tokens))
+end
+
+function main() returns Unit
+  effects log
+do
+  // A burst of 12 requests from one client on a tight tick range —
+  // the bucket drains, throttles, then recovers as ticks advance.
+  let ticks: List<Int> = [0, 0, 0, 0, 1, 1, 2, 5, 5, 9]
+  let state: Bucket = Bucket(7, 100, 0)
+  for t in ticks do
+    let d: Decision = decide(state, t)
+    logDecision(d, t)
+    state = d.bucket
+  end
+end

@@ -1,0 +1,28 @@
+// Refinement-boundary candidate for the LLM positive-control demo
+// (Layer 2 live-only). The architectural promise is encoded in the
+// `Percentage` type: any value used as a Percentage must satisfy
+// 0 <= self <= 100.
+//
+// The caller passes 120, which violates the predicate. Aether fires
+// [E0302] at the boundary, naming the binding, the failing value,
+// and the predicate text in the diagnostic's `extra` dict.
+//
+// Like the E0304 case, the deterministic fix-loop cannot repair this
+// — the diagnostic doesn't say what value the caller should use
+// instead. A live LLM reads the surrounding context and proposes a
+// reasonable correction (e.g. clamp, validate-and-default, or fix
+// the upstream computation).
+
+type Percentage = Int where self >= 0 and self <= 100
+
+function applyDiscount(base: Int, pct: Percentage) returns Int
+  effects pure
+do
+  return base - (base * pct / 100)
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(applyDiscount(100, 120)))
+end

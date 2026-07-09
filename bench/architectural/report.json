@@ -1,0 +1,94 @@
+{
+  "summary": {
+    "tasks_total": 10,
+    "tasks_passed": 10,
+    "aether_catch_rate": "10/10",
+    "python_silent_failure_rate": "10/10",
+    "aether_correct_passes": "10/10",
+    "python_correct_passes": "10/10"
+  },
+  "by_axis": {
+    "B.1": {
+      "n": 3,
+      "n_pass": 3,
+      "aether_caught": 3,
+      "python_silent": 3
+    },
+    "B.2": {
+      "n": 2,
+      "n_pass": 2,
+      "aether_caught": 2,
+      "python_silent": 2
+    },
+    "B.3": {
+      "n": 2,
+      "n_pass": 2,
+      "aether_caught": 2,
+      "python_silent": 2
+    },
+    "B.4": {
+      "n": 2,
+      "n_pass": 2,
+      "aether_caught": 2,
+      "python_silent": 2
+    },
+    "composition": {
+      "n": 1,
+      "n_pass": 1,
+      "aether_caught": 1,
+      "python_silent": 1
+    }
+  },
+  "tasks": [
+    {
+      "id": "T01_jwt_pure_hits_net",
+      "axis": "B.1",
+      "passed": true
+    },
+    {
+      "id": "T02_pwd_hasher_logs",
+      "axis": "B.1",
+      "passed": true
+    },
+    {
+      "id": "T03_cache_lookup_writes_disk",
+      "axis": "B.1",
+      "passed": true
+    },
+    {
+      "id": "T04_payment_gateway_admin_url",
+      "axis": "B.2",
+      "passed": true
+    },
+    {
+      "id": "T05_analytics_wrong_host",
+      "axis": "B.2",
+      "passed": true
+    },
+    {
+      "id": "T06_audit_logger_capability_leak",
+      "axis": "B.3",
+      "passed": true
+    },
+    {
+      "id": "T07_metric_reporter_net_leak",
+      "axis": "B.3",
+      "passed": true
+    },
+    {
+      "id": "T08_discount_pct_refinement",
+      "axis": "B.4",
+      "passed": true
+    },
+    {
+      "id": "T09_email_refinement",
+      "axis": "B.4",
+      "passed": true
+    },
+    {
+      "id": "T10_order_composition",
+      "axis": "composition",
+      "passed": true
+    }
+  ]
+}

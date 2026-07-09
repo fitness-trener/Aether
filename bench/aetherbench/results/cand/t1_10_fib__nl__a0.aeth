@@ -1,0 +1,29 @@
+function fib(n: Int) returns Int
+  requires n >= 0
+  ensures result >= 0
+  effects pure
+do
+  if n == 0 then
+    return 0
+  elif n == 1 then
+    return 1
+  else
+    var a: Int = 0
+    var b: Int = 1
+    var i: Int = 2
+    while i <= n do
+      var next: Int = a + b
+      a = b
+      b = next
+      i = i + 1
+    end
+    return b
+  end
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(fib(10)))
+  print(intToString(fib(1)))
+end

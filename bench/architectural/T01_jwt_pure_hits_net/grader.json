@@ -1,0 +1,27 @@
+{
+  "id": "T01_jwt_pure_hits_net",
+  "axis": "B.1",
+  "summary": "pure validator secretly hits the network",
+  "naive_aether": {
+    "stage": "check",
+    "expected_exit_code": 2,
+    "expected_diagnostic_code": "E0801",
+    "expected_stderr_pattern": "E0801.*validateJWT.*net.fetch"
+  },
+  "naive_python": {
+    "stage": "run",
+    "expected_exit_code": 0,
+    "expected_stdout_pattern": "HTTP GET .*\\nvalid\\n",
+    "silently_violates": true
+  },
+  "correct_aether": {
+    "stage": "run",
+    "expected_exit_code": 0,
+    "expected_stdout": "valid\n"
+  },
+  "correct_python": {
+    "stage": "run",
+    "expected_exit_code": 0,
+    "expected_stdout_pattern": "HTTP GET .*\\nvalid\\n"
+  }
+}

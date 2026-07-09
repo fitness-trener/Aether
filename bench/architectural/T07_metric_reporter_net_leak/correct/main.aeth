@@ -1,0 +1,16 @@
+module MetricReporter
+  requires capability log
+  exports report
+end
+
+function report(payload: String) returns Unit
+  effects log
+do
+  print(payload)
+end
+
+function main() returns Unit
+  effects log
+do
+  report("event=signup")
+end

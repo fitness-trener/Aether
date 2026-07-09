@@ -1,0 +1,102 @@
+// Reproduction of python-humanize/humanize issue #86 ("Failing for 1000
+// decillion", closed): humanize <= 4.4 era intword walked `powers[1:]` and,
+// on the carry path near the googol gap, divided by the WRONG power,
+// producing "0.0 googol" for 10**36. Users saw "0 googol" for a nonzero
+// balance in production (a Discord economy bot).
+//
+// This file ports that buggy logic verbatim and declares the one-line
+// contract the function was always supposed to satisfy. `aether run`
+// refuses the output at the boundary with a structured E-diagnostic
+// instead of shipping "0.0 googol" to users.
+
+function pow10(k: Int) returns Int
+  requires k >= 0
+  ensures result >= 1
+  effects pure
+do
+  var p = 1
+  for i in range(0, k) do
+    p = p * 10
+  end
+  return p
+end
+
+function tenthsHalfEven(n: Int, d: Int) returns Int
+  requires n >= 0 and d >= 1
+  ensures result >= 0
+  effects pure
+do
+  let q = (n * 10) / d
+  let r = (n * 10) % d
+  let twice = r * 2
+  if twice > d then
+    return q + 1
+  elif twice < d then
+    return q
+  elif q % 2 == 0 then
+    return q
+  else
+    return q + 1
+  end
+end
+
+function tenthsToString(t: Int) returns String
+  requires t >= 0
+  effects pure
+do
+  return join([intToString(t / 10), ".", intToString(t % 10)], "")
+end
+
+function intwordExponents() returns List<Int>
+  effects pure
+do
+  return [3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 100]
+end
+
+function intwordNames() returns List<String>
+  effects pure
+do
+  return ["thousand", "million", "billion", "trillion", "quadrillion",
+          "quintillion", "sextillion", "septillion", "octillion",
+          "nonillion", "decillion", "googol"]
+end
+
+// The historical buggy logic, with the contract it should have had.
+function intwordBuggy(n: Int) returns String
+  requires n >= 0
+  ensures (n >= 1000) implies (not startsWith?(result, "0"))
+  effects pure
+do
+  if n < 1000 then
+    return intToString(n)
+  end
+  let exps = intwordExponents()
+  let names = intwordNames()
+  var i = 1
+  while i < length(exps) do
+    let power = pow10(unwrapOrElse(get(exps, i), 0))
+    if n < power then
+      let prevPower = pow10(unwrapOrElse(get(exps, i - 1), 0))
+      let t = tenthsHalfEven(n, prevPower)
+      if t == 10000 and power > n then
+        // BUG (issue #86): divides by `power` (the next bracket) instead
+        // of carrying the coefficient — 10**36 yields "0.0 googol".
+        let t2 = tenthsHalfEven(n, power)
+        return join([tenthsToString(t2), " ", unwrapOrElse(get(names, i), "")], "")
+      else
+        return join([tenthsToString(t), " ", unwrapOrElse(get(names, i - 1), "")], "")
+      end
+    end
+    i = i + 1
+  end
+  return intToString(n)
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intwordBuggy(1200000))
+  print(intwordBuggy(999999999))
+  // issue #86's exact reproduction input: a user balance of 10**36
+  print(intwordBuggy(1000000000000000000000000000000000000))
+end

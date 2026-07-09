@@ -1,0 +1,59 @@
+function ordinalSuffix(n: Int) returns String
+  effects pure
+do
+  let m100 = ((n % 100) + 100) % 100
+  if m100 == 11 or m100 == 12 or m100 == 13 then
+    return "th"
+  end
+  let m10 = ((n % 10) + 10) % 10
+  if m10 == 1 then
+    return "st"
+  elif m10 == 2 then
+    return "nd"
+  elif m10 == 3 then
+    return "rd"
+  else
+    return "th"
+  end
+end
+
+function ordinal(n: Int) returns String
+  effects pure
+  ensures length(result) >= 3
+do
+  return join([intToString(n), ordinalSuffix(n)], "")
+end
+
+function intcommaNonneg(n: Int) returns String
+  requires n >= 0
+  effects pure
+do
+  if n < 1000 then
+    return intToString(n)
+  end
+  let head = n / 1000
+  let tail = n % 1000
+  return join([intcommaNonneg(head), ",", padLeft(intToString(tail), 3, "0")], "")
+end
+
+function intcomma(n: Int) returns String
+  effects pure
+  ensures length(result) >= 1
+do
+  if n < 0 then
+    return join(["-", intcommaNonneg(0 - n)], "")
+  end
+  return intcommaNonneg(n)
+end
+
+function main() returns Unit
+  effects log
+do
+  print(ordinal(1))
+  print(ordinal(111))
+  print(ordinal(22))
+  print(ordinal(113))
+  print(intcomma(1234567))
+  print(intcomma(-1000))
+  print(intcomma(999))
+end

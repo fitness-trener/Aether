@@ -1,0 +1,23 @@
+module AuditLogger
+  requires capability log
+  exports emit
+end
+
+function persist(line: String) returns Unit
+  effects fs.write
+do
+  let _r: Result<Unit, String> = writeFile("/tmp/audit.log", line)
+end
+
+function emit(line: String) returns Unit
+  effects log, fs.write
+do
+  print(line)
+  persist(line)
+end
+
+function main() returns Unit
+  effects log, fs.write
+do
+  emit("user=42 action=login")
+end

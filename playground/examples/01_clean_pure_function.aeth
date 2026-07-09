@@ -1,0 +1,14 @@
+// Example 01 — Clean: a pure function that really is pure.
+// `aether check` agrees; `aether run` prints the result.
+
+function double(x: Int) returns Int
+  effects pure
+do
+  return x * 2
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(double(21)))
+end

@@ -1,0 +1,30 @@
+// The fix. Never log or persist the personal field in the clear. Log
+// non-personal metadata (the action), and where a value must appear in
+// a log/event for debugging, mask it with redact(...) — the exposure is
+// then explicit in the source, auditable in review, and safe under a
+// consent/residency policy (emails keep only first char + domain).
+//
+// Run:  aether check fixed.aeth   -> OK
+//       aether run   fixed.aeth   -> only masked / non-PII data emitted
+
+module Analytics
+  requires capability log
+  requires capability fs
+  exports track
+end
+
+function track(userEmail: PII<String>, action: String) returns Unit
+  effects log, fs.write
+do
+  print("EVENT action=" + action)
+  // Masked disclosure — j***@corp.example, not the raw address.
+  print("EVENT user=" + redact(userEmail))
+  let line: String = "action=" + action + " user=" + redact(userEmail)
+  let _r: Result<Unit, String> = writeFile("/var/log/events.log", line)
+end
+
+function main() returns Unit
+  effects log, fs.write
+do
+  track(classifyPII("jane.doe@corp.example"), "checkout")
+end

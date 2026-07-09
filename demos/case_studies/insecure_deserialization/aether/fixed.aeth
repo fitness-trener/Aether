@@ -1,0 +1,18 @@
+// Insecure deserialization — the fixed form. `schemaDecode` pins the
+// decoder to a fixed schema ("SessionV1"), so attacker bytes can only
+// ever populate the declared shape — no arbitrary-type instantiation,
+// no RCE. `aether check` passes; `aether run` shows the payload rendered
+// inert under the schema.
+
+function loadSession(raw: String) returns String
+  effects pure
+do
+  // Schema-pinned decode: the gadget payload becomes inert data.
+  return schemaDecode("SessionV1", raw)
+end
+
+function main() returns Unit
+  effects log
+do
+  print(loadSession("cookie=abc;__reduce__=os.system('rm -rf /')"))
+end

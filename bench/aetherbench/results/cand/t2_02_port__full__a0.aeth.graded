@@ -1,0 +1,14 @@
+type Port = Int where self >= 1 and self <= 65535
+
+function describePort(p: Port) returns String
+  effects pure
+do
+  return "port:" + intToString(p)
+end
+
+function main() returns Unit
+  effects log
+do
+  print(describePort(80))
+  print(describePort(65535))
+end

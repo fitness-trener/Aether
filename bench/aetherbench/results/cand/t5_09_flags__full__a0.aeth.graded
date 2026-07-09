@@ -1,0 +1,21 @@
+function enabled(flags: List<String>, flag: String) returns Bool
+  effects pure
+do
+  return contains?(flags, flag)
+end
+
+function main() returns Unit
+  effects log
+do
+  let flags: List<String> = ["beta", "dark-mode"]
+  if enabled(flags, "beta") then
+    print("on")
+  else
+    print("off")
+  end
+  if enabled(flags, "legacy") then
+    print("on")
+  else
+    print("off")
+  end
+end

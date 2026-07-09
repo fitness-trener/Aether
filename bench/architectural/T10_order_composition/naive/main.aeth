@@ -1,0 +1,14 @@
+type Quantity = Int where self >= 1 and self <= 100
+
+function processOrder(item: String, qty: Quantity) returns String
+  effects pure
+do
+  print("DEBUG order " + item)
+  return item + ":" + intToString(qty)
+end
+
+function main() returns Unit
+  effects log
+do
+  print(processOrder("widget", 0))
+end

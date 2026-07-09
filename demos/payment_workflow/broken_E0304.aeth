@@ -1,0 +1,27 @@
+// Logic-error candidate for the LLM fix-loop demo (Layer 1 replay
+// target). The architectural promise is encoded in the `ensures`
+// clause of `double`: the result must equal x * 2.
+//
+// The implementation lies — it returns x + x + 1, which is off by
+// one for every input. Every static pass passes; the bug only
+// surfaces when the contract is evaluated at runtime. Aether fires
+// [E0304] naming the function, the failing clause, and the runtime
+// args (D.2 split: E0304 = postcondition / implementer fault).
+//
+// The fix-loop's deterministic transformers cannot repair this:
+// nothing in the diagnostic's `extra` dict tells the loop what the
+// function *should* return. This is exactly the case the F.2 audit
+// reserved for "intent-level reasoning" — handed off to a real LLM.
+
+function double(x: Int) returns Int
+  ensures result == x * 2
+  effects pure
+do
+  return x + x + 1
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(double(5)))
+end

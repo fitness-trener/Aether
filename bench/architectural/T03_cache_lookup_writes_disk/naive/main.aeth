@@ -1,0 +1,19 @@
+function persistMiss(key: String) returns Unit
+  effects fs.write
+do
+  let _r: Result<Unit, String> = writeFile("/tmp/cache_misses.log", key)
+end
+
+function cacheLookup(key: String) returns String
+  effects log
+do
+  print("MISS " + key)
+  persistMiss(key)
+  return "stub"
+end
+
+function main() returns Unit
+  effects log
+do
+  print(cacheLookup("user:42"))
+end

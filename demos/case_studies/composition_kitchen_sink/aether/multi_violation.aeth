@@ -1,0 +1,51 @@
+// Composition demo — one module, seven independent architectural
+// violations, all caught in a SINGLE `aether check`. Each function is
+// locally plausible and passes the effect/capability passes; each trips
+// exactly one reach-scope detector. The point: the detectors compose
+// additively — one pass does not mask another, and the agent fix-loop
+// gets all seven machine-readable diagnostics at once.
+//
+// Run:  aether check multi_violation.aeth
+//   -> E0712 E0713 E0719 E0720 E0721 E0722 E0723 (7 diagnostics)
+
+function leakSecret(pw: Secret<String>) returns Unit      // E0712 secret->log
+  effects log
+do
+  print("pw=" + pw)
+end
+
+function queryUser(userId: String) returns String         // E0713 SQL injection
+  effects db.query
+do
+  return sqlQuery("SELECT * FROM u WHERE id = " + userId)
+end
+
+function renderPage(userTmpl: String, data: String) returns String  // E0719 SSTI
+  effects pure
+do
+  return renderTemplate("Hi " + userTmpl, data)
+end
+
+function loadBlob(raw: String) returns String             // E0720 deserialization
+  effects pure
+do
+  return deserialize(raw)
+end
+
+function shipData(d: String) returns String               // E0721 cleartext http
+  effects net.fetch("http://api.corp.example/ingest/*")
+do
+  return d
+end
+
+function stealCreds() returns String                      // E0722 metadata SSRF
+  effects net.fetch("https://169.254.169.254/latest/meta-data/*")
+do
+  return "creds"
+end
+
+function awsKey() returns String                          // E0723 hardcoded secret
+  effects pure
+do
+  return "AKIAIOSFODNN7EXAMPLE"
+end

@@ -1,0 +1,16 @@
+module App
+  requires capability log
+  exports main
+end
+
+function clock() returns Int
+  effects time.now
+do
+  return now()
+end
+
+function main() returns Unit
+  effects log
+do
+  print("ok")
+end

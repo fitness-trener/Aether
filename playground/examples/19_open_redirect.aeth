@@ -1,0 +1,28 @@
+// Example 19 — Open redirect (CWE-601). The login "returnTo" parameter
+// is used as the post-auth redirect target with no constraint, so an
+// attacker's link to the trusted site bounces the victim to a phishing
+// page. This is a staple of OAuth account-takeover chains.
+//
+// Aether refuses a redirect target that isn't a fixed literal or a
+// safeRedirect(host, path) result: [E0718]. safeRedirect pins the host
+// so the target can only ever stay on your origin. Click "check", then
+// wrap returnTo in safeRedirect("app.example.com", returnTo) to see it
+// pass.
+
+module Auth
+  requires capability net
+  exports login
+end
+
+function login(returnTo: String) returns String
+  effects net.redirect
+do
+  // Open-redirect precondition: unconstrained user-supplied target.
+  return redirect(returnTo)
+end
+
+function main() returns Unit
+  effects net.redirect
+do
+  let _r: String = login("https://evil.example/phish")
+end

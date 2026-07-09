@@ -1,0 +1,142 @@
+// Example 08 — Order-fulfillment saga (Amazon-shaped, clean).
+// A distributed-transaction state machine: reserve inventory,
+// charge payment, ship — with compensation (release + refund) when
+// a step fails. The union type makes illegal states unrepresentable
+// and `match` forces every path to be handled; forgetting the
+// compensating action is a hole the compiler can see.
+
+module OrderSaga
+  requires capability log
+  requires capability net
+  exports main
+end
+
+type Quantity = Int where self >= 1 and self <= 1000
+
+union SagaState do
+  case Placed
+  case Reserved
+  case Charged(receipt: String)
+  case Shipped(tracking: String)
+  case Compensated(reason: String)
+end
+
+record Order do
+  id: Int
+  sku: String
+  qty: Int
+  amountCents: Int
+end
+
+// --- step 1: inventory (pure decision over a stock table) -----------
+
+function stockFor(sku: String) returns Int
+  effects pure
+  ensures result >= 0
+do
+  if sku == "WIDGET-9" then
+    return 40
+  elif sku == "GIZMO-3" then
+    return 2
+  end
+  return 0
+end
+
+function reserve(o: Order) returns Bool
+  effects pure
+do
+  return stockFor(o.sku) >= o.qty
+end
+
+// --- step 2: payment (URL-disciplined, like example 06) --------------
+
+function charge(o: Order) returns Result<String, String>
+  effects net.fetch("https://api.payments.corp.example/v1/charge/*")
+do
+  if o.amountCents > 900000 then
+    return Err("card_declined")
+  end
+  return Ok("rcpt-" + intToString(o.id))
+end
+
+// --- step 3: shipping --------------------------------------------------
+
+function ship(o: Order) returns String
+  effects net.fetch("https://api.logistics.corp.example/v1/shipments/*")
+do
+  return "trk-" + intToString(o.id * 7919)
+end
+
+// --- compensations -------------------------------------------------------
+
+function releaseInventory(o: Order) returns Unit
+  effects log
+do
+  print("COMPENSATE release sku=" + o.sku + " qty=" + intToString(o.qty))
+end
+
+// --- the saga --------------------------------------------------------------
+
+function runSaga(o: Order, qty: Quantity) returns SagaState
+  effects log,
+          net.fetch("https://api.payments.corp.example/v1/charge/*"),
+          net.fetch("https://api.logistics.corp.example/v1/shipments/*")
+do
+  print("SAGA order=" + intToString(o.id) + " placed")
+  if not reserve(o) then
+    return SagaState.Compensated("insufficient_stock")
+  end
+  print("SAGA order=" + intToString(o.id) + " reserved")
+  match charge(o) do
+    case Err(reason) do
+      // Compensating action: the reservation already happened, so a
+      // failed charge MUST release it. This is the step teams forget.
+      releaseInventory(o)
+      return SagaState.Compensated(reason)
+    end
+    case Ok(receipt) do
+      print("SAGA order=" + intToString(o.id) + " charged " + receipt)
+      let tracking: String = ship(o)
+      print("SAGA order=" + intToString(o.id) + " shipped " + tracking)
+      return SagaState.Shipped(tracking)
+    end
+  end
+end
+
+function report(o: Order, s: SagaState) returns Unit
+  effects log
+do
+  match s do
+    case Placed() do
+      print("FINAL order=" + intToString(o.id) + " placed")
+    end
+    case Reserved() do
+      print("FINAL order=" + intToString(o.id) + " reserved")
+    end
+    case Charged(receipt) do
+      print("FINAL order=" + intToString(o.id) + " charged " + receipt)
+    end
+    case Shipped(tracking) do
+      print("FINAL order=" + intToString(o.id) + " delivered-to-carrier " + tracking)
+    end
+    case Compensated(reason) do
+      print("FINAL order=" + intToString(o.id) + " rolled-back: " + reason)
+    end
+  end
+end
+
+function main() returns Unit
+  effects log,
+          net.fetch("https://api.payments.corp.example/v1/charge/*"),
+          net.fetch("https://api.logistics.corp.example/v1/shipments/*")
+do
+  let orders: List<Order> = [
+    Order(5001, "WIDGET-9", 3, 2400),
+    Order(5002, "GIZMO-3", 5, 9900),
+    Order(5003, "WIDGET-9", 10, 990001)
+  ]
+  for o in orders do
+    let finalState: SagaState = runSaga(o, o.qty)
+    report(o, finalState)
+  end
+end

@@ -1,0 +1,25 @@
+// CVE-2026-1312 fixed. The untrusted sort key is bound through
+// sqlBind(template, value) instead of concatenated, so it cannot break
+// out of the string into raw SQL — the shape E0713 accepts. (In real
+// Django the fix validates the alias; the ordering-safety property is the
+// same: untrusted input never reaches the clause as raw SQL.)
+//
+// Run:  aether check cve_2026_1312_django_orderby_fixed.aeth   -> OK
+
+module OrderBy
+  requires capability db
+  exports listUsers
+end
+
+function listUsers(sortKey: String) returns String
+  effects db.query
+do
+  let q: String = sqlBind("SELECT * FROM users ORDER BY ?", sortKey)
+  return sqlQuery(q)
+end
+
+function main() returns Unit
+  effects db.query
+do
+  let _r: String = listUsers("name")
+end

@@ -1,0 +1,20 @@
+function factorial(n: Int) returns Int
+  requires n >= 0
+  ensures result >= 1
+  effects pure
+do
+  var acc: Int = 1
+  var i: Int = 2
+  while i <= n do
+    acc = acc * i
+    i = i + 1
+  end
+  return acc
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(factorial(5)))
+  print(intToString(factorial(0)))
+end

@@ -1,0 +1,23 @@
+module Crawler
+  requires capability net
+  requires capability log
+  exports crawl
+end
+
+function fetchTarget(path: String) returns String
+  effects net.fetch("*")
+do
+  return "body-of:" + path
+end
+
+function crawl(path: String) returns Unit
+  effects log, net.fetch("*")
+do
+  print("CRAWL " + fetchTarget(path))
+end
+
+function main() returns Unit
+  effects log, net.fetch("*")
+do
+  crawl("/intro")
+end

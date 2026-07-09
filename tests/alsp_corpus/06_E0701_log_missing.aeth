@@ -1,0 +1,9 @@
+module App
+  exports main
+end
+
+function main() returns Unit
+  effects log
+do
+  print("hi")
+end

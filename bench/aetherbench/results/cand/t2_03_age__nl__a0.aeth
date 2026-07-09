@@ -1,0 +1,18 @@
+type Age = Int where self >= 0 and self <= 150
+
+function votingStatus(a: Age) returns String
+  effects pure
+do
+  if a >= 18 then
+    return "yes"
+  else
+    return "no"
+  end
+end
+
+function main() returns Unit
+  effects log
+do
+  print(votingStatus(21))
+  print(votingStatus(10))
+end

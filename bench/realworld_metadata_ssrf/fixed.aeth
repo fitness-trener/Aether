@@ -1,0 +1,13 @@
+// Metadata-SSRF validation — the fixed shape. Application code does not
+// talk to IMDS at all; a credential, if needed, comes from the SDK /
+// credential provider, modeled here as a call to the app's own trusted
+// credential service over https. The reachable host is a real, https,
+// non-metadata endpoint, so E0710/E0721/E0722 all pass.
+//
+// Run:  aether check fixed.aeth   -> OK
+
+function readRoleCredentials() returns String
+  effects net.fetch("https://sts.internal.corp.example/credentials/*")
+do
+  return "iam-credentials"
+end

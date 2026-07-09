@@ -1,0 +1,23 @@
+function inner(msg: String) returns Unit
+  effects log
+do
+  print("GOT " + msg)
+end
+
+function middle(msg: String) returns Unit
+  effects log
+do
+  inner(msg)
+end
+
+function outer(msg: String) returns Unit
+  effects log
+do
+  middle(msg)
+end
+
+function main() returns Unit
+  effects log
+do
+  outer("deep")
+end

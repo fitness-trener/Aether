@@ -1,0 +1,12 @@
+{
+  "expected_stdout": "charged:100\n",
+  "stdin": "",
+  "timeout_ms": 5000,
+  "tags": [
+    "effects",
+    "net"
+  ],
+  "difficulty": "aetherbench",
+  "tier": 3,
+  "check_required": true
+}

@@ -1,0 +1,31 @@
+// CVE-2007-4559 fixed. The untrusted member name is routed through
+// safeJoin(destDir, memberName), which strips '..', absolute roots and
+// drive prefixes so the result can only stay under destDir — the shape
+// E0711 accepts for a dynamic write path. This is the containment the
+// Python 3.12 `filter="data"` extraction policy later added.
+//
+// Run:  aether check cve_2007_4559_tarfile_fixed.aeth   -> OK
+
+module Tarfile
+  requires capability fs
+  exports extractAll
+end
+
+function extractMember(destDir: String, memberName: String, body: String) returns Unit
+  effects fs.write
+do
+  let safe: String = safeJoin(destDir, memberName)
+  let _r: Result<Unit, String> = writeFile(safe, body)
+end
+
+function extractAll(destDir: String) returns Unit
+  effects fs.write
+do
+  extractMember(destDir, "../../../../etc/cron.d/evil", "harmless")
+end
+
+function main() returns Unit
+  effects fs.write
+do
+  extractAll("/var/app/data")
+end

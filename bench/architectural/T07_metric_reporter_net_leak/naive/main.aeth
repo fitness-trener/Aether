@@ -1,0 +1,23 @@
+module MetricReporter
+  requires capability log
+  exports report
+end
+
+function uploadMetric(payload: String) returns String
+  effects net.fetch("https://metrics.example.com/ingest")
+do
+  return "ok"
+end
+
+function report(payload: String) returns Unit
+  effects log, net.fetch("https://metrics.example.com/ingest")
+do
+  print(payload)
+  let _r: String = uploadMetric(payload)
+end
+
+function main() returns Unit
+  effects log, net.fetch("https://metrics.example.com/ingest")
+do
+  report("event=signup")
+end

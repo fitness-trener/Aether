@@ -280,6 +280,43 @@ def _ae_sqlBind(template, value):
     escaped = "'" + str(value).replace("'", "''") + "'"
     return template.replace("?", escaped, 1)
 
+def _ae_trusted(x):
+    # Pure, identity at runtime. An EXPLICIT, auditable trust assertion:
+    # wrapping a dynamic value in trusted(...) states "this source is
+    # vetted" (a config bundle shipped with the app, a template from a
+    # trusted store). E0719/E0720 accept a trusted(...) argument where
+    # they otherwise require a literal — the dual of reveal()/redact().
+    return x
+
+def _ae_deserialize(data):
+    # Models an UNRESTRICTED decoder (pickle/readObject/unsafe-YAML) — the
+    # dangerous sink. E0720 refuses it on untrusted (non-literal) input.
+    # The demo returns the data unchanged; the point is the static refusal.
+    return str(data)
+
+def _ae_schemaDecode(schema, data):
+    # Pure. The sanctioned decoder: pinned to a fixed `schema`, it can only
+    # produce the declared shape, so attacker bytes cannot instantiate
+    # arbitrary types. E0720 accepts schemaDecode(...) on any data.
+    return schema + ":" + str(data)
+
+def _ae_parseXml(data):
+    # Models an entity-resolving XML parser — the XXE sink. Returns a
+    # marker; the point is the static E0727 refusal on untrusted input.
+    return "xml:" + str(data)
+
+def _ae_parseXmlSafe(data):
+    # Pure. The hardened parser: external entity resolution disabled, so a
+    # <!ENTITY SYSTEM ...> cannot read files or reach URLs. The E0727 fix.
+    return "xml-safe:" + str(data)
+
+def _ae_renderTemplate(template, data):
+    # Pure. Renders a fixed template by substituting the first `{}`
+    # placeholder with `data` (the engine escapes data — it never
+    # evaluates it). E0719 requires `template` to be a fixed literal so
+    # untrusted input cannot steer template syntax (SSTI / RCE).
+    return template.replace("{}", str(data), 1)
+
 def _ae_sqlExec(stmt, auth):
     # Models a data-MUTATING database statement (UPDATE/DELETE/INSERT) —
     # carries the `db.exec` effect (capability `db`). The demo returns a
@@ -364,6 +401,52 @@ def _ae_classifyPII(x):
     # (erased at runtime). E0715 refuses a PII value reaching a log or
     # disk sink unless masked with redact().
     return x
+
+def _ae_classifyUntrusted(x):
+    # Pure. Mark a value as Untrusted<T> at a trust boundary (a request
+    # field, an uploaded name). Compile-time-only. E0724 refuses an
+    # Untrusted value reaching a log sink unless cleaned with sanitizeLog().
+    return x
+
+def _ae_sanitizeLog(x):
+    # Pure. Strip the CR/LF/control characters an attacker uses to forge
+    # log lines. The sanctioned exit for E0724.
+    s = str(x)
+    return "".join(c for c in s if c == "\t" or (ord(c) >= 32 and c not in "\r\n"))
+
+def _ae_htmlResponse(body):
+    # Models writing an HTTP HTML response body — the reflected-XSS sink.
+    # Returns the body unchanged; the point is the static E0725 refusal.
+    return str(body)
+
+def _ae_htmlEscape(x):
+    # Pure. Escape the five HTML metacharacters so an Untrusted value
+    # renders as text, not markup. The sanctioned exit for E0725.
+    s = str(x)
+    return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+             .replace('"', "&quot;").replace("'", "&#x27;"))
+
+def _ae_csvCell(v):
+    # Models writing a value into a CSV cell — the formula-injection sink.
+    # Returns the value; the point is the static E0728 refusal.
+    return str(v)
+
+def _ae_csvEscape(v):
+    # Pure. Neutralize a leading formula trigger (= + - @, tab, CR) by
+    # prefixing a single quote so a spreadsheet treats the cell as text.
+    # The sanctioned exit for E0728.
+    s = str(v)
+    return ("'" + s) if s[:1] in ("=", "+", "-", "@", "\t", "\r") else s
+
+def _ae_setHeader(name, value):
+    # Models setting an HTTP response header — the response-splitting sink.
+    # Returns None; the point is the static E0726 refusal of untrusted values.
+    return None
+
+def _ae_sanitizeHeader(x):
+    # Pure. Strip the CR/LF an attacker uses to break out of a header value
+    # and inject headers / a second response. The sanctioned exit for E0726.
+    return "".join(c for c in str(x) if c not in "\r\n")
 
 def _ae_redact(x):
     # Pure. The sanctioned, consent-safe masking of a PII<T> value. Emails

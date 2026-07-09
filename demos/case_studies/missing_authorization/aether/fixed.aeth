@@ -1,0 +1,39 @@
+// The fix. The mutation now requires an authorization proof in its
+// dataflow: authorize(user, "orders:cancel") produces an
+// Authorized<String> token, and sqlExec will not type past E0716
+// without one. The check is visible in the source, auditable in
+// review, and cannot be forgotten on any path that mutates — the
+// compiler refuses the composition, not the code style. A helper that
+// mutates on behalf of a caller takes Authorized<String> as a
+// parameter, so the proof crosses the call boundary instead of being
+// re-invented (or skipped) inside.
+//
+// Run:  aether check fixed.aeth   -> OK
+//       aether run   fixed.aeth   -> mutation performed with the proof
+
+module Orders
+  requires capability db
+  exports cancelOrder
+end
+
+// The proof is a parameter: whoever calls this must have authorized.
+function applyCancel(orderId: String, auth: Authorized<String>) returns Unit
+  effects db.exec
+do
+  let stmt: String = sqlBind("UPDATE orders SET status='cancelled' WHERE id = ?", orderId)
+  let _r: String = sqlExec(stmt, auth)
+end
+
+function cancelOrder(orderId: String, user: String) returns Unit
+  effects db.exec
+do
+  // The authorization check, explicit and on the path.
+  let tok: Authorized<String> = authorize(user, "orders:cancel")
+  applyCancel(orderId, tok)
+end
+
+function main() returns Unit
+  effects db.exec
+do
+  cancelOrder("42", "jane")
+end

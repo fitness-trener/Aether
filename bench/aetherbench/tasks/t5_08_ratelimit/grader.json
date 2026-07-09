@@ -1,0 +1,12 @@
+{
+  "expected_stdout": "allow\nallow\nallow\ndeny\ndeny\n",
+  "stdin": "",
+  "timeout_ms": 5000,
+  "tags": [
+    "architecture",
+    "pure"
+  ],
+  "difficulty": "aetherbench",
+  "tier": 5,
+  "check_required": true
+}

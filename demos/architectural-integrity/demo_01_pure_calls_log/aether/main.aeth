@@ -1,0 +1,22 @@
+// A "pure" data-transformation function that, in a refactor, started
+// calling `print` for debugging. The architectural intent (this is a
+// pure validator, no side effects) is no longer matched by the body.
+//
+// Aether catches this at `aether check` time with [E0801]. The function
+// CANNOT silently leak a log effect into a pipeline that asserts purity
+// of its components.
+
+function validate(payload: String) returns Bool
+  effects pure
+do
+  print("DEBUG validating " + payload)
+  return length(payload) > 0
+end
+
+function main() returns Unit
+  effects log
+do
+  if validate("hello") then
+    print("ok")
+  end
+end

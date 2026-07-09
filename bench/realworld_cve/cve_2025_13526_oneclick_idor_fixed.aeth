@@ -1,0 +1,27 @@
+// The fix, Aether-style. The object-level authorization must be bound to
+// the exact resource the sink mutates. authorizeResource(user, action,
+// id) proves the caller may act ON that id, and sqlByOwner requires the
+// proof's id to match the row it writes. Pass the SAME id to both the
+// authorization and the mutation; a proof for a different order is
+// refused by construction.
+//
+// Run:  aether check cve_2025_13526_oneclick_idor_fixed.aeth -> OK
+
+module Orders
+  requires capability db
+  exports updateOrder
+end
+
+function updateOrder(orderId: String, user: String) returns Unit
+  effects db.exec
+do
+  let proof: Authorized<String> = authorizeResource(user, "orders:edit", orderId)
+  let stmt: String = sqlBind("UPDATE orders SET status = 'paid' WHERE id = ?", orderId)
+  let _r: String = sqlByOwner(stmt, orderId, proof)
+end
+
+function main() returns Unit
+  effects db.exec
+do
+  updateOrder("order-mine", "owner@shop.example")
+end

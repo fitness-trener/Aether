@@ -1,0 +1,37 @@
+// CVE-2025-13526 — IDOR / broken object-level authorization (CWE-639,
+// OWASP API1). Textbook shape: an order-mutating endpoint trusts a
+// client-supplied order id and never checks that the request comes from
+// that order's rightful owner, so any authenticated user can act on any
+// order by changing the id. (Reported in the OneClick "Chat to Order"
+// plugin; the pattern — attacker-controlled resource id with no
+// ownership binding — is the single most-paid bug class in bounty
+// programs: TikTok, Instagram, and KubeSphere IDORs all share it.)
+//
+// E0716 alone is not enough here: the caller IS authenticated and may
+// act on their OWN orders. The lie is that the id the caller is
+// authorized for and the id the UPDATE mutates are DIFFERENT. The
+// resource-scoped sink sqlByOwner(stmt, resourceId, proof) requires the
+// proof to be bound to the SAME id it mutates: [E0717].
+//
+// Run:  aether check cve_2025_13526_oneclick_idor_vulnerable.aeth -> E0717
+
+module Orders
+  requires capability db
+  exports updateOrder
+end
+
+function updateOrder(myOrderId: String, targetOrderId: String, user: String) returns Unit
+  effects db.exec
+do
+  // Authorized for the caller's own order...
+  let proof: Authorized<String> = authorizeResource(user, "orders:edit", myOrderId)
+  // ...but the UPDATE targets a DIFFERENT, attacker-supplied order id.
+  let stmt: String = sqlBind("UPDATE orders SET status = 'paid' WHERE id = ?", targetOrderId)
+  let _r: String = sqlByOwner(stmt, targetOrderId, proof)   // E0717: id mismatch
+end
+
+function main() returns Unit
+  effects db.exec
+do
+  updateOrder("order-mine", "order-victim-9999", "mallory")
+end

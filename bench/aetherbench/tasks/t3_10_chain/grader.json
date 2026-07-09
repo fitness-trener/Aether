@@ -1,0 +1,11 @@
+{
+  "expected_stdout": "GOT deep\n",
+  "stdin": "",
+  "timeout_ms": 5000,
+  "tags": [
+    "effects"
+  ],
+  "difficulty": "aetherbench",
+  "tier": 3,
+  "check_required": true
+}

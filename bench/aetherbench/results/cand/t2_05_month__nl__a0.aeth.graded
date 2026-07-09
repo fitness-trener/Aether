@@ -1,0 +1,39 @@
+type Month = Int where self >= 1 and self <= 12
+
+function daysInMonth(m: Month) returns Int
+  ensures result >= 28 and result <= 31
+  effects pure
+do
+  if m == 1 then
+    return 31
+  elif m == 2 then
+    return 28
+  elif m == 3 then
+    return 31
+  elif m == 4 then
+    return 30
+  elif m == 5 then
+    return 31
+  elif m == 6 then
+    return 30
+  elif m == 7 then
+    return 31
+  elif m == 8 then
+    return 31
+  elif m == 9 then
+    return 30
+  elif m == 10 then
+    return 31
+  elif m == 11 then
+    return 30
+  else
+    return 31
+  end
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(daysInMonth(2)))
+  print(intToString(daysInMonth(12)))
+end

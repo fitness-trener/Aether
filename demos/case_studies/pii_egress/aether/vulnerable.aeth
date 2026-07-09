@@ -1,0 +1,39 @@
+// Case study — PII egress into logs / disk (data-residency, GDPR/CCPA
+// class). The bigtech incident that dominates privacy post-mortems: a
+// personal field (email, name, device id) is written into a debug log
+// line or an on-disk event file, from where it flows to log
+// aggregators, backups, and analytics far outside the consent boundary.
+// Unlike a credential, PII is often logged "for debugging" and looks
+// harmless in review.
+//
+// The email is marked PII<String>. Aether refuses any composition that
+// lets it reach a log sink or the contents of a file in the clear:
+// [E0715]. The sanctioned exit is redact(...), which masks it.
+//
+// Run:  aether check vulnerable.aeth   -> E0715
+
+module Analytics
+  requires capability log
+  requires capability fs
+  exports track
+end
+
+function track(userEmail: PII<String>, action: String) returns Unit
+  effects log, fs.write
+do
+  // Fine: the action name is not personal data.
+  print("EVENT action=" + action)
+
+  // Incident 1: PII written to the log pipeline in the clear.
+  print("EVENT user=" + userEmail)
+
+  // Incident 2: PII persisted to an on-disk event file (backups, replicas).
+  let line: String = "action=" + action + " user=" + userEmail
+  let _r: Result<Unit, String> = writeFile("/var/log/events.log", line)
+end
+
+function main() returns Unit
+  effects log, fs.write
+do
+  track(classifyPII("jane.doe@corp.example"), "checkout")
+end

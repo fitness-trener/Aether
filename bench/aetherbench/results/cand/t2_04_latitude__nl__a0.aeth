@@ -1,0 +1,21 @@
+type Latitude = Int where self >= -90 and self <= 90
+
+function hemisphere(lat: Latitude) returns String
+  effects pure
+do
+  if lat > 0 then
+    return "N"
+  elif lat < 0 then
+    return "S"
+  else
+    return "EQ"
+  end
+end
+
+function main() returns Unit
+  effects log
+do
+  print(hemisphere(45))
+  print(hemisphere(-10))
+  print(hemisphere(0))
+end

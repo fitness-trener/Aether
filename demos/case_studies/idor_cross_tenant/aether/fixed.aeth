@@ -1,0 +1,30 @@
+// The fix. One resource id flows through the whole handler: the same
+// docId is authorized AND mutated. sqlByOwner will not type past E0717
+// unless its proof is an authorizeResource(...) bound to the identical
+// id it writes — so the "authorize my doc, delete yours" gap cannot be
+// expressed. The binding is checked in the source and cannot be
+// forgotten on any mutating path. (The id must be a fixed literal or a
+// name that is never rebound, so it denotes one value for the whole
+// body; a computed or reassigned id is refused as unprovable.)
+//
+// Run:  aether check fixed.aeth   -> OK
+//       aether run   fixed.aeth   -> mutation performed, proof bound to docId
+
+module Docs
+  requires capability db
+  exports updateDoc
+end
+
+function updateDoc(docId: String, user: String) returns Unit
+  effects db.exec
+do
+  let proof: Authorized<String> = authorizeResource(user, "docs:edit", docId)
+  let stmt: String = sqlBind("UPDATE docs SET body='hello' WHERE id = ?", docId)
+  let _r: String = sqlByOwner(stmt, docId, proof)
+end
+
+function main() returns Unit
+  effects db.exec
+do
+  updateDoc("doc-1", "jane")
+end

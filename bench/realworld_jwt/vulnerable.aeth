@@ -1,0 +1,45 @@
+// Case study — a protected action performed off UNVERIFIED token claims
+// (the JWT alg=none / algorithm-confusion class; named precedent
+// CVE-2022-29217, PyJWT). Every function here is locally fine: the token
+// is parsed, the subject is extracted, the query is parameterized, the
+// effect is declared. The lie is in the composition — nothing on the path
+// from token to UPDATE proves the token's signature was ever checked.
+//
+// `decodeClaims` is the unverified decode: it returns the subject with no
+// authentication (exactly what `jwt.decode(t, verify_signature=False)`
+// yields, which pyjwt 2.13.0 still returns full admin claims for). The
+// mutation sink `sqlExec(stmt, auth)` refuses any call whose `auth` is not
+// a proven Authorized<...> value: [E0716]. There is no Aether expression
+// that turns raw decoded claims into that proof — an alg=none / forged
+// token cannot manufacture one. So this handler does not compile.
+//
+// Run:  aether check vulnerable.aeth   -> E0716
+
+module Auth
+  requires capability db
+  exports deleteAccount
+end
+
+// The unverified decode: subject in hand, zero authentication. Models
+// jwt.decode(token, options={"verify_signature": False}).
+function decodeClaims(token: String) returns String
+  effects pure
+do
+  let parts = split(token, ".")
+  return unwrapOrElse(get(parts, 1), "")
+end
+
+function deleteAccount(token: String) returns Unit
+  effects db.exec
+do
+  // Trusts the decoded subject — the alg=none bug in one line.
+  let subject: String = decodeClaims(token)
+  let stmt: String = sqlBind("DELETE FROM accounts WHERE owner = ?", subject)
+  let _r: String = sqlExec(stmt)
+end
+
+function main() returns Unit
+  effects db.exec
+do
+  deleteAccount("eyJhbGciOiJub25lIn0.YXR0YWNrZXI.")
+end

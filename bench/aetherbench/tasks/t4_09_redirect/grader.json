@@ -1,0 +1,13 @@
+{
+  "expected_stdout": "REDIRECTED\n",
+  "stdin": "",
+  "timeout_ms": 5000,
+  "tags": [
+    "security",
+    "redirect"
+  ],
+  "difficulty": "aetherbench",
+  "tier": 4,
+  "check_required": true,
+  "vulnerable_expected_error": "E0718"
+}

@@ -1,0 +1,30 @@
+// Example 15 — command injection (CWE-78). An uploaded file's name is
+// concatenated straight into a shell command, so a name like
+// "x.jpg; rm -rf /" executes attacker commands (the OpenSSL c_rehash
+// CVE-2022-1292 shape).
+//
+// Aether refuses a command built by raw concatenation: [E0714]. The fix
+// is shellArg("... ? ...", value), which quotes the value as a single
+// shell argument so it can't inject `;`/`|`/`$( )` syntax. Click
+// "check", then swap the shellExec line for the shellArg form to see it
+// pass.
+
+module Thumbnailer
+  requires capability exec
+  requires capability log
+  exports convert
+end
+
+function convert(filename: String) returns String
+  effects exec.run
+do
+  // Injection precondition: untrusted filename concatenated into the
+  // command line.
+  return shellExec("convert " + filename + " out.png")
+end
+
+function main() returns Unit
+  effects log, exec.run
+do
+  print(convert("x.jpg; rm -rf /"))
+end

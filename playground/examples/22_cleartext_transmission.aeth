@@ -1,0 +1,19 @@
+// Example 22 — Cleartext transmission (CWE-319). BROKEN on purpose.
+// The gateway is host-PINNED (so E0710 is satisfied), but it ships the
+// payment payload over plain http:// — a passive network attacker on any
+// hop reads the card data. E0721 refuses the cleartext scheme; the fix is
+// one character: https. Loopback http (localhost) stays exempt.
+//
+// Click "check" to see E0721.
+
+function chargeGateway(amountCents: Int) returns String
+  effects net.fetch("http://api.payments.corp.example/v1/charge/*")
+do
+  return "rcpt-" + intToString(amountCents)
+end
+
+function main() returns Unit
+  effects net.fetch("http://api.payments.corp.example/v1/charge/*")
+do
+  let _r: String = chargeGateway(4999)
+end

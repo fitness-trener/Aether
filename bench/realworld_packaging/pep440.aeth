@@ -1,0 +1,336 @@
+// Aether port of PEP 440 version ordering, matching packaging 26.2's
+// `_cmpkey` semantics (epoch, release, flat 6-int pre/post/dev suffix).
+//
+// Scope: canonical PEP 440 forms
+//   [N!] R(.R)* [{a|b|rc}N] [.postN] [.devN]
+// This is exactly the grammar `str(packaging.version.Version(x))` emits.
+// Local version segments (`+local`) and the input-normalization layer
+// (v-prefix, alt spellings alpha/beta/c/preview, separator variants,
+// implicit `-N` post) are packaging's regex front-end and are out of
+// scope for this port, which targets the ORDERING semantics — the part
+// that decides which release a resolver selects.
+
+record VKey do
+  epoch: Int
+  release: List<Int>
+  suffix: List<Int>
+end
+
+// -1 / 0 / 1
+function cmpInt(a: Int, b: Int) returns Int
+  effects pure
+  ensures result == 0 - 1 or result == 0 or result == 1
+do
+  if a < b then
+    return 0 - 1
+  elif a > b then
+    return 1
+  else
+    return 0
+  end
+end
+
+// Compare two release tuples with trailing-zero semantics (1.0.0 == 1):
+// element-wise, zero-filling the shorter side.
+function cmpRelease(a: List<Int>, b: List<Int>) returns Int
+  effects pure
+  ensures result == 0 - 1 or result == 0 or result == 1
+do
+  let n = max(length(a), length(b))
+  for i in range(0, n) do
+    let x = unwrapOrElse(get(a, i), 0)
+    let y = unwrapOrElse(get(b, i), 0)
+    let c = cmpInt(x, y)
+    if c != 0 then
+      return c
+    end
+  end
+  return 0
+end
+
+// Lexicographic compare of two equal-length int lists (the 6-int suffix).
+function cmpIntList(a: List<Int>, b: List<Int>) returns Int
+  effects pure
+  ensures result == 0 - 1 or result == 0 or result == 1
+do
+  let n = max(length(a), length(b))
+  for i in range(0, n) do
+    let x = unwrapOrElse(get(a, i), 0)
+    let y = unwrapOrElse(get(b, i), 0)
+    let c = cmpInt(x, y)
+    if c != 0 then
+      return c
+    end
+  end
+  return 0
+end
+
+function cmpKey(a: VKey, b: VKey) returns Int
+  effects pure
+  ensures result == 0 - 1 or result == 0 or result == 1
+do
+  let ce = cmpInt(a.epoch, b.epoch)
+  if ce != 0 then
+    return ce
+  end
+  let cr = cmpRelease(a.release, b.release)
+  if cr != 0 then
+    return cr
+  end
+  return cmpIntList(a.suffix, b.suffix)
+end
+
+// Strip trailing zeros from a release tuple.
+function trimTrailingZeros(rel: List<Int>) returns List<Int>
+  effects pure
+  ensures length(result) <= length(rel)
+do
+  var n = length(rel)
+  while n > 1 and unwrapOrElse(get(rel, n - 1), 0) == 0 do
+    n = n - 1
+  end
+  return take(rel, n)
+end
+
+// Parse a dot-separated run of non-negative integers.
+// Returns Err on empty parts or non-digits.
+function parseIntList(s: String) returns Result<List<Int>, String>
+  effects pure
+do
+  let parts = split(s, ".")
+  var acc = []
+  for p in parts do
+    if length(p) == 0 then
+      return Err("empty release segment")
+    end
+    let r = parseInt(p)
+    match r do
+      case Ok(v) do
+        if v < 0 then
+          return Err("negative segment")
+        end
+        acc = append(acc, v)
+      end
+      case Err(e) do
+        return Err(e)
+      end
+    end
+  end
+  return Ok(acc)
+end
+
+// preRank: dev-only=-1, a=0, b=1, rc=2, no-pre=3  (packaging 26.2 encoding)
+function buildSuffix(preRank: Int, preN: Int, postPresent: Bool, postN: Int,
+                     devPresent: Bool, devN: Int) returns List<Int>
+  effects pure
+  ensures length(result) == 6
+do
+  var postRank = 0
+  if postPresent then
+    postRank = 1
+  end
+  var devRank = 1
+  if devPresent then
+    devRank = 0
+  end
+  return [preRank, preN, postRank, postN, devRank, devN]
+end
+
+// Parse canonical PEP 440 form into a comparison key.
+function parseKey(input: String) returns Result<VKey, String>
+  effects pure
+do
+  let s = trim(input)
+  if length(s) == 0 then
+    return Err("empty version")
+  end
+
+  // epoch
+  var body = s
+  var epoch = 0
+  let bang = split(s, "!")
+  if length(bang) == 2 then
+    let er = parseInt(unwrapOrElse(get(bang, 0), ""))
+    match er do
+      case Ok(v) do
+        if v < 0 then
+          return Err("negative epoch")
+        end
+        epoch = v
+      end
+      case Err(e) do
+        return Err(e)
+      end
+    end
+    body = unwrapOrElse(get(bang, 1), "")
+  elif length(bang) > 2 then
+    return Err("multiple epoch separators")
+  end
+
+  // dev
+  var devPresent = false
+  var devN = 0
+  let devParts = split(body, ".dev")
+  if length(devParts) == 2 then
+    let dr = parseInt(unwrapOrElse(get(devParts, 1), ""))
+    match dr do
+      case Ok(v) do
+        devN = v
+      end
+      case Err(e) do
+        return Err(e)
+      end
+    end
+    devPresent = true
+    body = unwrapOrElse(get(devParts, 0), "")
+  elif length(devParts) > 2 then
+    return Err("multiple .dev")
+  end
+
+  // post
+  var postPresent = false
+  var postN = 0
+  let postParts = split(body, ".post")
+  if length(postParts) == 2 then
+    let pr = parseInt(unwrapOrElse(get(postParts, 1), ""))
+    match pr do
+      case Ok(v) do
+        postN = v
+      end
+      case Err(e) do
+        return Err(e)
+      end
+    end
+    postPresent = true
+    body = unwrapOrElse(get(postParts, 0), "")
+  elif length(postParts) > 2 then
+    return Err("multiple .post")
+  end
+
+  // pre: {a|b|rc}{N} attached to the release with no separator.
+  var prePresent = false
+  var preLetterRank = 3
+  var preN = 0
+  var releaseStr = body
+  let rcParts = split(body, "rc")
+  if length(rcParts) == 2 then
+    prePresent = true
+    preLetterRank = 2
+    releaseStr = unwrapOrElse(get(rcParts, 0), "")
+    let n = parsePreNumber(unwrapOrElse(get(rcParts, 1), ""))
+    match n do
+      case Ok(v) do
+        preN = v
+      end
+      case Err(e) do
+        return Err(e)
+      end
+    end
+  else
+    let aParts = split(body, "a")
+    let bParts = split(body, "b")
+    if length(aParts) == 2 then
+      prePresent = true
+      preLetterRank = 0
+      releaseStr = unwrapOrElse(get(aParts, 0), "")
+      let n = parsePreNumber(unwrapOrElse(get(aParts, 1), ""))
+      match n do
+        case Ok(v) do
+          preN = v
+        end
+        case Err(e) do
+          return Err(e)
+        end
+      end
+    elif length(bParts) == 2 then
+      prePresent = true
+      preLetterRank = 1
+      releaseStr = unwrapOrElse(get(bParts, 0), "")
+      let n = parsePreNumber(unwrapOrElse(get(bParts, 1), ""))
+      match n do
+        case Ok(v) do
+          preN = v
+        end
+        case Err(e) do
+          return Err(e)
+        end
+      end
+    end
+  end
+
+  // release
+  let relR = parseIntList(releaseStr)
+  var release = []
+  match relR do
+    case Ok(v) do
+      release = v
+    end
+    case Err(e) do
+      return Err(e)
+    end
+  end
+  let trimmed = trimTrailingZeros(release)
+
+  // preRank: dev-only (no pre, no post) sorts before all pre-releases.
+  var preRank = preLetterRank
+  if not prePresent then
+    if not postPresent and devPresent then
+      preRank = 0 - 1
+    else
+      preRank = 3
+    end
+  end
+
+  let suffix = buildSuffix(preRank, preN, postPresent, postN, devPresent, devN)
+  return Ok(VKey(epoch, trimmed, suffix))
+end
+
+// A canonical pre-release always carries an explicit number (str(Version)
+// emits "a0" not "a"); an empty tail is not canonical.
+function parsePreNumber(s: String) returns Result<Int, String>
+  effects pure
+do
+  if length(s) == 0 then
+    return Err("missing pre-release number")
+  end
+  return parseInt(s)
+end
+
+// -1 / 0 / 1 for two version strings; panics-free — returns Err key upward
+// by treating parse failure as an ordering error signalled to the caller.
+function versionCompare(a: String, b: String) returns Int
+  effects pure
+  ensures result == 0 - 1 or result == 0 or result == 1
+do
+  let ka = parseKey(a)
+  let kb = parseKey(b)
+  match ka do
+    case Ok(va) do
+      match kb do
+        case Ok(vb) do
+          return cmpKey(va, vb)
+        end
+        case Err(e) do
+          return 0
+        end
+      end
+    end
+    case Err(e) do
+      return 0
+    end
+  end
+end
+
+function main() returns Unit
+  effects log
+do
+  // PEP 440 canonical ordering spot checks (values printed = -1/0/1):
+  print(intToString(versionCompare("1.0.0", "1")))          // 0  (trailing zeros)
+  print(intToString(versionCompare("1.0.dev1", "1.0a1")))   // -1 (dev-only first)
+  print(intToString(versionCompare("1.0a1", "1.0")))        // -1 (pre before final)
+  print(intToString(versionCompare("1.0", "1.0.post1")))    // -1 (post after final)
+  print(intToString(versionCompare("1.0a2", "1.0b1")))      // -1 (a < b)
+  print(intToString(versionCompare("1.0b2", "1.0rc1")))     // -1 (b < rc)
+  print(intToString(versionCompare("1!1.0", "1.0")))        // 1  (epoch dominates)
+  print(intToString(versionCompare("2.0", "10.0")))         // -1 (numeric, not lexical)
+end

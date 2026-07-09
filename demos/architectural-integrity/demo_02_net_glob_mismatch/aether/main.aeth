@@ -1,0 +1,27 @@
+// A "users-only" gateway declares it will only fetch URLs under
+// https://api.x/users/*. A refactor wires it up to call an admin-token
+// helper that fetches https://api.x/admin/*. The architectural promise
+// (this function never touches admin paths) is structurally broken.
+//
+// Aether's effect-glob check (B.2) refuses the composition with E0801.
+// The diagnostic names BOTH effects so an agent fix-loop sees that the
+// caller's glob 'https://api.x/users/*' does not cover the callee's
+// 'https://api.x/admin/token'.
+
+function fetchAdminToken() returns String
+  effects net.fetch("https://api.x/admin/token")
+do
+  return "admin-secret"
+end
+
+function userGateway() returns String
+  effects net.fetch("https://api.x/users/*")
+do
+  return fetchAdminToken()
+end
+
+function main() returns Unit
+  effects log, net.fetch("https://api.x/users/*")
+do
+  print(userGateway())
+end

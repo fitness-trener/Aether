@@ -1,0 +1,7 @@
+banana()
+
+function main() returns Unit
+  effects log
+do
+  print("ok")
+end

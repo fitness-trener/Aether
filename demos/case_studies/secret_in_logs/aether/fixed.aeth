@@ -1,0 +1,34 @@
+// The fix. Never log the secret itself. Log non-secret metadata (the
+// username, a boolean outcome, a redacted marker). Where a value truly
+// must be exposed — e.g. writing the token into the outbound request —
+// that disclosure is spelled out with reveal(...), so it is explicit in
+// the source and shows up in code review, instead of hiding inside an
+// innocuous-looking debug line.
+//
+// Run:  aether check fixed.aeth   -> OK
+//       aether run   fixed.aeth   -> logs only non-secret metadata
+
+module AuthService
+  requires capability log
+  exports authenticate
+end
+
+function authenticate(user: String,
+                      password: Secret<String>,
+                      apiToken: Secret<String>) returns Unit
+  effects log
+do
+  print("AUTH attempt user=" + user)
+  // Log a redacted marker, never the secret.
+  print("AUTH password provided=yes")
+  // The only place the token is exposed is an explicit, audited reveal.
+  // (Here it stands in for building the upstream Authorization header.)
+  let header: String = "Bearer " + reveal(apiToken)
+  print("AUTH upstream header length=" + intToString(length(header)))
+end
+
+function main() returns Unit
+  effects log
+do
+  authenticate("alice", classify("hunter2"), classify("tok_live_abc123"))
+end

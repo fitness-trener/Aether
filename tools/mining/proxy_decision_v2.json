@@ -1,0 +1,222 @@
+{
+ "metrics": {
+  "n_prs": 64,
+  "n_capability_relevant_regions": 82,
+  "shape_mix_region_weighted": {
+   "ADD_NEW_FILE": {
+    "p": 0.8415,
+    "lo": 0.7474,
+    "hi": 0.9049,
+    "n": 82,
+    "k": 69
+   },
+   "ADD_IN_EXISTING": {
+    "p": 0.0244,
+    "lo": 0.0067,
+    "hi": 0.0846,
+    "n": 82,
+    "k": 2
+   },
+   "MODIFY_EXISTING": {
+    "p": 0.1341,
+    "lo": 0.0766,
+    "hi": 0.2245,
+    "n": 82,
+    "k": 11
+   }
+  },
+  "unit_note": "per_region_* and per_pr_* count RESIDUAL by PRESENCE (UNPROVABLE OR INTRODUCES+also_unresolved), not by verdict label.",
+  "per_region_residual_by_shape": {
+   "ADD_NEW_FILE": {
+    "p": 0.8116,
+    "lo": 0.7039,
+    "hi": 0.8865,
+    "n": 69,
+    "k": 56
+   },
+   "ADD_IN_EXISTING": {
+    "p": 1.0,
+    "lo": 0.3424,
+    "hi": 1.0,
+    "n": 2,
+    "k": 2
+   },
+   "MODIFY_EXISTING": {
+    "p": 0.3636,
+    "lo": 0.1517,
+    "hi": 0.6462,
+    "n": 11,
+    "k": 4
+   }
+  },
+  "per_region_residual_by_shape_UNIT": "PER_REGION (cost projection)",
+  "per_region_unprovable_by_shape": {
+   "ADD_NEW_FILE": {
+    "p": 0.8116,
+    "lo": 0.7039,
+    "hi": 0.8865,
+    "n": 69,
+    "k": 56
+   },
+   "ADD_IN_EXISTING": {
+    "p": 1.0,
+    "lo": 0.3424,
+    "hi": 1.0,
+    "n": 2,
+    "k": 2
+   },
+   "MODIFY_EXISTING": {
+    "p": 0.3636,
+    "lo": 0.1517,
+    "hi": 0.6462,
+    "n": 11,
+    "k": 4
+   }
+  },
+  "per_region_unprovable_overall": {
+   "p": 0.7561,
+   "lo": 0.6531,
+   "hi": 0.8362,
+   "n": 82,
+   "k": 62
+  },
+  "per_pr_residual_fraction": {
+   "p": 0.7333,
+   "n": 60
+  },
+  "per_pr_residual_fraction_UNIT": "PER_PR_RESIDUAL (gate unit)",
+  "per_pr_resolved_fraction": {
+   "p": 0.2667,
+   "lo": 0.1713,
+   "hi": 0.3901,
+   "n": 60,
+   "k": 16
+  },
+  "positive_id": null,
+  "false_negatives_confirmed": [],
+  "false_negative_rate": {
+   "p": 0.0,
+   "lo": 0.0,
+   "hi": 0.0448,
+   "n": 82,
+   "k": 0
+  },
+  "soundness_ok": true
+ },
+ "breakeven": {
+  "threshold_gate0": 0.5,
+  "u_add_combined": {
+   "p": 0.8169070422535211,
+   "lo": 0.6937169014084508,
+   "hi": 0.8896971830985915,
+   "n": 71
+  },
+  "u_modify": {
+   "p": 0.3636,
+   "lo": 0.1517,
+   "hi": 0.6462,
+   "n": 11,
+   "k": 4
+  },
+  "modify_share_M": {
+   "p": 0.1341,
+   "lo": 0.0766,
+   "hi": 0.2245
+  },
+  "breakeven_B": {
+   "point": 0.6991,
+   "lo": 0.3574,
+   "hi": 1.6004
+  },
+  "rw_unprovable_at_M": 0.7561,
+  "margin_M_minus_B": -0.565,
+  "decision": "CLEAR_FAIL",
+  "sensitivity_curve": [
+   {
+    "modify_share": 0.0,
+    "rw_unprovable": 0.8169
+   },
+   {
+    "modify_share": 0.05,
+    "rw_unprovable": 0.7942
+   },
+   {
+    "modify_share": 0.1,
+    "rw_unprovable": 0.7716
+   },
+   {
+    "modify_share": 0.15,
+    "rw_unprovable": 0.7489
+   },
+   {
+    "modify_share": 0.2,
+    "rw_unprovable": 0.7262
+   },
+   {
+    "modify_share": 0.25,
+    "rw_unprovable": 0.7036
+   },
+   {
+    "modify_share": 0.3,
+    "rw_unprovable": 0.6809
+   },
+   {
+    "modify_share": 0.35,
+    "rw_unprovable": 0.6582
+   },
+   {
+    "modify_share": 0.4,
+    "rw_unprovable": 0.6356
+   },
+   {
+    "modify_share": 0.45,
+    "rw_unprovable": 0.6129
+   },
+   {
+    "modify_share": 0.5,
+    "rw_unprovable": 0.5903
+   },
+   {
+    "modify_share": 0.55,
+    "rw_unprovable": 0.5676
+   },
+   {
+    "modify_share": 0.6,
+    "rw_unprovable": 0.5449
+   },
+   {
+    "modify_share": 0.65,
+    "rw_unprovable": 0.5223
+   },
+   {
+    "modify_share": 0.7,
+    "rw_unprovable": 0.4996
+   },
+   {
+    "modify_share": 0.75,
+    "rw_unprovable": 0.4769
+   },
+   {
+    "modify_share": 0.8,
+    "rw_unprovable": 0.4543
+   },
+   {
+    "modify_share": 0.85,
+    "rw_unprovable": 0.4316
+   },
+   {
+    "modify_share": 0.9,
+    "rw_unprovable": 0.4089
+   },
+   {
+    "modify_share": 0.95,
+    "rw_unprovable": 0.3863
+   },
+   {
+    "modify_share": 1.0,
+    "rw_unprovable": 0.3636
+   }
+  ],
+  "interpretation": "real per-region UNPROVABLE exceeds 0.50 at the measured mix -> Option A fails GATE 0. Stop or pivot to assurance (Option B)."
+ }
+}

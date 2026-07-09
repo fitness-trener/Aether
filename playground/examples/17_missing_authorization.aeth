@@ -1,0 +1,29 @@
+// Example 17 — missing authorization before a mutation (CWE-862).
+// The handler is injection-safe (sqlBind) and effect-declared, yet any
+// caller who can name an orderId can cancel it: nothing on the path
+// proves the caller may perform this mutation. That is the shape of
+// most "unauthenticated API" incidents — each function is locally
+// fine; the missing auth check is invisible in local review.
+//
+// Aether inverts the taint rule here: the mutating sink sqlExec
+// REQUIRES an authorization proof in its dataflow — [E0716]. Fix:
+// pass authorize(user, "orders:cancel") as the second argument, or
+// take an Authorized<String> parameter. Click "check".
+
+module Orders
+  requires capability db
+  exports cancelOrder
+end
+
+function cancelOrder(orderId: String, user: String) returns Unit
+  effects db.exec
+do
+  let stmt: String = sqlBind("UPDATE orders SET status='cancelled' WHERE id = ?", orderId)
+  let _r: String = sqlExec(stmt)   // E0716: no authorization proof
+end
+
+function main() returns Unit
+  effects db.exec
+do
+  cancelOrder("42", "mallory")
+end

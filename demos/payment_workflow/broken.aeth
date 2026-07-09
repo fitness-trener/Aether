@@ -1,0 +1,40 @@
+// A deliberately-broken candidate for the F.2 fix-loop demo.
+//
+// Two architectural promises are violated:
+//
+// 1. (B.1) `validateOrder` is declared `pure`, but a debug `print`
+//    sneaks in. The static effect pass fires [E0801]: pure -> log.
+//
+// 2. (B.3) Module declares `requires capability log` only, but the
+//    helper `persistRow` performs `fs.write`. The capability pass
+//    fires [E0701]: needs `fs` capability.
+//
+// The fix-loop should mechanically resolve both using the structured
+// `extra` dicts on the diagnostics.
+
+module PaymentService
+  requires capability log
+  exports main
+end
+
+function validateOrder(orderId: String) returns Bool
+  effects pure
+do
+  print("DEBUG validating " + orderId)
+  return length(orderId) > 0
+end
+
+function persistRow(row: String) returns Unit
+  effects fs.write
+do
+  let _r: Result<Unit, String> = writeFile("/tmp/orders.log", row)
+end
+
+function main() returns Unit
+  effects log, fs.write
+do
+  if validateOrder("o-42") then
+    persistRow("o-42")
+    print("done")
+  end
+end

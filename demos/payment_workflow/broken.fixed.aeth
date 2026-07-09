@@ -1,0 +1,27 @@
+module PaymentService
+  requires capability log
+  requires capability fs
+  exports main
+end
+
+function validateOrder(orderId: String) returns Bool
+  effects log
+do
+  print(("DEBUG validating " + orderId))
+  return (length(orderId) > 0)
+end
+
+function persistRow(row: String) returns Unit
+  effects fs.write
+do
+  let _r: Result<Unit, String> = writeFile("/tmp/orders.log", row)
+end
+
+function main() returns Unit
+  effects log, fs.write
+do
+  if validateOrder("o-42") then
+    persistRow("o-42")
+    print("done")
+  end
+end

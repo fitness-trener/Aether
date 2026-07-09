@@ -1,0 +1,6 @@
+function main() returns Unit
+  effects log
+do
+  let _r: Float = sqrt(-1.0)
+  print("unreachable")
+end

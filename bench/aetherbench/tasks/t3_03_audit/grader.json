@@ -1,0 +1,13 @@
+{
+  "expected_stdout": "AUDIT login\n",
+  "stdin": "",
+  "timeout_ms": 5000,
+  "tags": [
+    "module",
+    "capability",
+    "fs"
+  ],
+  "difficulty": "aetherbench",
+  "tier": 3,
+  "check_required": true
+}

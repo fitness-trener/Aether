@@ -1,0 +1,35 @@
+// Case study — cross-tenant data access / broken object-level
+// authorization (IDOR; CWE-639, OWASP API1). The bigtech shape behind
+// the Facebook "delete any photo" and Peloton account-data bugs: the
+// request IS authenticated and the caller IS authorized for the action
+// — the handler just never checks that the authorized resource is the
+// one it mutates. Every function is locally fine; the lie is that the
+// id in the auth check and the id in the write are DIFFERENT.
+//
+// E0716 already proves *an* authorization is on the dataflow. That is
+// not enough here: authorizeResource(user, "docs:edit", requestedId)
+// authorizes the caller's OWN doc, but the UPDATE targets victimId. The
+// resource-scoped sink sqlByOwner(stmt, resourceId, proof) requires the
+// proof to be bound to the SAME id it mutates: [E0717].
+//
+// Run:  aether check vulnerable.aeth   -> E0717
+
+module Docs
+  requires capability db
+  exports updateDoc
+end
+
+function updateDoc(requestedId: String, victimId: String, user: String) returns Unit
+  effects db.exec
+do
+  // Authorized — but for requestedId, not the row we actually write.
+  let proof: Authorized<String> = authorizeResource(user, "docs:edit", requestedId)
+  let stmt: String = sqlBind("UPDATE docs SET body='pwned' WHERE id = ?", victimId)
+  let _r: String = sqlByOwner(stmt, victimId, proof)   // E0717: id mismatch
+end
+
+function main() returns Unit
+  effects db.exec
+do
+  updateDoc("doc-1", "doc-9999", "mallory")
+end

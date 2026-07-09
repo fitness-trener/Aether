@@ -1,0 +1,22 @@
+module MathApi
+  requires capability log
+  exports doubled
+end
+
+function double_helper(x: Int) returns Int
+  effects pure
+do
+  return x * 2
+end
+
+function doubled(x: Int) returns Int
+  effects pure
+do
+  return double_helper(x)
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(doubled(21)))
+end

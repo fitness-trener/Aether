@@ -1,0 +1,16 @@
+module App
+  requires capability log
+  exports main
+end
+
+function saver() returns Unit
+  effects fs.write
+do
+  let _r: Result<Unit, String> = writeFile("/tmp/x", "x")
+end
+
+function main() returns Unit
+  effects log
+do
+  print("ok")
+end

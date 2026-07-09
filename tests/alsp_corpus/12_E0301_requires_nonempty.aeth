@@ -1,0 +1,12 @@
+function head1(xs: List<Int>) returns Int
+  requires length(xs) > 0
+  effects pure
+do
+  return xs[0]
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(head1([])))
+end

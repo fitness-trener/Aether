@@ -1,0 +1,20 @@
+// Real-world validation — SSRF to the AWS metadata endpoint (CWE-918),
+// the Capital One 2019 breach shape (~100M customers). Models
+// `requests.get("http://169.254.169.254/latest/meta-data/iam/...")`: a
+// server-side request straight to IMDS returns the instance's IAM
+// credentials.
+//
+// The metadata host is a fixed IP, so it is host-PINNED — E0710 (which
+// refuses only wildcard scopes) accepts it. Aether refuses it anyway:
+//   - E0722: the reach is the link-local metadata range 169.254.0.0/16.
+//   - E0721: the scheme is cleartext http.
+// Two independent diagnostics on one line — the pinned-metadata blind
+// spot a naive host allowlist misses.
+//
+// Run:  aether check vulnerable.aeth   -> E0722 (+ E0721)
+
+function readRoleCredentials() returns String
+  effects net.fetch("http://169.254.169.254/latest/meta-data/iam/*")
+do
+  return "iam-credentials"
+end

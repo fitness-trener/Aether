@@ -1,0 +1,24 @@
+// SSTI — server-side template injection (CWE-94). BROKEN on purpose.
+//
+// The Jinja2/Flask/Handlebars incident shape: a greeting page builds
+// its template by concatenating user-controlled input INTO the template
+// string. When the input contains template syntax (e.g. `{{7*7}}` or a
+// payload reaching the object model), the engine EVALUATES it — that is
+// remote code execution, not a cosmetic bug.
+//
+// Each function type-checks and every unit test on the happy path
+// passes. The lie is that `userName` reaches the template position, not
+// the data position. Aether refuses it with E0719 — run `aether check`.
+
+function greetingPage(userName: String) returns String
+  effects pure
+do
+  // userName steers template SYNTAX — this is the injection.
+  return renderTemplate("<h1>Hello " + userName + "</h1>", "")
+end
+
+function main() returns Unit
+  effects log
+do
+  print(greetingPage("{{7*7}}"))
+end

@@ -1,0 +1,12 @@
+function double(x: Int) returns Int
+  ensures result == x * 2
+  effects pure
+do
+  return x + x + 1
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(double(5)))
+end

@@ -1,0 +1,36 @@
+// Example 11 — SSRF via unpinned fetch scope (crawl4ai CVE-2026-53754
+// shape). A crawler fetches a user-supplied URL. The fetch effect is
+// scoped with a bare wildcard, so the crawler can be steered to an
+// internal endpoint like the cloud metadata service 169.254.169.254 —
+// exactly the precondition of the real CVE (fixed upstream by host
+// allowlisting).
+//
+// Aether refuses the broad PROMISE itself with [E0710], before any
+// blocklist logic is even written. Click "check". Pinning the host
+// (path wildcards and *.subdomain pins are still allowed) makes it
+// compile.
+
+module Crawler
+  requires capability net
+  requires capability log
+  exports crawl
+end
+
+// Unpinned host: admits any destination, including 169.254.169.254.
+function fetchTarget(url: String) returns String
+  effects net.fetch("*")
+do
+  return "body-of:" + url
+end
+
+function crawl(userSuppliedUrl: String) returns Unit
+  effects log, net.fetch("*")
+do
+  print("CRAWL " + fetchTarget(userSuppliedUrl))
+end
+
+function main() returns Unit
+  effects log, net.fetch("*")
+do
+  crawl("http://169.254.169.254/latest/meta-data/iam/security-credentials/")
+end

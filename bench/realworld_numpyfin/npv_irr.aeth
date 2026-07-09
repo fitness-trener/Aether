@@ -1,0 +1,84 @@
+// Aether port of numpy-financial's NPV, and a self-contained bracketed
+// IRR solver. numpy-financial (the maintained successor to numpy.npv/irr,
+// depended on across quantitative finance) computes:
+//
+//   npv(rate, values) = sum_t  values[t] / (1+rate)^t
+//
+// which is pure Float arithmetic and ports exactly. numpy-financial's
+// `irr` uses np.roots (companion-matrix eigenvalues) — no linear-algebra
+// / complex primitives exist in Aether, so that exact algorithm is out of
+// scope. Instead this port solves NPV(r)=0 by bisection on a sign-changed
+// bracket, which agrees with numpy-financial on the standard single-IRR
+// cashflow and, unlike numpy-financial, refuses (Err) instead of silently
+// returning NaN when no real IRR exists in range.
+
+// npv via factor accumulation (avoids pow; matches the sum definition).
+function npv(rate: Float, values: List<Float>) returns Float
+  effects pure
+do
+  var acc = 0.0
+  var factor = 1.0
+  let onePlus = 1.0 + rate
+  for v in values do
+    acc = acc + v / factor
+    factor = factor * onePlus
+  end
+  return acc
+end
+
+// Bracketed bisection root of NPV(r)=0. Returns Err when [lo,hi] does not
+// bracket a sign change — the case numpy-financial returns NaN for.
+function irrBisect(values: List<Float>, lo: Float, hi: Float) returns Result<Float, String>
+  requires lo > 0.0 - 1.0 and hi > lo
+  effects pure
+do
+  let flo = npv(lo, values)
+  let fhi = npv(hi, values)
+  if flo * fhi > 0.0 then
+    return Err("no sign change in bracket: NPV does not cross zero in [lo,hi]")
+  end
+  var a = lo
+  var b = hi
+  var fa = flo
+  for i in range(0, 200) do
+    let mid = (a + b) / 2.0
+    let fm = npv(mid, values)
+    if fa * fm <= 0.0 then
+      b = mid
+    else
+      a = mid
+      fa = fm
+    end
+  end
+  return Ok((a + b) / 2.0)
+end
+
+function main() returns Unit
+  effects log
+do
+  // numpy-financial doctest: npv(0.08, [-40000,5000,8000,12000,30000]) = 3065.22267
+  let cf = [0.0 - 40000.0, 5000.0, 8000.0, 12000.0, 30000.0]
+  print(intToString(floor(npv(0.08, cf))))       // 3065
+  // irr([-100,39,59,55,20]) ~ 0.28095
+  let cf2 = [0.0 - 100.0, 39.0, 59.0, 55.0, 20.0]
+  let r = irrBisect(cf2, 0.0 - 0.9999, 10.0)
+  match r do
+    case Ok(rate) do
+      print(intToString(floor(rate * 100000.0)))   // 28095
+    end
+    case Err(e) do
+      print(join(["ERR ", e], ""))
+    end
+  end
+  // a cashflow with no sign change -> numpy-financial returns NaN; here Err
+  let cf3 = [100.0, 39.0, 59.0]
+  let r3 = irrBisect(cf3, 0.0 - 0.9999, 10.0)
+  match r3 do
+    case Ok(rate) do
+      print("unexpected ok")
+    end
+    case Err(e) do
+      print("Err: no IRR (numpy-financial would return NaN)")
+    end
+  end
+end

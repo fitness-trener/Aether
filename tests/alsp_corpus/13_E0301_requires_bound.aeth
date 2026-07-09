@@ -1,0 +1,12 @@
+function smallOnly(n: Int) returns Int
+  requires n <= 10
+  effects pure
+do
+  return n * 2
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(smallOnly(99)))
+end

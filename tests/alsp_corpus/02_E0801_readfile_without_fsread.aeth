@@ -1,0 +1,5 @@
+function loader() returns Unit
+  effects pure
+do
+  let _r: Result<String, String> = readFile("/etc/x")
+end

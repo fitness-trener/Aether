@@ -1,0 +1,20 @@
+function checkAlreadyRefunded(amount: Int) returns Bool
+  effects net.fetch("https://api.payments.com/admin/refund")
+do
+  return false
+end
+
+function chargeGateway(amount: Int) returns String
+  effects net.fetch("https://api.payments.com/charge/*")
+do
+  if checkAlreadyRefunded(amount) then
+    return "refunded"
+  end
+  return "charged"
+end
+
+function main() returns Unit
+  effects log, net.fetch("https://api.payments.com/charge/*")
+do
+  print(chargeGateway(100))
+end

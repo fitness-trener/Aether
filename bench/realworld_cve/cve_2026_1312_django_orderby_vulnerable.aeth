@@ -1,0 +1,27 @@
+// CVE-2026-1312 — Django `QuerySet.order_by()` SQL injection via a
+// column alias containing a period. A user-controlled alias was passed
+// through as a raw table/column pair into the ORDER BY clause. Fixed in
+// Django 4.2/5.1/5.2/6.0 (Feb 2026).
+//
+// Here the untrusted sort key is concatenated straight into the query.
+// Aether refuses a query built by raw concatenation: [E0713].
+//
+// Run:  aether check cve_2026_1312_django_orderby_vulnerable.aeth -> E0713
+
+module OrderBy
+  requires capability db
+  exports listUsers
+end
+
+function listUsers(sortKey: String) returns String
+  effects db.query
+do
+  // order_by() resolving an attacker alias to raw SQL — concatenated in.
+  return sqlQuery("SELECT * FROM users ORDER BY " + sortKey)
+end
+
+function main() returns Unit
+  effects db.query
+do
+  let _r: String = listUsers("(CASE WHEN (SELECT 1)=1 THEN name ELSE id END)")
+end

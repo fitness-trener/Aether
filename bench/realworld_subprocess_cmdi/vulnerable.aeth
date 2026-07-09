@@ -1,0 +1,19 @@
+// Real-world validation — command injection via subprocess shell=True
+// (CWE-78). Models the vulnerable shape in `subprocess_repro.py`: a
+// user-controlled filename concatenated into a shell command line, so
+// `x.jpg; rm -rf /` runs the trailing command.
+//
+// Run:  aether check vulnerable.aeth   -> E0714
+
+function makeThumbnail(filename: String) returns String
+  effects exec.run
+do
+  // Models subprocess.call("convert " + filename + " ...", shell=True).
+  return shellExec("convert " + filename + " -resize 100x100 thumb.png")
+end
+
+function main() returns Unit
+  effects exec.run
+do
+  let _r: String = makeThumbnail("x.jpg; rm -rf /")
+end

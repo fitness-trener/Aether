@@ -1,0 +1,34 @@
+// A logging service was designed to require ONLY the `log` capability —
+// it writes to stdout, that's it. A refactor introduces a new helper
+// `persistAudit` that also writes the audit line to disk, honestly
+// declaring its `fs.write` effect (B.1 enforces local honesty).
+//
+// At the module boundary, this is now a capability lie: the module
+// still says `requires capability log`, but reachable code now performs
+// `fs.write`, which requires capability `fs`. Aether's B.3 transitive
+// capability check refuses to compile with E0701, pointing at the
+// transitive leak.
+
+module AuditService
+  requires capability log
+  exports main
+end
+
+function persistAudit(line: String) returns Unit
+  effects fs.write
+do
+  let _r: Result<Unit, String> = writeFile("/tmp/audit.log", line)
+end
+
+function emitAudit(line: String) returns Unit
+  effects log, fs.write
+do
+  print(line)
+  persistAudit(line)
+end
+
+function main() returns Unit
+  effects log, fs.write
+do
+  emitAudit("user=42 action=login")
+end

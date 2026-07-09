@@ -1,0 +1,24 @@
+// Naive-agent attempt — declares `pure` but the body reaches the
+// network to fetch the JWKS. Aether refuses to compile this with
+// [E0801].
+
+function fetchJwks(uri: String) returns String
+  effects net.fetch("https://auth.example.com/jwks")
+do
+  return "stub-jwks-blob"
+end
+
+function validateJWT(token: String) returns Bool
+  effects pure
+do
+  let _jwks: String = fetchJwks("https://auth.example.com/jwks")
+  return length(token) > 0
+end
+
+function main() returns Unit
+  effects log
+do
+  if validateJWT("header.payload.sig") then
+    print("valid")
+  end
+end

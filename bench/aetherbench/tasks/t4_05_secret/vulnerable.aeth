@@ -1,0 +1,17 @@
+module Auth
+  requires capability log
+  exports authenticate
+end
+
+function authenticate(user: String, password: Secret<String>) returns Unit
+  effects log
+do
+  print("AUTH user=" + user)
+  print("DEBUG password=" + password)
+end
+
+function main() returns Unit
+  effects log
+do
+  authenticate("alice", classify("hunter2"))
+end

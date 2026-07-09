@@ -1,0 +1,11 @@
+function hashPassword(plain: String) returns String
+  effects pure
+do
+  return "sha256-stub-" + plain
+end
+
+function main() returns Unit
+  effects log
+do
+  print(hashPassword("hunter2"))
+end

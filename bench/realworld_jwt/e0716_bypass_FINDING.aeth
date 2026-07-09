@@ -1,0 +1,39 @@
+// REGRESSION TEST (formerly a FINDING). This file reproduces the E0716
+// forgery that adversarial testing of the JWT proof-token demo once
+// surfaced: interpose a helper `applyDelete(subject, auth: Authorized<
+// String>)` and call it with a raw String — `applyDelete(subject,
+// subject)` — laundering a non-proof into an Authorized slot.
+//
+// The gap (E0716 was intra-function; proof provenance did not cross the
+// call boundary) is now CLOSED by commit 9decaa7 "E0716 authorization-
+// provenance pass (nominal Authorized<T>)". The provenance pass rejects
+// an unproven argument bound to an Authorized<...> parameter at the call
+// site, so this file is now correctly refused.
+//
+// Run:  aether check e0716_bypass_FINDING.aeth   -> E0716 (forgery refused)
+
+module Auth
+  requires capability db
+  exports deleteAccount
+end
+
+function applyDelete(subject: String, auth: Authorized<String>) returns Unit
+  effects db.exec
+do
+  let stmt: String = sqlBind("DELETE FROM accounts WHERE owner = ?", subject)
+  let _r: String = sqlExec(stmt, auth)
+end
+
+function deleteAccount(token: String) returns Unit
+  effects db.exec
+do
+  let subject: String = unwrapOrElse(get(split(token, "."), 1), "")
+  // A raw String passed where a proof is required. No coercion error.
+  applyDelete(subject, subject)
+end
+
+function main() returns Unit
+  effects db.exec
+do
+  deleteAccount("none.attacker.")
+end

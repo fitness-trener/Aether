@@ -1,0 +1,158 @@
+// Example 06 — Payment pipeline (Stripe-shaped, clean).
+// A realistic multi-stage service: refinement-typed money, a risk
+// engine, fee tables, URL-disciplined gateway, retry coordination,
+// and an audit trail. Every architectural promise holds, so
+// `aether check` passes and `aether run` executes the batch.
+
+module PaymentPipeline
+  requires capability log
+  requires capability net
+  exports main
+end
+
+// --- refinement types: money can never go out of range -------------
+
+type Cents = Int where self >= 50 and self <= 5000000
+type Percentage = Int where self >= 0 and self <= 100
+type Bps = Int where self >= 0 and self <= 10000
+
+// --- domain model ---------------------------------------------------
+
+record PaymentRequest do
+  id: Int
+  amountCents: Int
+  currency: String
+  discountPct: Int
+  country: String
+end
+
+union RiskLevel do
+  case Low
+  case Review
+  case Blocked
+end
+
+// --- pure risk engine ------------------------------------------------
+
+function riskOf(amountCents: Int, country: String) returns RiskLevel
+  effects pure
+do
+  if amountCents > 1000000 then
+    return RiskLevel.Blocked()
+  end
+  if country == "RU" or country == "KP" or amountCents > 250000 then
+    return RiskLevel.Review()
+  end
+  return RiskLevel.Low()
+end
+
+function riskLabel(r: RiskLevel) returns String
+  effects pure
+do
+  match r do
+    case Low() do
+      return "low"
+    end
+    case Review() do
+      return "review"
+    end
+    case Blocked() do
+      return "blocked"
+    end
+  end
+end
+
+// --- pure pricing core ------------------------------------------------
+
+function feeBpsFor(currency: String) returns Bps
+  effects pure
+do
+  if currency == "USD" then
+    return 290
+  elif currency == "EUR" then
+    return 250
+  elif currency == "GBP" then
+    return 240
+  end
+  return 390
+end
+
+function applyDiscount(base: Cents, pct: Percentage) returns Int
+  effects pure
+  ensures result <= base
+do
+  return base - (base * pct / 100)
+end
+
+function addFee(amount: Int, bps: Bps) returns Int
+  effects pure
+  ensures result >= amount
+do
+  return amount + (amount * bps / 10000)
+end
+
+// --- URL-disciplined gateway ------------------------------------------
+// The effect clause is the architecture: this function can only ever
+// reach the charge URL family. Routing through /admin/* would be a
+// compile error, not a code-review comment.
+
+function chargeGateway(amountCents: Int, currency: String) returns String
+  effects net.fetch("https://api.payments.corp.example/v1/charge/*")
+do
+  return "rcpt-" + intToString(amountCents) + "-" + currency
+end
+
+function chargeWithRetry(amountCents: Int, currency: String, attempts: Int) returns String
+  requires attempts >= 1 and attempts <= 5
+  effects net.fetch("https://api.payments.corp.example/v1/charge/*")
+do
+  return chargeGateway(amountCents, currency)
+end
+
+// --- audit trail --------------------------------------------------------
+
+function audit(reqId: Int, event: String) returns Unit
+  effects log
+do
+  print("AUDIT req=" + intToString(reqId) + " " + event)
+end
+
+// --- orchestrator --------------------------------------------------------
+
+function processOne(req: PaymentRequest) returns String
+  effects log, net.fetch("https://api.payments.corp.example/v1/charge/*")
+do
+  let risk: RiskLevel = riskOf(req.amountCents, req.country)
+  match risk do
+    case Blocked() do
+      audit(req.id, "rejected risk=blocked")
+      return "rejected"
+    end
+    case Review() do
+      audit(req.id, "queued risk=review")
+      return "queued"
+    end
+    case Low() do
+      let discounted: Int = applyDiscount(req.amountCents, req.discountPct)
+      let total: Int = addFee(discounted, feeBpsFor(req.currency))
+      let receipt: String = chargeWithRetry(total, req.currency, 3)
+      audit(req.id, "charged " + receipt)
+      return receipt
+    end
+  end
+end
+
+function main() returns Unit
+  effects log, net.fetch("https://api.payments.corp.example/v1/charge/*")
+do
+  let batch: List<PaymentRequest> = [
+    PaymentRequest(101, 19900, "USD", 15, "US"),
+    PaymentRequest(102, 480000, "EUR", 0, "DE"),
+    PaymentRequest(103, 2500000, "USD", 5, "US"),
+    PaymentRequest(104, 7500, "GBP", 20, "GB")
+  ]
+  for req in batch do
+    let outcome: String = processOne(req)
+    print("RESULT req=" + intToString(req.id) + " -> " + outcome)
+  end
+end

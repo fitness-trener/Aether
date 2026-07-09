@@ -1,0 +1,20 @@
+function myPow(base: Int, e: Int) returns Int
+  requires base >= 1 and e >= 0
+  ensures result >= 1
+  effects pure
+do
+  var result: Int = 1
+  var i: Int = 0
+  while i < e do
+    result = result * base
+    i = i + 1
+  end
+  return result
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(myPow(2, 10)))
+  print(intToString(myPow(3, 0)))
+end

@@ -1,0 +1,192 @@
+{
+  "metrics": {
+    "n_prs": 69,
+    "n_capability_relevant_regions": 86,
+    "shape_mix_region_weighted": {
+      "ADD_NEW_FILE": {
+        "p": 0.8023,
+        "lo": 0.706,
+        "hi": 0.8728,
+        "n": 86,
+        "k": 69
+      },
+      "ADD_IN_EXISTING": {
+        "p": 0.0233,
+        "lo": 0.0064,
+        "hi": 0.0809,
+        "n": 86,
+        "k": 2
+      },
+      "MODIFY_EXISTING": {
+        "p": 0.1744,
+        "lo": 0.1086,
+        "hi": 0.268,
+        "n": 86,
+        "k": 15
+      }
+    },
+    "per_region_unprovable_by_shape": {
+      "ADD_NEW_FILE": {
+        "p": 0.7536,
+        "lo": 0.6404,
+        "hi": 0.8401,
+        "n": 69,
+        "k": 52
+      },
+      "ADD_IN_EXISTING": {
+        "p": 1.0,
+        "lo": 0.3424,
+        "hi": 1.0,
+        "n": 2,
+        "k": 2
+      },
+      "MODIFY_EXISTING": {
+        "p": 0.2667,
+        "lo": 0.109,
+        "hi": 0.5195,
+        "n": 15,
+        "k": 4
+      }
+    },
+    "per_region_unprovable_overall": {
+      "p": 0.6744,
+      "lo": 0.5698,
+      "hi": 0.7641,
+      "n": 86,
+      "k": 58
+    },
+    "per_pr_resolved_fraction": {
+      "p": 0.3125,
+      "lo": 0.2123,
+      "hi": 0.4339,
+      "n": 64,
+      "k": 20
+    },
+    "positive_id": null,
+    "false_negatives_confirmed": [],
+    "false_negative_rate": {
+      "p": 0.0,
+      "lo": 0.0,
+      "hi": 0.0428,
+      "n": 86,
+      "k": 0
+    },
+    "soundness_ok": true
+  },
+  "breakeven": {
+    "threshold_gate0": 0.5,
+    "u_add_combined": {
+      "p": 0.7605408450704226,
+      "lo": 0.6320056338028169,
+      "hi": 0.8446042253521127,
+      "n": 71
+    },
+    "u_modify": {
+      "p": 0.2667,
+      "lo": 0.109,
+      "hi": 0.5195,
+      "n": 15,
+      "k": 4
+    },
+    "modify_share_M": {
+      "p": 0.1744,
+      "lo": 0.1086,
+      "hi": 0.268
+    },
+    "breakeven_B": {
+      "point": 0.5276,
+      "lo": 0.2524,
+      "hi": 1.06
+    },
+    "rw_unprovable_at_M": 0.6744,
+    "margin_M_minus_B": -0.3532,
+    "decision": "CLEAR_FAIL",
+    "sensitivity_curve": [
+      {
+        "modify_share": 0.0,
+        "rw_unprovable": 0.7605
+      },
+      {
+        "modify_share": 0.05,
+        "rw_unprovable": 0.7358
+      },
+      {
+        "modify_share": 0.1,
+        "rw_unprovable": 0.7112
+      },
+      {
+        "modify_share": 0.15,
+        "rw_unprovable": 0.6865
+      },
+      {
+        "modify_share": 0.2,
+        "rw_unprovable": 0.6618
+      },
+      {
+        "modify_share": 0.25,
+        "rw_unprovable": 0.6371
+      },
+      {
+        "modify_share": 0.3,
+        "rw_unprovable": 0.6124
+      },
+      {
+        "modify_share": 0.35,
+        "rw_unprovable": 0.5877
+      },
+      {
+        "modify_share": 0.4,
+        "rw_unprovable": 0.563
+      },
+      {
+        "modify_share": 0.45,
+        "rw_unprovable": 0.5383
+      },
+      {
+        "modify_share": 0.5,
+        "rw_unprovable": 0.5136
+      },
+      {
+        "modify_share": 0.55,
+        "rw_unprovable": 0.4889
+      },
+      {
+        "modify_share": 0.6,
+        "rw_unprovable": 0.4642
+      },
+      {
+        "modify_share": 0.65,
+        "rw_unprovable": 0.4395
+      },
+      {
+        "modify_share": 0.7,
+        "rw_unprovable": 0.4149
+      },
+      {
+        "modify_share": 0.75,
+        "rw_unprovable": 0.3902
+      },
+      {
+        "modify_share": 0.8,
+        "rw_unprovable": 0.3655
+      },
+      {
+        "modify_share": 0.85,
+        "rw_unprovable": 0.3408
+      },
+      {
+        "modify_share": 0.9,
+        "rw_unprovable": 0.3161
+      },
+      {
+        "modify_share": 0.95,
+        "rw_unprovable": 0.2914
+      },
+      {
+        "modify_share": 1.0,
+        "rw_unprovable": 0.2667
+      }
+    ],
+    "interpretation": "real per-region UNPROVABLE exceeds 0.50 at the measured mix -> Option A fails GATE 0. Stop or pivot to assurance (Option B)."
+  }
+}

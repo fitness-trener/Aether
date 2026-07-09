@@ -1,0 +1,16 @@
+module AuditLogger
+  requires capability log
+  exports emit
+end
+
+function emit(line: String) returns Unit
+  effects log
+do
+  print(line)
+end
+
+function main() returns Unit
+  effects log
+do
+  emit("user=42 action=login")
+end

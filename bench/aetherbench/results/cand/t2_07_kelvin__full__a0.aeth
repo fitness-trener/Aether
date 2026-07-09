@@ -1,0 +1,14 @@
+type Kelvin = Int where self >= 0
+
+function toCelsius(k: Kelvin) returns Int
+  effects pure
+do
+  return k - 273
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(toCelsius(300)))
+  print(intToString(toCelsius(0)))
+end

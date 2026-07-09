@@ -1,0 +1,24 @@
+module Audit
+  requires capability log
+  requires capability fs
+  exports emit
+end
+
+function persist(line: String) returns Unit
+  effects fs.write
+do
+  writeFile(safeJoin("audit", "audit.log"), line)
+end
+
+function emit(line: String) returns Unit
+  effects log, fs.write
+do
+  print("AUDIT " + line)
+  persist(line)
+end
+
+function main() returns Unit
+  effects log, fs.write
+do
+  emit("login")
+end

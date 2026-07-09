@@ -1,0 +1,29 @@
+// CVE-2018-14574 — Django CommonMiddleware open redirect. With
+// APPEND_SLASH enabled, a crafted path (notably one starting with "//")
+// was used to build a redirect target that pointed off-origin, bouncing
+// the victim to an attacker site. Fixed in Django 1.11.15 / 2.0.8 by
+// escaping leading slashes.
+//
+// Here the user-supplied path is used as the redirect target with no host
+// pinning. Aether refuses a redirect target steerable by untrusted input:
+// [E0718].
+//
+// Run:  aether check cve_2018_14574_django_redirect_vulnerable.aeth -> E0718
+
+module Common
+  requires capability net
+  exports appendSlashRedirect
+end
+
+function appendSlashRedirect(path: String) returns String
+  effects net.redirect
+do
+  // "//evil.com/x" is protocol-relative: redirect leaves the origin.
+  return redirect(path)
+end
+
+function main() returns Unit
+  effects net.redirect
+do
+  let _r: String = appendSlashRedirect("//evil.example/phish")
+end

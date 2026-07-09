@@ -1,0 +1,19 @@
+// Reflected-XSS validation — the fixed shape. The untrusted query value is
+// htmlEscape'd before it reaches the HTML body (models escapeHtml(q)).
+// `aether check` passes; `aether run` shows the payload rendered as inert
+// text, not markup.
+//
+// Run:  aether check fixed.aeth   -> OK
+//       aether run   fixed.aeth   -> &lt;script&gt;... (inert)
+
+function search(q: Untrusted<String>) returns String
+  effects pure
+do
+  return htmlResponse("<h1>Results for " + htmlEscape(q) + "</h1>")
+end
+
+function main() returns Unit
+  effects log
+do
+  print(search(classifyUntrusted("<script>steal(document.cookie)</script>")))
+end

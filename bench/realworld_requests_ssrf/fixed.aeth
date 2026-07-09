@@ -1,0 +1,18 @@
+// requests SSRF validation — the fixed shape. The host is pinned to a
+// trusted authority; only a path segment is user-controlled. Models
+// requests.get("https://api.trusted.example/preview/" + path). The
+// effect scope is host-pinned, so E0710 passes.
+//
+// Run:  aether check fixed.aeth   -> OK
+
+function fetchPreview(path: String) returns String
+  effects net.fetch("https://api.trusted.example/preview/*")
+do
+  return "https://api.trusted.example/preview/" + path
+end
+
+function main() returns Unit
+  effects net.fetch("https://api.trusted.example/preview/*")
+do
+  let _r: String = fetchPreview("article-42")
+end

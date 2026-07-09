@@ -1,0 +1,14 @@
+type BasisPoints = Int where self >= 0 and self <= 10000
+
+function applyBps(amount: Int, bps: BasisPoints) returns Int
+  effects pure
+do
+  return (amount * bps) / 10000
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(applyBps(20000, 250)))
+  print(intToString(applyBps(100, 10000)))
+end

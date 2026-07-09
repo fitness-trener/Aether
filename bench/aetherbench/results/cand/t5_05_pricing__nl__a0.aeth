@@ -1,0 +1,20 @@
+module Pricing
+  requires capability log
+  exports applyDiscount
+end
+
+type Percentage = Int where self >= 0 and self <= 100
+
+function applyDiscount(price: Int, pct: Percentage) returns Int
+  ensures result <= price
+  effects pure
+do
+  return price - (price * pct) / 100
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(applyDiscount(400, 50)))
+  print(intToString(applyDiscount(99, 0)))
+end

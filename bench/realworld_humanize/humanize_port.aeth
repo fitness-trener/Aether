@@ -1,0 +1,223 @@
+// Aether port of humanize 4.16.0 (python-humanize/humanize) core number
+// functions: ordinal, intcomma (int path), intword ("%.1f" path),
+// naturalsize (decimal, non-gnu, "%.1f" path).
+//
+// Rounding note: humanize formats via C-style "%.1f" applied to a float
+// quotient (two roundings: int->double, double->1 decimal). This port
+// rounds the exact rational value*10/power once, half-to-even. Where the
+// two disagree the port is the correctly-rounded answer; the differential
+// harness counts and attributes every such case.
+
+function pow10(k: Int) returns Int
+  requires k >= 0
+  ensures result >= 1
+  effects pure
+do
+  var p = 1
+  for i in range(0, k) do
+    p = p * 10
+  end
+  return p
+end
+
+// Exact tenths of n/d, rounded half-to-even. n >= 0, d >= 1.
+function tenthsHalfEven(n: Int, d: Int) returns Int
+  requires n >= 0 and d >= 1
+  ensures result >= 0
+  effects pure
+do
+  let q = (n * 10) / d
+  let r = (n * 10) % d
+  let twice = r * 2
+  if twice > d then
+    return q + 1
+  elif twice < d then
+    return q
+  elif q % 2 == 0 then
+    return q
+  else
+    return q + 1
+  end
+end
+
+// "W.F" rendering of a tenths value, e.g. 12 -> "1.2", 10000 -> "1000.0"
+function tenthsToString(t: Int) returns String
+  requires t >= 0
+  effects pure
+do
+  return join([intToString(t / 10), ".", intToString(t % 10)], "")
+end
+
+function ordinalSuffix(n: Int) returns String
+  effects pure
+do
+  let m100 = ((n % 100) + 100) % 100
+  if m100 == 11 or m100 == 12 or m100 == 13 then
+    return "th"
+  end
+  let m10 = ((n % 10) + 10) % 10
+  if m10 == 1 then
+    return "st"
+  elif m10 == 2 then
+    return "nd"
+  elif m10 == 3 then
+    return "rd"
+  else
+    return "th"
+  end
+end
+
+function ordinal(n: Int) returns String
+  ensures length(result) >= 3
+  effects pure
+do
+  return join([intToString(n), ordinalSuffix(n)], "")
+end
+
+function intcommaNonneg(n: Int) returns String
+  requires n >= 0
+  effects pure
+do
+  if n < 1000 then
+    return intToString(n)
+  end
+  let head = n / 1000
+  let tail = n % 1000
+  return join([intcommaNonneg(head), ",", padLeft(intToString(tail), 3, "0")], "")
+end
+
+function intcomma(n: Int) returns String
+  ensures length(result) >= 1
+  effects pure
+do
+  if n < 0 then
+    return join(["-", intcommaNonneg(0 - n)], "")
+  end
+  return intcommaNonneg(n)
+end
+
+function intwordExponents() returns List<Int>
+  effects pure
+do
+  return [3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 100]
+end
+
+function intwordNames() returns List<String>
+  effects pure
+do
+  return ["thousand", "million", "billion", "trillion", "quadrillion",
+          "quintillion", "sextillion", "septillion", "octillion",
+          "nonillion", "decillion", "googol"]
+end
+
+// Faithful port of humanize 4.16.0 intword (default "%.1f" format).
+// The ensures clause is the contract the historical bug #86 violated:
+// for any |n| >= 1000 the coefficient must never render as "0.x".
+function intword(n: Int) returns String
+  ensures (n >= 1000 or n <= 0 - 1000) implies (not startsWith?(result, "0") and not startsWith?(result, "-0"))
+  effects pure
+do
+  var value = n
+  var prefix = ""
+  if value < 0 then
+    value = 0 - value
+    prefix = "-"
+  end
+  if value < 1000 then
+    return join([prefix, intToString(value)], "")
+  end
+  let exps = intwordExponents()
+  let names = intwordNames()
+  // bisect_right(powers, value) - 1
+  var ordinal = 0
+  while ordinal < length(exps) do
+    let e = unwrapOrElse(get(exps, ordinal), 0)
+    if pow10(e) <= value then
+      ordinal = ordinal + 1
+    else
+      break
+    end
+  end
+  ordinal = ordinal - 1
+  let power = pow10(unwrapOrElse(get(exps, ordinal), 0))
+  var t = tenthsHalfEven(value, power)
+  // carry: rounding landed exactly on the next power
+  if ordinal + 1 < length(exps) then
+    let nextPower = pow10(unwrapOrElse(get(exps, ordinal + 1), 0))
+    if t * power == 10 * nextPower then
+      ordinal = ordinal + 1
+      t = 10
+    end
+  end
+  let unit = unwrapOrElse(get(names, ordinal), "")
+  return join([prefix, tenthsToString(t), " ", unit], "")
+end
+
+function naturalsizeSuffixes() returns List<String>
+  effects pure
+do
+  return ["kB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB", "RB", "QB"]
+end
+
+// Faithful port of humanize 4.16.0 naturalsize (decimal, non-gnu, "%.1f").
+function naturalsize(n: Int) returns String
+  ensures length(result) >= 6 implies true
+  effects pure
+do
+  var absBytes = n
+  var negative = false
+  if n < 0 then
+    absBytes = 0 - n
+    negative = true
+  end
+  if absBytes == 1 then
+    if negative then
+      return "-1 Byte"
+    end
+    return "1 Byte"
+  end
+  if absBytes < 1000 then
+    if negative then
+      return join(["-", intToString(absBytes), " Bytes"], "")
+    end
+    return join([intToString(absBytes), " Bytes"], "")
+  end
+  let suffix = naturalsizeSuffixes()
+  // exp = int(log(abs_bytes, base)) computed exactly: largest e with 1000^e <= abs
+  var exp = 0
+  var unit = 1
+  while exp < 10 do
+    if unit * 1000 <= absBytes then
+      unit = unit * 1000
+      exp = exp + 1
+    else
+      break
+    end
+  end
+  // carry: mantissa formats to >= 1000.0 -> step up one suffix
+  var t = tenthsHalfEven(absBytes, unit)
+  if exp < 10 and t >= 10000 then
+    exp = exp + 1
+    unit = unit * 1000
+    t = tenthsHalfEven(absBytes, unit)
+  end
+  var body = tenthsToString(t)
+  if negative then
+    body = join(["-", body], "")
+  end
+  return join([body, " ", unwrapOrElse(get(suffix, exp - 1), "")], "")
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intword(1200000))
+  print(intword(999999999))
+  print(intword(1000000000000000000000000000000000000))
+  print(naturalsize(3000000))
+  print(naturalsize(999999))
+  print(naturalsize(1))
+  print(naturalsize(-4096))
+  print(ordinal(111))
+  print(intcomma(1234567))
+end

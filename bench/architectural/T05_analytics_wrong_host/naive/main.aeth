@@ -1,0 +1,18 @@
+function uploadToBackup(payload: String) returns String
+  effects net.fetch("https://api.vendor-y.com/ingest")
+do
+  return "ok"
+end
+
+function uploadMetrics(payload: String) returns String
+  effects net.fetch("https://api.vendor-x.com/*")
+do
+  let _r: String = uploadToBackup(payload)
+  return "uploaded"
+end
+
+function main() returns Unit
+  effects log, net.fetch("https://api.vendor-x.com/*")
+do
+  print(uploadMetrics("event=signup"))
+end

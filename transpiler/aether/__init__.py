@@ -1,3 +1,8 @@
-"""Aether v0.1 reference transpiler."""
+"""Aether reference transpiler.
 
-__version__ = "0.1.0"
+The user-facing surface — agent SDK, LSP, diagnostics catalog — lives
+in submodules. The installed distribution is `aether-lang` (see
+`pyproject.toml`); the console script is `aether`.
+"""
+
+__version__ = "0.3.0"

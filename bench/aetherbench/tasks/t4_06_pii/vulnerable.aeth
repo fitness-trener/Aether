@@ -1,0 +1,17 @@
+module Analytics
+  requires capability log
+  exports track
+end
+
+function track(userEmail: PII<String>, action: String) returns Unit
+  effects log
+do
+  print("EVENT action=" + action)
+  print("EVENT user=" + userEmail)
+end
+
+function main() returns Unit
+  effects log
+do
+  track(classifyPII("jane.doe@corp.example"), "checkout")
+end

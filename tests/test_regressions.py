@@ -58,7 +58,11 @@ def _run(src):
 
 
 def test_S001_ensures_violation_raises():
-    """A function that violates its ensures clause must raise [E0301]."""
+    """D.2 split: `ensures` violations now raise [E0304], not E0301.
+    `requires` violations still raise [E0301]. An agent fix-loop can
+    read the code alone and decide caller-side vs implementation-side
+    fix without parsing the message text.
+    """
     bad = """
 function double(x: Int) returns Int
   ensures result == x * 2
@@ -78,11 +82,14 @@ end
         _run(bad)
     except AetherError as e:
         raised = True
-        assert e.diag.code == "E0301", e.diag.code
+        assert e.diag.code == "E0304", e.diag.code
         assert "ensures" in e.diag.message, e.diag.message
         assert "double" in e.diag.message, e.diag.message
+        # D.2: extra dict carries machine-readable fields.
+        assert e.diag.extra["function"] == "double"
+        assert e.diag.extra["clause_kind"] == "ensures"
     assert raised, "ensures violation did not raise"
-    print("S-001: ensures violation correctly raises E0301")
+    print("S-001/D.2: ensures violation now raises E0304 (split from E0301)")
 
 
 def test_S001_ensures_honored_passes():
@@ -184,9 +191,80 @@ end
     print("S-002: honored refinement lets program complete")
 
 
-def test_capability_strict_blocks_undeclared():
-    """--capability-strict must reject programs whose declared effects exceed
-    the capabilities declared by any module."""
+def test_B4_refinement_diagnostic_includes_predicate_text():
+    """B.4 polish: the E0302 diagnostic must mention the predicate
+    text and the failing value, so a model fix-loop knows *why* the
+    boundary check rejected the call."""
+    bad = """
+type PositiveInt = Int where self > 0
+
+function show(n: PositiveInt) returns String
+  effects pure
+do
+  return intToString(n)
+end
+
+function main() returns Unit
+  effects log
+do
+  print(show(0))
+end
+"""
+    raised = False
+    try:
+        _run(bad)
+    except AetherError as e:
+        raised = True
+        assert e.diag.code == "E0302", e.diag.code
+        # The polished message includes the predicate text.
+        assert "self > 0" in e.diag.message, e.diag.message
+        # And the failing value's repr.
+        assert "= 0" in e.diag.message or "0" in e.diag.extra.get("value_repr", ""), \
+            e.diag.message
+        # The extra dict carries structured info for an agent loop.
+        assert e.diag.extra["type"] == "PositiveInt"
+        assert e.diag.extra["binding"] == "n"
+        assert "self > 0" in e.diag.extra["predicate"]
+    assert raised
+    print("B.4 refinement: polished diagnostic includes predicate text + value")
+
+
+def test_B4_refinement_helper_is_module_level():
+    """B.4 polish: refinement predicates compile to one module-level
+    `_ae_refn_<TypeName>` helper, not a per-call-site lambda. This both
+    avoids lambda allocation per invocation and makes the emitted code
+    inspectable."""
+    src = """
+type PositiveInt = Int where self > 0
+
+function show(n: PositiveInt) returns String
+  effects pure
+do
+  return intToString(n)
+end
+
+function main() returns Unit
+  effects log
+do
+  print(show(42))
+end
+"""
+    py = emit(parse(src, "<b4>"))
+    # The helper must exist exactly once.
+    assert "def _ae_refn_PositiveInt(_ae_self):" in py, py
+    # And the boundary check must reference it by name (no lambda).
+    assert "_ae_check_refinement(_ae_n, _ae_refn_PositiveInt" in py, py
+    # No per-call-site lambda allocation.
+    assert "lambda _ae_self" not in py, "boundary check still allocates lambda"
+    print("B.4 refinement: hoisted module-level helper, no per-call lambda")
+
+
+def test_capability_no_module_passes_under_b3():
+    """B.3 contract: a program with no module declaration is treated as
+    having an implicit all-capability grant. Preserves backward compat
+    with the v0.1/v0.2 reference programs that don't declare modules.
+    Phase D.3 may tighten this default once modules become real
+    composition units."""
     from aether.passes.capability import check_capabilities
     from aether.parser import parse as _parse
     src = """
@@ -198,14 +276,42 @@ end
 """
     ast = _parse(src, "<cap>")
     diags = check_capabilities(ast)
-    assert len(diags) == 1, diags
-    assert diags[0].code == "E0701"
-    assert diags[0].extra["required_capability"] == "log"
-    print("capability gating: undeclared 'log' capability flagged with E0701")
+    assert diags == [], diags
+    print("B.3 capability: no-module program passes (implicit all-grant)")
 
 
-def test_capability_strict_admits_declared():
-    """A program whose module declares the capability passes the static check."""
+def test_capability_module_missing_capability_blocks():
+    """When ANY module is declared, the check is enforced. A function
+    whose declared effects need a capability not granted by any module
+    triggers E0701."""
+    from aether.passes.capability import check_capabilities
+    from aether.parser import parse as _parse
+    src = """
+module App
+  requires capability log
+  exports main
+end
+
+function leak() returns Unit
+  effects fs.write
+do
+  let _r: Result<Unit, String> = writeFile("/tmp/x", "x")
+end
+
+function main() returns Unit
+  effects log
+do
+  print("hi")
+end
+"""
+    ast = _parse(src, "<cap>")
+    diags = check_capabilities(ast)
+    assert any(d.code == "E0701" and d.extra.get("required_capability") == "fs"
+               for d in diags), diags
+    print("B.3 capability: missing 'fs' capability flagged with E0701")
+
+
+def test_capability_admits_declared():
     from aether.passes.capability import check_capabilities
     from aether.parser import parse as _parse
     src = """
@@ -223,7 +329,42 @@ end
     ast = _parse(src, "<cap>")
     diags = check_capabilities(ast)
     assert diags == [], diags
-    print("capability gating: declared capability admits the function")
+    print("B.3 capability: declared capability admits the function")
+
+
+def test_capability_transitive():
+    from aether.passes.capability import check_capabilities
+    from aether.parser import parse as _parse
+    src = """
+module App
+  requires capability log
+  exports main
+end
+
+function reader() returns String
+  effects fs.read
+do
+  match readFile("/etc/x") do
+    case Ok(s) do
+      return s
+    end
+    case Err(_e) do
+      return ""
+    end
+  end
+end
+
+function main() returns Unit
+  effects log
+do
+  print("ok")
+end
+"""
+    ast = _parse(src, "<cap>")
+    diags = check_capabilities(ast)
+    assert any(d.code == "E0701" and d.extra.get("required_capability") == "fs"
+               for d in diags), diags
+    print("B.3 capability: transitive fs.read flagged via per-function check")
 
 
 if __name__ == "__main__":
@@ -233,6 +374,10 @@ if __name__ == "__main__":
     test_S012_timeout_fires()
     test_S002_refinement_violation_raises()
     test_S002_refinement_passes_on_valid()
-    test_capability_strict_blocks_undeclared()
-    test_capability_strict_admits_declared()
+    test_B4_refinement_diagnostic_includes_predicate_text()
+    test_B4_refinement_helper_is_module_level()
+    test_capability_no_module_passes_under_b3()
+    test_capability_module_missing_capability_blocks()
+    test_capability_admits_declared()
+    test_capability_transitive()
     print("ALL REGRESSION TESTS PASS")

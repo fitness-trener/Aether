@@ -276,6 +276,49 @@ The constructors `Some`, `None`, `Ok`, `Err` are also always in scope.
       // argument in redact(...) is the auditable way to log/persist a
       // masked form — E0715 does not flag a redact() subtree.
 
+    function classifyUntrusted<T>(x: T) returns Untrusted<T>
+      effects pure
+      // Mark a value as Untrusted<T> at a trust boundary (a request field,
+      // an uploaded filename) — the taint-source marker. Compile-time-only.
+      // E0724 refuses an Untrusted value reaching a log sink unless cleaned
+      // with sanitizeLog().
+
+    function sanitizeLog<T>(x: Untrusted<T>) returns String
+      effects pure
+      // Strip the CR/LF/control characters an attacker uses to forge log
+      // lines. The sanctioned exit for E0724 (log injection). Does NOT
+      // protect against XSS — use htmlEscape for HTML sinks.
+
+    function htmlResponse(body: String) returns String
+      effects pure
+      // Models writing an HTTP HTML response body — the reflected-XSS
+      // sink. E0725 refuses an Untrusted value here unless htmlEscape'd.
+
+    function htmlEscape<T>(x: Untrusted<T>) returns String
+      effects pure
+      // Escape <, >, &, " and ' so an Untrusted value renders as text, not
+      // markup. The sanctioned exit for E0725 (reflected XSS).
+
+    function setHeader(name: String, value: String) returns Unit
+      effects pure
+      // Models setting an HTTP response header — the response-splitting
+      // sink. E0726 refuses an Untrusted value here unless sanitizeHeader'd.
+
+    function sanitizeHeader<T>(x: Untrusted<T>) returns String
+      effects pure
+      // Strip the CR/LF an attacker uses to break out of a header value.
+      // The sanctioned exit for E0726 (HTTP response splitting).
+
+    function csvCell(v: String) returns String
+      effects pure
+      // Models writing a value into a CSV cell — the formula-injection
+      // sink. E0728 refuses an Untrusted value here unless csvEscape'd.
+
+    function csvEscape<T>(x: Untrusted<T>) returns String
+      effects pure
+      // Neutralize a leading = + - @ (tab/CR) by prefixing a quote so a
+      // spreadsheet treats the cell as text. The sanctioned exit for E0728.
+
 ## Database
 
     function sqlQuery(q: String) returns String
@@ -354,6 +397,53 @@ The constructors `Some`, `None`, `Ok`, `Err` are also always in scope.
       // authority, and leading slashes from `path` so the result can only
       // point at `host`. The sanctioned repair for E0718 — defeats both
       // absolute-url and protocol-relative (//evil.com) open redirects.
+
+## Template
+
+    function renderTemplate(template: String, data: String) returns String
+      effects pure
+      // Render a FIXED template, substituting the first `{}` placeholder
+      // with `data` (escaped, never evaluated). E0719 requires `template`
+      // to be a string literal — untrusted input belongs in `data`, never
+      // in the template, or it becomes server-side template injection (RCE).
+
+## Serialization
+
+    function deserialize(data: String) returns String
+      effects pure
+      // UNRESTRICTED decoder (models pickle/readObject/unsafe-YAML). E0720
+      // refuses it on untrusted (non-literal) input — an unrestricted
+      // decoder on attacker bytes is remote code execution (CWE-502).
+
+    function schemaDecode(schema: String, data: String) returns String
+      effects pure
+      // The sanctioned decoder: pinned to a fixed `schema`, it can only
+      // produce the declared shape, so attacker bytes cannot instantiate
+      // arbitrary types. The E0720 repair — accepts any `data`.
+
+    function parseXml(data: String) returns String
+      effects pure
+      // Entity-resolving XML parser — the XXE sink. E0727 refuses it on
+      // untrusted (non-literal) input: a crafted <!ENTITY SYSTEM ...> reads
+      // local files and reaches internal URLs.
+
+    function parseXmlSafe(data: String) returns String
+      effects pure
+      // Hardened parser: external entity resolution disabled (no file read,
+      // no SSRF, no billion-laughs). The E0727 repair — accepts any `data`.
+
+## Trust boundary
+
+    function trusted<T>(x: T) returns T
+      effects pure
+      // Explicit, auditable trust assertion (identity at runtime). Wrapping
+      // a dynamic value in trusted(...) states "this source is vetted" — a
+      // config bundle shipped with the app, a template from a trusted store.
+      // E0719 (template) and E0720 (deserialize) accept a trusted(...)
+      // argument where they otherwise demand a literal. It is the dual of
+      // reveal()/redact(): the escape hatch is narrow (only the two
+      // no-sanitizer sinks) and visible in review. Do NOT wrap
+      // attacker-controlled input in trusted() — that is the one misuse.
 
 ## Time
 

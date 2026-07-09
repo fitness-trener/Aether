@@ -1,0 +1,11 @@
+{
+  "expected_stdout": "Hello, Ada\nHello, Alan\n",
+  "stdin": "",
+  "timeout_ms": 5000,
+  "tags": [
+    "module"
+  ],
+  "difficulty": "aetherbench",
+  "tier": 5,
+  "check_required": true
+}

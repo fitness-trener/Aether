@@ -1,0 +1,23 @@
+// Real-world validation — PyYAML `yaml.load()` insecure deserialization
+// (CWE-502). Models the vulnerable shape in `pyyaml_repro.py`: an
+// untrusted config string fed to an unrestricted decoder that can
+// instantiate arbitrary types (the `!!python/object/apply:os.system`
+// gadget) — remote code execution.
+//
+// Every function is locally fine; the lie is that `raw` is untrusted and
+// `deserialize` is unrestricted. Aether refuses it.
+//
+// Run:  aether check vulnerable.aeth   -> E0720
+
+function loadConfig(raw: String) returns String
+  effects pure
+do
+  // Models yaml.load(raw) with no safe loader: unrestricted construction.
+  return deserialize(raw)
+end
+
+function main() returns Unit
+  effects log
+do
+  print(loadConfig("!!python/object/apply:os.system ['rm -rf /']"))
+end

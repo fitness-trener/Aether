@@ -1,0 +1,13 @@
+{
+  "expected_stdout": "2\n7\n",
+  "stdin": "",
+  "timeout_ms": 5000,
+  "tags": [
+    "contract",
+    "requires",
+    "list"
+  ],
+  "difficulty": "aetherbench",
+  "tier": 1,
+  "check_required": true
+}

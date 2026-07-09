@@ -1,0 +1,69 @@
+{
+  "corpus": {
+    "part1_whole_file_add": 50,
+    "part2_micro_diffs": 19,
+    "total_diffs": 69
+  },
+  "delta_unprovable_by_part": {
+    "part1_whole_file_add": {
+      "unprovable": 39,
+      "n": 50,
+      "rate": 0.78
+    },
+    "part2_modify_path": {
+      "unprovable": 5,
+      "n": 19,
+      "rate": 0.2632
+    }
+  },
+  "delta_unprovable_rate": 0.6377,
+  "delta_unprovable_count": 44,
+  "false_negatives": [],
+  "false_negative_rate": 0.0,
+  "positive_identification_microdiffs": {
+    "candidates": 9,
+    "hits": 9,
+    "rate": 1.0
+  },
+  "cap_instance_positive_id_part1": {
+    "named": 44,
+    "total": 49,
+    "rate": 0.898,
+    "baseline_PYTHON_RESULTS": 0.51
+  },
+  "false_positives_over_report": [
+    [
+      "P1:fa_07_flask_login.py",
+      "UNPROVABLE"
+    ],
+    [
+      "P1:wrk_02_dispatch.py",
+      "UNPROVABLE"
+    ],
+    [
+      "P1:pipe_02_dynamic_cols.py",
+      "UNPROVABLE"
+    ],
+    [
+      "P1:pipe_05_clean.py",
+      "UNPROVABLE"
+    ],
+    [
+      "P1:auth_02_require_role.py",
+      "UNPROVABLE"
+    ],
+    [
+      "P1:cfg_04_dynamic_factory.py",
+      "UNPROVABLE"
+    ],
+    [
+      "P1:ctrl_02_pure_validate.py",
+      "UNPROVABLE"
+    ],
+    [
+      "P1:ctrl_04_pure_graph.py",
+      "UNPROVABLE"
+    ]
+  ],
+  "data_caveat": "PROXY corpus (labeled py_corpus2 + curated micro-diffs); real design-partner agent PRs pending. Traps weighted for FN hunt."
+}

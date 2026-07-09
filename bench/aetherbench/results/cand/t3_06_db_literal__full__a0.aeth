@@ -1,0 +1,18 @@
+module Repo
+  requires capability db
+  requires capability log
+  exports listUsers
+end
+
+function listUsers() returns Unit
+  effects db.query, log
+do
+  sqlQuery("SELECT id FROM users")
+  print("QUERIED")
+end
+
+function main() returns Unit
+  effects db.query, log
+do
+  listUsers()
+end

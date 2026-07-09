@@ -1,0 +1,21 @@
+// PyYAML validation — the fixed shape. Models yaml.safe_load(raw):
+// schemaDecode pins the decoder to a fixed schema ("ConfigV1"), so the
+// gadget payload can only ever populate the declared shape — no arbitrary
+// type construction, no RCE. `aether check` passes; `aether run` shows the
+// payload rendered inert under the schema.
+//
+// Run:  aether check fixed.aeth   -> OK
+//       aether run   fixed.aeth   -> inert payload
+
+function loadConfig(raw: String) returns String
+  effects pure
+do
+  // Models yaml.safe_load(raw): schema-pinned, no arbitrary types.
+  return schemaDecode("ConfigV1", raw)
+end
+
+function main() returns Unit
+  effects log
+do
+  print(loadConfig("!!python/object/apply:os.system ['rm -rf /']"))
+end

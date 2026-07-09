@@ -1,0 +1,36 @@
+// Case study — missing authorization before a data mutation
+// (CWE-862/863; the Ivanti EPMM CVE-2023-35078 shape: a mutating API
+// path reachable with no authorization check on it). The bigtech
+// version survives review because every function is locally fine: the
+// handler validates its input, parameterizes its query (no injection),
+// declares its effects — and simply never asks "may THIS caller do
+// this?". The lie is in the composition: nothing on the path from
+// request to UPDATE proves authorization.
+//
+// The mutation sink is sqlExec(stmt, auth). Aether refuses any call
+// whose auth argument is not a proven Authorized<...> value: [E0716].
+// The sanctioned proof is authorize(principal, action), or an
+// Authorized<String> parameter carrying the caller's proof.
+//
+// Run:  aether check vulnerable.aeth   -> E0716
+
+module Orders
+  requires capability db
+  exports cancelOrder
+end
+
+function cancelOrder(orderId: String, user: String) returns Unit
+  effects db.exec
+do
+  // Injection-safe (sqlBind), effect-declared — and still wrong:
+  // no authorization proof anywhere in the dataflow. Any caller who
+  // can name an orderId can cancel it.
+  let stmt: String = sqlBind("UPDATE orders SET status='cancelled' WHERE id = ?", orderId)
+  let _r: String = sqlExec(stmt)
+end
+
+function main() returns Unit
+  effects db.exec
+do
+  cancelOrder("42", "mallory")
+end

@@ -1,0 +1,19 @@
+function minList(xs: List<Int>) returns Int
+  requires not empty?(xs)
+  effects pure
+do
+  var m: Int = xs[0]
+  for i in range(1, length(xs)) do
+    if xs[i] < m then
+      m = xs[i]
+    end
+  end
+  return m
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(minList([5, 2, 8])))
+  print(intToString(minList([7])))
+end

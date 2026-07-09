@@ -1,0 +1,21 @@
+function clamp(x: Int, lo: Int, hi: Int) returns Int
+  requires lo <= hi
+  ensures result >= lo and result <= hi
+  effects pure
+do
+  if x < lo then
+    return lo
+  elif x > hi then
+    return hi
+  else
+    return x
+  end
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(clamp(5, 0, 10)))
+  print(intToString(clamp(-3, 0, 10)))
+  print(intToString(clamp(42, 0, 10)))
+end

@@ -1,0 +1,44 @@
+module OrderSaga
+  requires capability log
+  requires capability net
+  exports placeOrder
+end
+
+function validate(qty: Int) returns Result<Int, String>
+  effects pure
+do
+  if qty >= 1 then
+    return Ok(qty)
+  else
+    return Err("invalid-qty")
+  end
+end
+
+function reserve(qty: Int) returns Result<String, String>
+  effects net.fetch("https://inventory.example.com/reserve/*")
+do
+  return Ok("reserved")
+end
+
+function placeOrder(qty: Int) returns Unit
+  effects log, net.fetch("https://inventory.example.com/reserve/*")
+do
+  let v: Result<Int, String> = validate(qty)
+  if isOk?(v) then
+    let r: Result<String, String> = reserve(qty)
+    if isOk?(r) then
+      print("ORDER CONFIRMED")
+    else
+      print("ORDER FAILED")
+    end
+  else
+    print("ORDER FAILED")
+  end
+end
+
+function main() returns Unit
+  effects log, net.fetch("https://inventory.example.com/reserve/*")
+do
+  placeOrder(2)
+  placeOrder(0)
+end

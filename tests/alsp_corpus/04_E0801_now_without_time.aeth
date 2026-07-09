@@ -1,0 +1,5 @@
+function clock() returns Int
+  effects pure
+do
+  return now()
+end

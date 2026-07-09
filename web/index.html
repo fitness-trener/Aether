@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Aether — a programming language for AI agents to write production code</title>
+  <meta name="description" content="A programming language designed for AI agents to write production code. The compiler refuses to compose components that violate declared architectural constraints.">
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #161922;
+      --panel2: #1d212c;
+      --border: #2a2f3c;
+      --text: #e6e8ee;
+      --muted: #93a0b5;
+      --accent: #7aa2f7;
+      --green: #9ece6a;
+      --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: var(--bg); color: var(--text);
+      font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    a { color: var(--accent); }
+    .nav { display: flex; align-items: center; justify-content: space-between;
+      padding: 18px 32px; border-bottom: 1px solid var(--border); }
+    .nav .brand { font-weight: 700; letter-spacing: 0.2px; font-size: 18px; }
+    .nav .links a { margin-left: 22px; color: var(--muted); text-decoration: none; }
+    .nav .links a:hover { color: var(--text); }
+    .nav .links a.cta { color: var(--bg); background: var(--accent); padding: 8px 14px;
+      border-radius: 6px; font-weight: 600; }
+    .hero { max-width: 1100px; margin: 0 auto; padding: 72px 32px 32px; }
+    .hero h1 { font-size: clamp(32px, 5vw, 56px); line-height: 1.05; margin: 0 0 16px;
+      font-weight: 800; letter-spacing: -0.02em; }
+    .hero h1 .accent { color: var(--accent); }
+    .hero p.lede { color: var(--muted); font-size: 19px; max-width: 720px; margin: 0 0 24px; }
+    .hero .ctas { display: flex; gap: 12px; flex-wrap: wrap; margin: 24px 0 0; }
+    .hero .ctas a { display: inline-block; padding: 12px 18px; border-radius: 6px;
+      text-decoration: none; font-weight: 600; }
+    .hero .ctas a.primary { background: var(--accent); color: var(--bg); }
+    .hero .ctas a.secondary { background: transparent; color: var(--text);
+      border: 1px solid var(--border); }
+    .hero .pill-row { display: flex; gap: 8px; flex-wrap: wrap; margin: 28px 0 0; }
+    .pill { font: 13px var(--mono); color: var(--muted); padding: 5px 10px;
+      border: 1px solid var(--border); border-radius: 999px; }
+    .pill .ok { color: var(--green); }
+
+    .video { max-width: 1100px; margin: 32px auto 16px; padding: 0 32px; }
+    .video .frame { background: var(--panel); border: 1px solid var(--border);
+      border-radius: 8px; padding: 12px; aspect-ratio: 16/9; display: flex;
+      align-items: center; justify-content: center; color: var(--muted);
+      font: 14px var(--mono); }
+    .video .frame.placeholder { font-style: italic; }
+    .video .frame iframe { width: 100%; height: 100%; border: 0; border-radius: 4px; }
+
+    .three { max-width: 1100px; margin: 56px auto; padding: 0 32px;
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+    @media (max-width: 760px) { .three { grid-template-columns: 1fr; } }
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+      padding: 18px 20px; }
+    .card h3 { margin: 0 0 6px; font-size: 16px; }
+    .card p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.55; }
+    .card pre { background: var(--panel2); border: 1px solid var(--border);
+      border-radius: 4px; padding: 10px 12px; margin: 12px 0 0;
+      font: 12.5px var(--mono); overflow-x: auto; }
+
+    .footer { max-width: 1100px; margin: 64px auto 28px; padding: 0 32px;
+      color: var(--muted); font-size: 13px; display: flex;
+      gap: 24px; flex-wrap: wrap; justify-content: space-between; }
+    .footer a { color: var(--muted); margin-right: 14px; }
+  </style>
+</head>
+<body>
+  <nav class="nav">
+    <div class="brand">Aether <span class="pill">v0.3</span></div>
+    <div class="links">
+      <a href="https://github.com/aether-lang/aether" target="_blank" rel="noopener">GitHub</a>
+      <a href="/docs">Docs</a>
+      <a class="cta" href="/playground">Try it now →</a>
+    </div>
+  </nav>
+
+  <section class="hero">
+    <h1>The programming language designed for <span class="accent">AI agents</span> to write production code.</h1>
+    <p class="lede">
+      Effects, capabilities, and refinement types are first-class. The compiler refuses
+      to compose components that violate the architectural promises declared in your
+      source — and emits structured diagnostics an agent fix-loop can act on without
+      reading English.
+    </p>
+
+    <div class="ctas">
+      <a class="primary" href="/playground">Open the playground →</a>
+      <a class="secondary" href="https://github.com/aether-lang/aether" target="_blank" rel="noopener">View on GitHub</a>
+    </div>
+
+    <div class="pill-row">
+      <span class="pill"><span class="ok">●</span> 20 gate suites green</span>
+      <span class="pill"><span class="ok">●</span> 10/10 on the architectural-integrity benchmark</span>
+      <span class="pill"><span class="ok">●</span> pip install aether-lang</span>
+      <span class="pill"><span class="ok">●</span> MIT licensed</span>
+    </div>
+  </section>
+
+  <section class="video">
+    <!--
+      Founder action: replace this placeholder with an embedded
+      90-second demo. See yc/DEMO_NOTES.md for the script and the
+      six-clip cut list. Once the YouTube/Vimeo URL is in hand:
+
+      <div class="frame">
+        <iframe src="https://www.youtube.com/embed/REPLACE_ME"
+                title="Aether 90-second demo" allowfullscreen></iframe>
+      </div>
+    -->
+    <div class="frame placeholder">
+      [demo video: 90 seconds — script in yc/DEMO_NOTES.md]
+    </div>
+  </section>
+
+  <section class="three">
+    <div class="card">
+      <h3>Install in 5 seconds</h3>
+      <p>One pip command, zero third-party runtime deps. The toolchain runs on stdlib-only Python 3.10+.</p>
+      <pre>pip install aether-lang
+aether check program.aeth
+aether run   program.aeth</pre>
+    </div>
+    <div class="card">
+      <h3>Built for fix-loops</h3>
+      <p>Every diagnostic carries a structured <code>extra</code> dict. The SDK's <code>edit()</code> primitive lets an agent transform the AST and re-render in one call.</p>
+      <pre>from aether import sdk
+r = sdk.check(source)
+for d in r.diagnostics:
+    print(d.code, d.extra)</pre>
+    </div>
+    <div class="card">
+      <h3>Live in your editor</h3>
+      <p>Working stdio LSP. Wire it into VS Code's generic LSP client and you get live <code>[E0801]</code>, <code>[E0701]</code>, <code>[E0302]</code> diagnostics with hover.</p>
+      <pre>python3 -m transpiler.aether.lsp</pre>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <div>
+      <a href="https://github.com/aether-lang/aether">GitHub</a>
+      <a href="/playground">Playground</a>
+      <a href="https://github.com/aether-lang/aether/blob/main/bench/architectural/REPORT.md">Benchmark report</a>
+      <a href="https://github.com/aether-lang/aether/blob/main/playground/SECURITY.md">Security</a>
+    </div>
+    <div>MIT licensed · v0.3 · 2026</div>
+  </footer>
+</body>
+</html>

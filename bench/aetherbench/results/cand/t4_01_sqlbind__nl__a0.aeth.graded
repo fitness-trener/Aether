@@ -1,0 +1,18 @@
+module UserRepo
+  requires capability db
+  requires capability log
+  exports findUser
+end
+
+function findUser(userId: String) returns String
+  effects db.query
+do
+  sqlQuery(sqlBind("SELECT * FROM users WHERE id = ?", userId))
+  return "LOOKED-UP " + userId
+end
+
+function main() returns Unit
+  effects log, db.query
+do
+  print(findUser("42"))
+end

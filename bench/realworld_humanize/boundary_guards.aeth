@@ -1,0 +1,71 @@
+// Boundary-contract demos for two closed humanize issues where plain
+// Python shipped a crash or a silently wrong answer:
+//
+// #57  `humanize.metric(0)` crashed with `ValueError: math domain error`
+//      (math.log10(abs(0))) — an undeclared precondition.
+// #171 `naturaldelta` on a negative timedelta silently returned "a day"
+//      — a wrong-branch bug past an unguarded boundary.
+//
+// In Aether the boundary is part of the signature. Violations surface as
+// structured E0301 diagnostics naming the clause, not as a traceback or
+// a wrong string.
+
+// --- issue #57: metric() exponent needs value != 0 -----------------------
+// (humanize computes exponent = floor(log10(abs(value))); log10(0) is a
+// domain error. The port states the domain instead of crashing on it.)
+function metricExponent(value: Float) returns Int
+  requires value > 0.0 or value < 0.0
+  effects pure
+do
+  var v = value
+  if v < 0.0 then
+    v = 0.0 - v
+  end
+  var e = 0
+  while v >= 10.0 do
+    v = v / 10.0
+    e = e + 1
+  end
+  while v < 1.0 do
+    v = v * 10.0
+    e = e - 1
+  end
+  return e
+end
+
+// --- issue #171: naturaldelta buckets are defined for seconds >= 0 -------
+function naturalDeltaBucket(seconds: Int) returns String
+  requires seconds >= 0
+  ensures length(result) >= 1
+  effects pure
+do
+  let days = seconds / 86400
+  if days == 0 then
+    if seconds < 45 then
+      return "a moment"
+    elif seconds < 90 then
+      return "a minute"
+    elif seconds < 2700 then
+      return join([intToString(max(seconds / 60, 2)), " minutes"], "")
+    elif seconds < 5400 then
+      return "an hour"
+    else
+      return join([intToString(seconds / 3600), " hours"], "")
+    end
+  elif days == 1 then
+    return "a day"
+  else
+    return join([intToString(days), " days"], "")
+  end
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(metricExponent(1500.0)))
+  print(naturalDeltaBucket(30))
+  print(naturalDeltaBucket(90000))
+  // issue #171's reproduction: a negative delta. humanize 4.9.0 silently
+  // printed "a day"; Aether refuses the call at the declared boundary.
+  print(naturalDeltaBucket(0 - 30))
+end

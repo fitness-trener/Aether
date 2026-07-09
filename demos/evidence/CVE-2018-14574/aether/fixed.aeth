@@ -1,0 +1,24 @@
+// CVE-2018-14574 fixed. The redirect is pinned to the app's own host via
+// safeRedirect(host, path): it strips scheme, authority and leading
+// slashes from path so the target can only ever stay on `host` — the
+// shape E0718 accepts, and a strict superset of Django's "escape leading
+// slashes" fix (it also defeats absolute-URL targets).
+//
+// Run:  aether check cve_2018_14574_django_redirect_fixed.aeth   -> OK
+
+module Common
+  requires capability net
+  exports appendSlashRedirect
+end
+
+function appendSlashRedirect(path: String) returns String
+  effects net.redirect
+do
+  return safeRedirect("app.example.com", path)
+end
+
+function main() returns Unit
+  effects net.redirect
+do
+  let _r: String = appendSlashRedirect("//evil.example/phish")
+end

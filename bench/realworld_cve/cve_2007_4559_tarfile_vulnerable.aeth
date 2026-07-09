@@ -1,0 +1,35 @@
+// CVE-2007-4559 — CPython `tarfile` extractall path traversal.
+// A malicious archive entry named "../../../../etc/cron.d/evil" escapes
+// the extraction directory and overwrites an arbitrary file. Unpatched in
+// the stdlib for 15 years; affected CPython <= 3.11.3 and thousands of
+// downstream extractors.
+//
+// The write path is built from the untrusted entry name with no
+// containment. Aether refuses a dynamic write path not routed through
+// safeJoin: [E0711].
+//
+// Run:  aether check cve_2007_4559_tarfile_vulnerable.aeth   -> E0711
+
+module Tarfile
+  requires capability fs
+  exports extractAll
+end
+
+function extractMember(destDir: String, memberName: String, body: String) returns Unit
+  effects fs.write
+do
+  // tarfile's TarFile.extract: targetpath = os.path.join(destDir, member.name)
+  let _r: Result<Unit, String> = writeFile(destDir + "/" + memberName, body)
+end
+
+function extractAll(destDir: String) returns Unit
+  effects fs.write
+do
+  extractMember(destDir, "../../../../etc/cron.d/evil", "* * * * * root sh -c evil")
+end
+
+function main() returns Unit
+  effects fs.write
+do
+  extractAll("/var/app/data")
+end

@@ -1,0 +1,61 @@
+// The cross-cutting wedge: a realistic-shaped payment workflow that
+// composes ALL FOUR Aether checks. Each piece on its own looks fine,
+// each unit test would pass, and yet the composition lies. Aether
+// refuses to compile.
+//
+// Architectural promises this program tries to keep:
+//   1. (B.4) the discount % is between 0 and 100
+//   2. (B.3) the module only has the `log` capability
+//   3. (B.2) the gateway only ever calls https://api.x/charge/*
+//   4. (B.1) a function declared `pure` does not log
+//
+// Each promise is broken below in a separate place. Aether surfaces
+// all the failures the static passes can see in one go; the runtime
+// boundary check (B.4) fires the moment `applyDiscount` is called.
+
+module PaymentService
+  requires capability log
+  exports main
+end
+
+type Percentage = Int where self >= 0 and self <= 100
+
+// (B.1 violation) declared pure, but a stray print snuck in.
+function buildPayload(amount: Int, pct: Int) returns String
+  effects pure
+do
+  print("DEBUG building payload")
+  return "amount=" + intToString(amount) + "&pct=" + intToString(pct)
+end
+
+// (B.2 violation) gateway is supposed to only reach api.x/charge/*,
+// but the function it calls hits api.x/admin/*.
+function refundOverride(payload: String) returns String
+  effects net.fetch("https://api.x/admin/refund")
+do
+  return "ok"
+end
+
+function chargeGateway(payload: String) returns String
+  effects net.fetch("https://api.x/charge/*")
+do
+  return refundOverride(payload)
+end
+
+// (B.4 violation) Percentage refined to [0,100], but caller passes 120.
+function applyDiscount(basePrice: Int, pct: Percentage) returns Int
+  effects pure
+do
+  return basePrice - (basePrice * pct / 100)
+end
+
+// (B.3 violation) The module declared only `log`, but the call chain
+// transitively performs `net.fetch`, which needs `net` capability.
+function main() returns Unit
+  effects log, net.fetch("https://api.x/charge/*")
+do
+  let final: Int = applyDiscount(100, 120)
+  let payload: String = buildPayload(final, 120)
+  let _resp: String = chargeGateway(payload)
+  print("done")
+end

@@ -1,0 +1,15 @@
+{
+  "id": "T09_email_refinement",
+  "axis": "B.4",
+  "summary": "sanitiser strips @, malformed email reaches sendEmail",
+  "naive_aether": {"stage": "run", "expected_exit_code": 2,
+                   "expected_diagnostic_code": "E0302",
+                   "expected_stderr_pattern": "E0302.*Email"},
+  "naive_python": {"stage": "run", "expected_exit_code": 0,
+                   "expected_stdout_pattern": "SENT to aliceexample.com\\n",
+                   "silently_violates": true},
+  "correct_aether": {"stage": "run", "expected_exit_code": 0,
+                     "expected_stdout": "SENT to alice@example.com\n"},
+  "correct_python": {"stage": "run", "expected_exit_code": 0,
+                     "expected_stdout": "SENT to alice@example.com\n"}
+}

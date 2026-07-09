@@ -1,0 +1,28 @@
+function enabled(flags: List<String>, flag: String) returns Bool
+  effects pure
+do
+  var i: Int = 0
+  while i < length(flags) do
+    if flags[i] == flag then
+      return true
+    end
+    i = i + 1
+  end
+  return false
+end
+
+function main() returns Unit
+  effects log
+do
+  let flags: List<String> = ["beta", "dark-mode"]
+  if enabled(flags, "beta") then
+    print("on")
+  else
+    print("off")
+  end
+  if enabled(flags, "legacy") then
+    print("on")
+  else
+    print("off")
+  end
+end

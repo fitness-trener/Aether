@@ -1,0 +1,5 @@
+function main() returns Unit
+  effects log
+do
+  print("oops \q")
+end

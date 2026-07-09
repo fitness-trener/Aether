@@ -1,0 +1,18 @@
+function save(path: String, body: String) returns Unit
+  effects fs.write
+do
+  writeFile(safeJoin(".", path), body)
+end
+
+function load(path: String) returns String
+  effects fs.read
+do
+  return unwrapOr(readFile(safeJoin(".", path)), "ERR")
+end
+
+function main() returns Unit
+  effects log, fs.write, fs.read
+do
+  save("aetherbench_scratch.tmp", "hello-fs")
+  print(load("aetherbench_scratch.tmp"))
+end

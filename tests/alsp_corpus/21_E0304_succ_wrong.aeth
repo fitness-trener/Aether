@@ -1,0 +1,12 @@
+function succ(x: Int) returns Int
+  ensures result == x + 1
+  effects pure
+do
+  return x - 1
+end
+
+function main() returns Unit
+  effects log
+do
+  print(intToString(succ(5)))
+end

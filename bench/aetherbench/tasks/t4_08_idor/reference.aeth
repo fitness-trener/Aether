@@ -1,0 +1,20 @@
+module Docs
+  requires capability db
+  requires capability log
+  exports updateDoc
+end
+
+function updateDoc(docId: String, user: String) returns Unit
+  effects db.exec, log
+do
+  let proof: Authorized<String> = authorizeResource(user, "docs:edit", docId)
+  let stmt: String = sqlBind("UPDATE docs SET body='v2' WHERE id = ?", docId)
+  let _r: String = sqlByOwner(stmt, docId, proof)
+  print("UPDATED " + docId)
+end
+
+function main() returns Unit
+  effects db.exec, log
+do
+  updateDoc("doc-1", "alice")
+end

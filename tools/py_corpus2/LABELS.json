@@ -1,0 +1,70 @@
+{
+  "_meta": {
+    "taxonomy": ["net", "fs", "db", "process", "env", "random", "log"],
+    "method": "Hand-labeled by careful reading of each module's actual behavior, including module-level/import-time statements, decorators, and transitive effects through injected objects. Established independently of Aether's verdict.",
+    "independence_caveat": "Author-established ground truth (same author wrote the code). Most rigor applied where Aether is known to be weak: module scope, pure-module I/O, pragmatic pure-method names.",
+    "fields": {
+      "caps": "capabilities the code can actually exercise",
+      "module_level": "true if a capability is established at module/import scope (not inside a function body)",
+      "dynamic": "true if the module also performs a genuinely dynamic import/dispatch whose capability surface is legitimately unknown (UNPROVABLE is the correct verdict for that part)"
+    }
+  },
+  "fa_01_users_api.py":            {"caps": ["db"], "notes": "db via Depends(get_db) session: query/add/commit"},
+  "fa_02_health.py":              {"caps": ["env"], "notes": "os.environ.get APP_VERSION"},
+  "fa_03_webhook.py":             {"caps": ["net"], "notes": "httpx.AsyncClient().post to downstream"},
+  "fa_04_upload.py":              {"caps": ["fs"], "notes": "open(dest,'wb') + shutil.copyfileobj"},
+  "fa_05_search.py":              {"caps": ["db"], "module_level": true, "notes": "module-level Elasticsearch('http://...') + es.search (network datastore)"},
+  "fa_06_flask_orders.py":        {"caps": ["db"], "module_level": true, "notes": "module-level redis.Redis(...) + cache.get"},
+  "fa_07_flask_login.py":         {"caps": [], "notes": "hashlib + flask session cookie + request.form; no net/fs/db"},
+  "fa_08_metrics_mw.py":          {"caps": ["time", "log"], "notes": "time.time + logging .info"},
+
+  "orm_01_engine.py":             {"caps": ["db", "env"], "module_level": true, "notes": "module-level create_engine(os.environ['DATABASE_URL'])"},
+  "orm_02_repository.py":         {"caps": ["db"], "notes": "self.db.query via injected Session; getattr(Product,field) dynamic"},
+  "orm_03_migrations.py":         {"caps": ["db", "fs"], "notes": "create_engine + open(sql_file) + conn.execute"},
+  "orm_04_raw_pg.py":             {"caps": ["db"], "notes": "psycopg2.connect + cur.execute"},
+  "orm_05_mongo.py":              {"caps": ["db", "env"], "module_level": true, "notes": "module-level MongoClient(os.environ...) + insert_one"},
+  "orm_06_unit_of_work.py":       {"caps": ["db"], "notes": "SessionLocal commit/rollback/close (transaction mgmt)"},
+
+  "api_01_stripe_client.py":      {"caps": ["net"], "notes": "requests.post to stripe"},
+  "api_02_retry_client.py":       {"caps": ["net", "time"], "notes": "httpx.get + time.sleep backoff"},
+  "api_03_github.py":             {"caps": ["net", "env"], "notes": "requests.get + os.environ['GITHUB_TOKEN']"},
+  "api_04_slack.py":              {"caps": ["net"], "notes": "urllib urlopen"},
+  "api_05_weather.py":            {"caps": ["net"], "notes": "requests.get openweather"},
+  "api_06_graphql.py":            {"caps": ["net"], "notes": "self.client=httpx.Client() in __init__ + post"},
+
+  "wrk_01_celery_email.py":       {"caps": ["net"], "module_level": true, "notes": "module-level Celery(broker=redis) + smtplib SMTP send"},
+  "wrk_02_dispatch.py":           {"caps": [], "notes": "in-memory decorator registry + dict dispatch; no I/O"},
+  "wrk_03_image_worker.py":       {"caps": ["process"], "notes": "subprocess.run convert"},
+  "wrk_04_scheduler.py":          {"caps": ["time"], "dynamic": true, "notes": "time.sleep known; importlib+getattr runs unknown plugin code"},
+  "wrk_05_rq_worker.py":          {"caps": ["fs", "env"], "notes": "open read+write + os.environ.get OUTPUT_DIR"},
+
+  "pipe_01_sales.py":             {"caps": ["fs"], "notes": "pd.read_csv(path) reads a file (pandas unmapped)"},
+  "pipe_02_dynamic_cols.py":      {"caps": [], "notes": "operates on passed-in DataFrame in memory; no I/O"},
+  "pipe_03_etl.py":               {"caps": ["fs", "db"], "notes": "pd.read_csv + create_engine + df.to_sql"},
+  "pipe_04_parquet.py":           {"caps": ["fs"], "notes": "pd.read_csv + df.to_parquet"},
+  "pipe_05_clean.py":             {"caps": [], "notes": "in-memory record normalization; str methods"},
+
+  "auth_01_jwt.py":               {"caps": ["env", "time"], "module_level": true, "notes": "module-level os.environ['JWT_SECRET'] + time.time; jwt is CPU"},
+  "auth_02_require_role.py":      {"caps": [], "notes": "reads flask request headers; no net/fs/db"},
+  "auth_03_apikey.py":            {"caps": ["env"], "notes": "os.environ.get API_KEY; hmac pure"},
+  "auth_04_session_ctx.py":       {"caps": [], "notes": "in-memory _CONTEXT dict"},
+  "auth_05_oauth.py":             {"caps": ["net"], "notes": "requests.post token exchange"},
+
+  "cfg_01_settings.py":           {"caps": ["env"], "module_level": true, "notes": "module-level Settings() reads os.environ at import"},
+  "cfg_02_plugin_loader.py":      {"caps": ["env"], "dynamic": true, "notes": "os.environ.get known; importlib.import_module plugins unknown"},
+  "cfg_03_feature_flags.py":      {"caps": ["fs"], "notes": "open(config_path) + json.load"},
+  "cfg_04_dynamic_factory.py":    {"caps": [], "dynamic": true, "notes": "importlib+getattr loads arbitrary backend class; concrete caps unknown"},
+  "cfg_05_env_branch.py":         {"caps": ["env"], "notes": "os.environ.get ENV; in-function imports of logging/structlog"},
+
+  "trap_01_codecs_open.py":       {"caps": ["fs"], "notes": "TRAP: codecs.open reads a file but codecs is in PURE_MODULES"},
+  "trap_02_pprint.py":            {"caps": ["log"], "notes": "TRAP: pprint.pprint writes stdout but pprint is in PURE_MODULES"},
+  "trap_03_module_level_net.py":  {"caps": ["net"], "module_level": true, "notes": "TRAP: module-level requests.get at import; not analyzed"},
+  "trap_04_pure_method_override.py": {"caps": ["fs"], "notes": "TRAP: AuditLog.append() does open().write; pragmatic allowlists .append"},
+  "trap_05_pickle.py":            {"caps": ["fs"], "dynamic": true, "notes": "TRAP: open read fs detected; pickle.load is code-exec risk (unmapped)"},
+  "trap_06_from_subprocess.py":   {"caps": ["process"], "notes": "TRAP: from subprocess import run; run(...) — tests from-import detection"},
+
+  "ctrl_01_pure_math.py":         {"caps": [], "notes": "pure arithmetic"},
+  "ctrl_02_pure_validate.py":     {"caps": [], "notes": "pure validation (isdigit/int)"},
+  "ctrl_03_mixed_report.py":      {"caps": ["fs"], "notes": "open write + os.path.getsize"},
+  "ctrl_04_pure_graph.py":        {"caps": [], "notes": "pure recursive topo sort"}
+}

@@ -1,0 +1,42 @@
+// Case study — secret/PII exfiltration into logs (CWE-532). One of the
+// most common real incidents: an access token, password, session
+// cookie, or PII field ends up in a debug log line, a stack trace, or
+// an analytics event, and is then shipped to a log aggregator a much
+// wider audience can read. GitHub, Twitter/X, and countless others have
+// disclosed variants of exactly this.
+//
+// Each print() below looks harmless in isolation — the reviewer sees
+// "log a debug line". The lie is that the interpolated value is a
+// SECRET. Aether marks the secret with the Secret<T> type and refuses
+// any composition that lets it reach a log sink: E0712.
+//
+// Run:  aether check vulnerable.aeth   -> E0712
+
+module AuthService
+  requires capability log
+  exports authenticate
+end
+
+// `apiToken` and `password` are secrets: their type carries the
+// Secret<String> marker. `email` is PII modeled the same way.
+function authenticate(user: String,
+                      password: Secret<String>,
+                      apiToken: Secret<String>) returns Unit
+  effects log
+do
+  // Fine: the username is not a secret.
+  print("AUTH attempt user=" + user)
+
+  // Incident 1: the password lands in a debug log.
+  print("DEBUG verifying password=" + password)
+
+  // Incident 2: taint propagates through a binding, then logs.
+  let bearer: Secret<String> = apiToken
+  print("DEBUG upstream call with token=" + bearer)
+end
+
+function main() returns Unit
+  effects log
+do
+  authenticate("alice", classify("hunter2"), classify("tok_live_abc123"))
+end

@@ -1,0 +1,18 @@
+// XXE validation — the fixed shape. parseXmlSafe disables external entity
+// resolution (models resolve_entities=False, load_dtd=False), so the
+// crafted <!ENTITY SYSTEM ...> cannot read files or reach URLs. `aether
+// check` passes; `aether run` shows the entity payload inert.
+//
+// Run:  aether check fixed.aeth   -> OK
+
+function loadConfig(raw: String) returns String
+  effects pure
+do
+  return parseXmlSafe(raw)
+end
+
+function main() returns Unit
+  effects log
+do
+  print(loadConfig("<!DOCTYPE r [<!ENTITY x SYSTEM 'file:///etc/passwd'>]><r>&x;</r>"))
+end

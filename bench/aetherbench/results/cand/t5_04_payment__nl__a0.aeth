@@ -1,0 +1,34 @@
+module Payments
+  requires capability net
+  requires capability log
+  exports valid, charge, pay
+end
+
+function valid(amount: Int) returns Bool
+  effects pure
+do
+  return amount > 0
+end
+
+function charge(amount: Int) returns String
+  effects net.fetch("https://api.payments.example.com/charge/*")
+do
+  return "OK " + intToString(amount)
+end
+
+function pay(amount: Int) returns Unit
+  effects net.fetch("https://api.payments.example.com/charge/*"), log
+do
+  if valid(amount) then
+    print(charge(amount))
+  else
+    print("REJECTED")
+  end
+end
+
+function main() returns Unit
+  effects net.fetch("https://api.payments.example.com/charge/*"), log
+do
+  pay(100)
+  pay(0 - 5)
+end

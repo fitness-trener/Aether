@@ -1,0 +1,114 @@
+// Example 09 — Feature-flag rollout engine (Google/Meta-shaped, clean).
+// Deterministic percentage rollouts: a user hashes into a stable
+// bucket 0..99 and a flag ships to `pct` of traffic. The refinement
+// types encode the two invariants every experimentation platform
+// relies on: rollout percentages stay in [0,100] and buckets stay
+// in [0,99]. A bad hash mixer or a fat-fingered config can't ship.
+
+module FeatureFlags
+  requires capability log
+  exports main
+end
+
+type RolloutPct = Int where self >= 0 and self <= 100
+type BucketId = Int where self >= 0 and self <= 99
+
+record Flag do
+  name: String
+  pct: Int
+  killSwitch: Bool
+end
+
+union Cohort do
+  case Treatment
+  case Control
+end
+
+// --- deterministic bucketing ------------------------------------------
+// Knuth multiplicative hash, folded into 0..99. The BucketId
+// refinement on the return type is the guarantee that no user can
+// ever land outside the rollout space — the classic "bucket 100"
+// off-by-one is unrepresentable.
+
+function bucketOf(userId: Int) returns BucketId
+  requires userId >= 0
+  effects pure
+do
+  return (userId * 2654435761) % 100
+end
+
+// --- pure evaluation core ------------------------------------------------
+
+function evaluate(f: Flag, userId: Int, bucket: BucketId) returns Cohort
+  effects pure
+do
+  if f.killSwitch then
+    return Cohort.Control()
+  end
+  if bucket < f.pct then
+    return Cohort.Treatment()
+  end
+  return Cohort.Control()
+end
+
+function cohortLabel(c: Cohort) returns String
+  effects pure
+do
+  match c do
+    case Treatment() do
+      return "treatment"
+    end
+    case Control() do
+      return "control"
+    end
+  end
+end
+
+// The gate that guards config pushes: percentage comes in as a raw
+// Int from a config file, and crossing into RolloutPct is where a
+// value like 250 dies with a structured diagnostic instead of
+// silently shipping to 100% of traffic.
+function validatedPct(rawPct: RolloutPct) returns Int
+  effects pure
+do
+  return rawPct
+end
+
+// --- exposure logging (the only effectful part) -----------------------------
+
+function logExposure(f: Flag, userId: Int, c: Cohort) returns Unit
+  effects log
+do
+  print("EXPOSURE flag=" + f.name
+    + " user=" + intToString(userId)
+    + " cohort=" + cohortLabel(c))
+end
+
+function rolloutOne(f: Flag, userId: Int) returns Unit
+  effects log
+do
+  let _pct: Int = validatedPct(f.pct)
+  let b: Int = bucketOf(userId)
+  let c: Cohort = evaluate(f, userId, b)
+  logExposure(f, userId, c)
+end
+
+function main() returns Unit
+  effects log
+do
+  let newCheckout: Flag = Flag("new-checkout", 20, false)
+  let darkMode: Flag = Flag("dark-mode", 80, false)
+  let riskyRewrite: Flag = Flag("risky-rewrite", 100, true)
+
+  let users: List<Int> = [1001, 1002, 1003, 1004, 1005]
+  for u in users do
+    rolloutOne(newCheckout, u)
+  end
+  for u in users do
+    rolloutOne(darkMode, u)
+  end
+  // Kill switch wins over any percentage — everyone gets control.
+  for u in users do
+    rolloutOne(riskyRewrite, u)
+  end
+end

@@ -1,0 +1,13 @@
+type PositiveInt = Int where self > 0
+
+function show(n: PositiveInt) returns String
+  effects pure
+do
+  return intToString(n)
+end
+
+function main() returns Unit
+  effects log
+do
+  print(show(0))
+end
