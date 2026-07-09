@@ -46,6 +46,8 @@ boundary; bodies are still not analyzed across calls.
 | Taint now seeds from marker-typed RETURN signatures | iter-39: `_marker_source_fns` (stdlib `classify`/`classifyPII`/`classifyUntrusted` + user `returns Secret<...>` decls) feeds the shared fixpoint for E0712/E0715/E0724/E0725/E0726/E0728; signature-level only — a body that returns a tainted local under a plain declared return type still launders (residual: body-level return-taint inference unbuilt) | high |
 | Marker→unmarked-param crossings are refused, not tracked | iter-39: E0729 flags Secret/PII/Untrusted into a plain param of a user-declared callee; marker-typed params are the sanctioned crossing (arg pruned in the leak walk — the callee owns the value, its return is covered by seeding). Residuals: stdlib transforms (`trim(secret)`) out of scope; HOF/function-typed callees skipped; `Authorized<T>` deliberately excluded (proof marker — seeding/laundering rules there would RELAX acceptance, the wrong direction) | high |
 | Body-level return laundering CLOSED | iter-40: E0730 refuses a marker-carrying `Return` value under a plain declared return type. With seeding + E0729 + E0730 the declared signature is enforced in BOTH directions — "signature-level" no longer means "signature-trusted". Sanctioned exits mirror E0729 (declare the marker-typed return, or unwrap at the return site) | high |
+| Match-destructure MISS found & CLOSED | iter-41 (BUGS.md BUG-001, fixed 8d928d9): arm bindings over a tainted scrutinee were fresh untainted names — a genuine FALSE ACCEPT inside the modeled surface, the contract-breach class. Fixed by conservative all-arm propagation in `_marked_tainted_names`; regression ratchet-locked via the fixed-bugs layer | high |
+| CORRECTION: "stdlib transform propagation" residual was PHANTOM | iter-41 probe: `print(trim(pw))` and `let t = trim(pw); print(t)` both already fire E0712 — the leak walk's generic recursion into unmodeled calls over-flags stdlib transforms at sinks, bindings, and returns. The iter-40 residual note was written without a probe. **Lesson: residuals enter the backlog only probe-confirmed, exactly like gaps** | high |
 
 ## Recommended Actions
 
@@ -55,15 +57,17 @@ boundary; bodies are still not analyzed across calls.
 - The highest-leverage soundness upgrade was **interprocedural flow** —
   SHIPPED at signature level across iters 39–40 (return-type seeding,
   E0729 param-crossing refusal, E0730 return-crossing refusal; see
-  Evidence — the signature is now enforced both directions). What
-  remains of the original v0.4 ask: **value-equality / alias reasoning
-  for E0717's resource ids** (still literal-or-stable-name only),
-  **stdlib transform propagation** (`trim(secret)` returns a plain
-  value from an unmodeled stdlib signature — the last laundering
-  channel inside the modeled surface), **HOF / function-typed callees**,
-  and **boundary-sanitizer coarseness** (any per-sink sanitizer clears
-  the generic boundary at E0729/E0730 — a `sanitizeLog`'d value
-  returned as String could still XSS at an HTML sink).
+  Evidence — the signature is now enforced both directions; iter-41
+  additionally closed the match-destructure false accept). What remains
+  of the original v0.4 ask: **value-equality / alias reasoning for
+  E0717's resource ids** (still literal-or-stable-name only — an
+  over-flag precision target, not a miss), **HOF / function-typed
+  callees** (E0729 skips them — the remaining miss-side surface), and
+  **boundary-sanitizer coarseness** (any per-sink sanitizer clears the
+  generic boundary at E0729/E0730 — a `sanitizeLog`'d value returned as
+  String could still XSS at an HTML sink). The former "stdlib transform
+  propagation" item is REMOVED — proven phantom by the iter-41 probe
+  (see Evidence); probe residuals before backlog entry.
 - Never describe these passes as "sound" without the qualifier
   "within the intraprocedural, syntactic surface" — overstating is a
   Never-Do (vault manifest, runtime-vs-static honesty).

@@ -1278,6 +1278,50 @@ State carried forward: the full gate suite must stay green
 
 ---
 
+## Iteration 41 — match-destructure taint (a false accept, found and fixed)
+
+- **Author:** main thread (Fable 5). Probe-first iteration with TWO
+  outcomes: a residual proven phantom, and a real MISS found and fixed
+  the same session.
+- **Phantom residual (correction).** Iter-40 surfaced "stdlib transform
+  propagation" (`trim(secret)` washes the marker) as the next TYPE gap.
+  The method's step-2 probe DISPROVED it: `print(trim(pw))` and
+  `let t = trim(pw); print(t)` both already fire E0712 — the leak
+  walk's generic recursion into unmodeled calls over-flags stdlib
+  transforms at sinks, bindings, and returns. No-op iteration avoided.
+  **Lesson (pushed to q1): residuals must be probe-confirmed before
+  entering the backlog, exactly like gaps.**
+- **The real gap (found in the same probe session):** `case Some(v) do
+  print(v) end` over `Option<Secret<String>>` checked CLEAN (exit 0) —
+  a FALSE ACCEPT, the one failure the over-flag-never-miss contract
+  forbids; strictly worse than a missing detector. Root cause: the
+  shared fixpoint collected only Let/Assign bindings; match-pattern
+  `BindPat` names were fresh untainted names.
+- **Fix:** destructure propagation in `_marked_tainted_names` — every
+  arm-pattern binding over a leaking scrutinee is tainted (all arms,
+  every binding, conservative). One edit widens all eight
+  confidentiality passes (E0712/E0715/E0724/E0725/E0726/E0728/E0729/
+  E0730). `Authorized` (E0716/E0717) uses the separate
+  `_authorized_names` machinery — untouched, no silent proof
+  relaxation.
+- **BUGS.md BUG-001** recorded `[FIXED 8d928d9]` with a `test:` line —
+  the ratchet's fixed-bugs layer now holds it (gate prints "1 FIXED
+  bug(s), all with a live regression test").
+- **No new diagnostic code** → floors unchanged (40 codes / 30
+  detectors, still met). 5 new tests; playground example 26.
+- **Files:** `passes/effects.py` (`_pattern_bind_names`, widened
+  fixpoint), `tests/test_effect_scope.py`, `BUGS.md`,
+  `grammar/diagnostics.md` (prose), `playground/examples/26_*.aeth`,
+  q1 + this log.
+- **TYPE gap surfaced for next iter:** E0717 value-equality / alias
+  reasoning for resource ids (the last big q1 item — currently
+  over-flag-only: `let id2 = id1` is refused; a *precision* target, not
+  a miss). Miss-side remaining surface: HOF / function-typed callees
+  (E0729 skips them). Probe BOTH before picking.
+- **Suite:** exit 0.
+
+---
+
 ## Infra — monotonic ratchet (Aether may only improve)
 
 - **Author:** main thread (Fable 5), at the human's request: guarantee the
