@@ -1,0 +1,104 @@
+---
+type: cluster_page
+cluster_id: violation-taxonomy
+status: active
+confidence: medium
+last_updated: 2026-07-04
+tags: [violation-taxonomy, security, effect-system, capability-model, detection-backlog]
+---
+
+# Cluster: Violation Taxonomy — what Aether catches, and what it does not yet
+
+## Summary
+A living map of **architecture-class failure TYPES** (the kind of bug that
+survives unit tests and human review because each function is locally
+fine and the lie is in the composition) against Aether's detection
+coverage. Each row is a *class*, not an instance. The point of this page
+is the **backlog**: the not-yet-covered rows are the queue the
+improvement loop pulls from, each with a concrete detection idea so a
+future iteration can eliminate the whole class, not one CVE.
+
+Coverage legend: **CAUGHT** (a default-on pass refuses it) · **PARTIAL**
+(caught only under conditions) · **OPEN** (no detection yet; detection
+idea noted).
+
+## Covered classes (default-on passes)
+
+| Class | Precondition | Diagnostic | Notes |
+|---|---|---|---|
+| Effect leak (impure "pure") | a function does IO/log/net it did not declare | **E0801** | B.1; the Log4Shell shape (a logger that fetches) |
+| Effect-arg mismatch (URL discipline) | callee's URL not covered by caller's glob | **E0801** | B.2; glob subsumption |
+| Capability overrun | transitive effect needs a capability no module declared | **E0701** | B.3; the second lock behind E0801 |
+| Refinement-boundary violation | a value outside `T where P` crosses a call boundary | **E0302/E0305** | B.4; runtime boundary check |
+| Module export lie / dup / unknown cap | structural module errors | **E0702/3/4** | D.3 |
+| **SSRF (unpinned fetch scope)** | `net.fetch` host/authority is a wildcard → steerable inward to `169.254.169.254` | **E0710** | *Shipped 2026-07-04, iter 1.* Closes the open-by-default fetch scope. |
+| **Path traversal / Zip-Slip** | `readFile`/`writeFile` path is dynamic/untrusted, not literal or `safeJoin`ed | **E0711** | *Shipped 2026-07-04, iter 2.* `safeJoin` stdlib is the sanctioned repair. |
+| **Secret exfil via log/disk** | a `Secret<T>` value reaches `print` or `writeFile` contents without `reveal(...)` | **E0712** | *Shipped 2026-07-04, iter 3 (log); widened 2026-07-07, iter 11 (disk).* First taint-lite pass: `Secret<T>` marker + `reveal`/`classify`; param-origin taint, straight-line dataflow. Sink set now `{print, writeFile-contents}` via a sink-spec dict (mirrors E0715). |
+| **SQL injection** | a `sqlQuery` arg is raw concatenation, not a literal or `sqlBind(...)` | **E0713** | *Shipped 2026-07-04, iter 4.* `sqlQuery` sink (effect `db.query`) + `sqlBind` parameterizing sanitizer; sink+sanitizer+literal shape. |
+| **Command injection** | a `shellExec` arg is raw concatenation, not a literal or `shellArg(...)` | **E0714** | *Shipped 2026-07-04, iter 5 (self-teaching agent).* `shellExec` sink (effect `exec.run`, new `exec` capability) + `shellArg` quoting sanitizer; E0713 slice cloned (CVE-2022-1292 shape). |
+| **PII egress (GDPR / residency)** | a `PII<T>` value reaches `print` or `writeFile` contents without `redact(...)` | **E0715** | *Shipped 2026-07-04, iter 6.* Second taint marker on the generalized taint helpers; `PII<T>` + `classifyPII` + masking `redact`; log + disk sinks. |
+| **Missing authorization before mutation (CWE-862/863)** | a data-mutating sink (`sqlExec`, effect `db.exec`) is reachable with no authorization proof in its dataflow | **E0716** | *Shipped 2026-07-04, iter 7.* The taint core INVERTED: the sink *requires* an `Authorized<T>` marker (from the `authorize(principal, action)` guard or an `Authorized<T>` param) instead of refusing one. `sqlExec`'s query arg also joined the E0713 sink list. Ivanti EPMM CVE-2023-35078 shape. |
+| **Cross-tenant data access / object-level authorization (IDOR, CWE-639)** | a resource-scoped mutation (`sqlByOwner`, effect `db.exec`) whose authorization proof is not bound to the SAME resource id the sink mutates | **E0717** | *Shipped 2026-07-04, iter 8.* The resource-binding extension of E0716: `sqlByOwner(stmt, resourceId, proof)` requires `proof` = `authorizeResource(principal, action, resourceId)` for the same id (identical literal, or same never-rebound name). Mismatched/unbound/unprovable id → refused. OWASP API1; Facebook "delete any photo" shape. |
+| **Open redirect (CWE-601)** | a `redirect` target is not a fixed literal or a `safeRedirect(host, path)` result | **E0718** | *Shipped 2026-07-04, iter 9.* `redirect` sink (effect `net.redirect`) + `safeRedirect` host-pinning sanitizer (strips scheme/authority/leading-slash); E0711 sink+sanitizer+literal shape. OAuth `returnTo`/`redirect_uri` abuse. |
+| **Template injection / SSTI (CWE-94)** | a `renderTemplate` template arg is not a fixed literal (concatenation / parameter) | **E0719** | *Shipped 2026-07-04, iter 10.* Leanest injection member: sink+literal shape with NO sanitizer (SSTI has no safe way to build a template from user input). Jinja2/Flask `{{7*7}}`→RCE shape; untrusted value must move to the escaped data arg. Residual RESOLVED (iter 13): `trusted(...)` boundary admits vetted dynamic templates. |
+| **Insecure deserialization (CWE-502)** | `deserialize` fed a non-literal (untrusted) argument instead of `schemaDecode(schema, data)` | **E0720** | *Shipped 2026-07-07, iter 12.* SSTI-shaped: literal-only, no sanitizer; the repair is a sibling function `schemaDecode` pinned to a fixed schema. pickle/readObject/unsafe-YAML gadget RCE. Residual RESOLVED (iter 13): `trusted(...)` boundary admits vetted config blobs. |
+| **Cleartext transmission (CWE-319)** | a `net.fetch` scope uses `http://` to a non-loopback host | **E0721** | *Shipped 2026-07-07, iter 16.* Orthogonal sibling of E0710 (scheme, not host-pinning) on the effect annotation. Loopback exempt. The fix is `https://`. Not a sink+literal or taint member — a pure effect-string check, cheapest possible new class. |
+| **SSRF to cloud metadata / IMDS (CWE-918)** | a `net.fetch` scope pinned to `169.254.0.0/16` | **E0722** | *Shipped 2026-07-07, iter 17.* Effect-string family. Closes the E0710 blind spot: a metadata IP is host-*pinned* so E0710 passes it, but 169.254.169.254 is the IAM-credential-theft target. RFC-1918 private ranges deliberately NOT flagged (legit in meshes). Residual: IPv6 IMDS (`fd00:ec2::254`) + DNS names resolving to link-local not covered. |
+| **Hardcoded credential (CWE-798)** | a string literal matches a provider-credential shape (AWS/GitHub/Google/Slack/Stripe/PEM) | **E0723** | *Shipped 2026-07-07, iter 19.* NEW family — literal-content scan (a secret scanner in the compiler), not effect/dataflow. Narrow high-confidence patterns → ~0 false positives (demo "hunter2" clean, real AKIA… flagged). #1 real-world finding. Residual: generic high-entropy secrets + non-listed providers not caught (pattern list, not entropy). |
+| **Log injection / forging (CWE-117)** | an `Untrusted<T>` value reaches `print` without `sanitizeLog(...)` | **E0724** | *Shipped 2026-07-07, iter 21.* Introduces the taint-SOURCE marker `Untrusted<T>` — the SOUND, explicit dual of provenance inference (mark at the trust boundary rather than infer from reads). Reuses the taint machinery; `sanitizeLog` strips CR/LF. First step of the provenance story without the unsound auto-taint. |
+| **Reflected XSS (CWE-79)** | an `Untrusted<T>` value reaches `htmlResponse` without `htmlEscape(...)` | **E0725** | *Shipped 2026-07-07, iter 22.* Second sink for `Untrusted<T>` (OWASP #2). Establishes per-sink sanitizers: `htmlEscape` clears XSS, `sanitizeLog` (which clears E0724) does NOT — the right exit for one sink is wrong for another. The marker pays out one sink at a time. |
+| **HTTP response splitting (CWE-113)** | an `Untrusted<T>` value reaches `setHeader` without `sanitizeHeader(...)` | **E0726** | *Shipped 2026-07-07, iter 23.* Third `Untrusted<T>` sink; completes the HTTP-output trio (log/HTML/header), each with its context-correct sanitizer. Untrusted-into-common-web-contexts now well-covered; further sinks (XML/LDAP) are lower-prevalence. |
+| **XML external entity / XXE (CWE-611)** | `parseXml` fed a non-literal (untrusted) argument instead of `parseXmlSafe(data)` | **E0727** | *Shipped 2026-07-07, iter 26.* Parser-CONFIG class (E0720 sibling, not an Untrusted content-sink): `parseXml` resolves external entities → file read / SSRF / billion-laughs; `parseXmlSafe` disables them. OWASP-listed. |
+| **CSV / formula injection (CWE-1236)** | an `Untrusted<T>` value reaches `csvCell` without `csvEscape(...)` | **E0728** | *Shipped 2026-07-07, iter 28.* Fourth `Untrusted<T>` sink and first NON-HTTP context — proves the marker generalizes past web output. Leading `=+-@` → spreadsheet formula (exfil / DDE-RCE); `csvEscape` prefixes a quote. |
+| **Marker laundering / taint erasure at internal boundaries (CWE-532 adjacent)** | a `Secret<T>`/`PII<T>`/`Untrusted<T>` value passed to a user-function parameter not typed with the marker, or produced by a marker-returning call that seeded no taint | **E0729** (+ seeding widens E0712/E0715/E0724/E0725/E0726/E0728) | *Shipped 2026-07-09, iter 39.* The q1 "highest-leverage upgrade", resolved the signature-level way: taint also seeds from declared marker-typed RETURN types (`classify*` constructors + user decls; bodies not analyzed), and a marked value crossing into an unmarked param is refused as laundering. Marker-typed params are the sanctioned crossing. `Authorized<T>` excluded (proof marker — widening would relax). Residuals in [[../questions/q1-taint-marker-soundness-boundary\|q1]]: body-level return laundering, stdlib transforms, HOFs. |
+
+## Non-security architectural classes (Aether's original pitch)
+
+| Class | Precondition | Diagnostic | Notes |
+|---|---|---|---|
+| **Non-exhaustive match (unhandled variant)** | a `match` on a resolvable union type omits a case with no wildcard | **E0202** | *Shipped 2026-07-07, iter 29.* Lifts exhaustiveness from a RUNTIME trap to a STATIC guarantee (Rust/Swift-style). First NON-security architectural detector — the compiler refuses an incomplete composition. Conservative: silent when the scrutinee's union type is unresolvable. |
+| **Unreachable match arm (dead code)** | a `match` arm follows a wildcard, or duplicates an earlier case | **E0203** | *Shipped 2026-07-07, iter 30.* Complement of E0202 (too-few → too-many). Pure arm-ordering, no type info needed. Together: match handling is total-and-minimal — every variant handled exactly once. |
+| **Dead code after terminator** | a statement follows `return`/`break`/`continue` in the same block | **E0204** | *Shipped 2026-07-07, iter 31.* Generalizes reachability beyond match: purely structural block scan. Always a logic error (stray early return, merge artifact). |
+| **Unused let binding (dead store)** | a `let` (non-`_`) name is never read | **E0205** | *Shipped 2026-07-07, iter 32.* Use/def scan; `_`-prefix is the sanctioned discard. FOUND A REAL DEAD STORE in an agent-generated aetherbench candidate on first run — the detector working on unseen code. |
+| **Ignored Result / unchecked error (CWE-252)** | a bare statement discards a `Result`-returning call | **E0206** | *Shipped 2026-07-07, iter 34.* Bind+match or `let _r` to discard. Non-breaking on the hand-authored corpus (uses `_r`), but FOUND 12 REAL ignored-error bugs in AI-generated candidates on first run — the "forgot to check the write" class. |
+| **Unsatisfiable refinement (impossible type)** | a `T where P` predicate no value satisfies | **E0207** | *Shipped 2026-07-07, iter 37.* Light SOUND interval analysis over `self OP const` conjunctions; refuses reversed bounds / contradictory `==`. Unanalyzable clauses widen to unbounded → never false-positives. The compiler refusing an uninhabitable type. |
+
+## Open backlog — classes NOT yet detected (detection ideas)
+
+Ranked roughly by prevalence × fit with Aether's static surface.
+
+| # | Class (CWE) | Precondition Aether could see | Detection idea | Blocker / cost |
+|---|---|---|---|---|
+| B1 | ~~Secret/PII exfil via log/disk~~ | — | **DONE (iter 3 E0712 secret→log; iter 6 E0715 PII→log+disk; iter 11 E0712 secret→disk).** Taint helpers generalized to arbitrary markers (`_marked_tainted_names`); sink sets are per-marker dicts. Remaining: taint-origin from `readFile`/network reads (not just params), and network-body egress (needs a body-carrying net sink). | small — reuse the generalized taint machinery |
+| B2 | ~~Injection: **SQL** / **command** / **template**~~ (CWE-89/78/94) | — | **DONE.** SQL (iter 4, E0713), command (iter 5, E0714), template/SSTI (iter 10, E0719). All three share the sink+literal slice; SSTI is the sanitizer-free member. | done |
+| B3 | **Missing precondition: div-by-zero / index OOB** (CWE-369/125) | `a / b` or `get(xs,i)` with no `requires b != 0` / bound guard | infer required preconditions at arithmetic/index sites; warn when caller can't prove them | inference; may be noisy — start as warning |
+| B4 | **TOCTOU / check-then-use** (CWE-367) | a validation call and the use of the validated value are not atomic | hard statically; park unless a clear pattern emerges | likely out of scope for static v1 |
+| B5 | **Unbounded resource / DoS** (CWE-400) | recursion or a loop over untrusted-sized input with no bound | flag unbounded recursion / `range` over a param without a `requires n <= K` | needs loop/recursion analysis |
+| B6 | ~~Deserialization of untrusted data~~ (CWE-502) | — | **DONE (iter 12, E0720).** `deserialize` sink refused on non-literal input; `schemaDecode(schema, data)` is the schema-pinned repair. | done |
+| B7 | ~~Open redirect~~ (CWE-601) | — | **DONE (iter 9, E0718).** `redirect` sink + `safeRedirect(host, path)` host-pinning sanitizer. | done |
+| B8 | **Broadened capability grant** | `requires capability net` grants ALL net; no per-host capability | let capabilities carry a scope (`capability net to "host/*"`) and check module grant ⊇ used scope | capability-model extension; larger |
+| B9 | ~~Cross-tenant data access / object-level authorization (IDOR)~~ (CWE-639) | — | **DONE (iter 8, E0717).** `sqlByOwner(stmt, resourceId, proof)` requires `authorizeResource(principal, action, resourceId)` bound to the SAME id (syntactic identity: identical literal or same never-rebound name). Remaining: alias/value-equality id matching (two params holding the same value, ids threaded through ops) — currently refused as unprovable (over-flag). | done |
+
+## Implications / method
+- The two shipped classes (E0710, E0711) share one **meta-pattern**:
+  *an open-by-default reach (host, path) narrowed only by a blocklist
+  elsewhere*. The fix is always **invert to allowlist / pin at the
+  boundary** and provide a sanctioned sanitizer. Backlog rows B2 and B7
+  are the same meta-pattern (sink + sanitizer + pin) and are therefore
+  the cheapest next wins — they reuse the E0711 machinery shape.
+- The next structural capability the loop needs is a **taint-lite
+  provenance pass** (untrusted-source → sensitive-sink flow). It unlocks
+  B1 and B2 at once and is the single highest-leverage addition. Strategic
+  addition — not in any v0.1 source; propose as a v0.4 pass.
+- Every backlog row must be confirmed **empirically** before building:
+  write the bad shape, verify current Aether accepts it, then eliminate
+  the class and re-run the full gate suite to exit 0.
+
+## Links
+- [[effect-system]] — E0801/E0710 live here
+- [[capability-model]] — E0701 and backlog B8
+- [[refinement-contracts]] — B.4 and backlog B3
+- [[diagnostics-and-fix-loop]] — how a new code plugs into the fix-loop
+- [[../questions/q3-what-makes-a-good-backlog-target|Q3]] — how to pick the next row from this backlog
+- [[../questions/q1-taint-marker-soundness-boundary|Q1]] — the soundness contract every taint row inherits
+- Loop state of record: `demos/case_studies/LOOP_LOG.md`
