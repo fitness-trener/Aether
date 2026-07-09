@@ -1231,6 +1231,53 @@ State carried forward: the full gate suite must stay green
 
 ---
 
+## Iteration 40 — return laundering: the lying signature (E0730)
+
+- **Author:** main thread (Fable 5). Iteration 39's surfaced residual,
+  closed the same day — the q3 cheap-win profile: near-zero new
+  machinery (one `_walk_returns` walker + the iter-39 helpers reused
+  verbatim).
+- **Class:** a function whose BODY returns a `Secret<...>`/`PII<...>`/
+  `Untrusted<...>`-carrying value while its DECLARED return type is
+  plain — the signature lies, the marker is washed off for every
+  caller. Return-direction dual of E0729.
+- **Gap confirmed first:** `function leak(pw: Secret<String>) returns
+  String do return pw end` + `print(leak(password))` → exit 0 on the
+  pre-iteration build (`gap_c_return_launder.aeth`).
+- **New diagnostic: E0730** (`check_return_laundering`): per marker,
+  skip functions with an honest marker-typed `return_type` (callers
+  taint via seeding); otherwise flag any `Return` whose value leaks the
+  marker. Sanctioned exits: declare the marker-typed return, or unwrap
+  (`reveal`/`redact`/sanitizers/`trusted`) at the return site.
+  `Authorized<T>` excluded (proof marker — plain-typed return only
+  over-restricts).
+- **The signature loop is now closed:** seeding (returns IN), E0729
+  (params IN), E0730 (returns OUT) — declared signatures are ENFORCED
+  in both directions, no longer merely trusted. "Signature-level
+  interprocedural" is now a checked contract, not an assumption.
+- **Non-breaking:** alsp corpus has zero marker files; false_positive
+  gate (fixed.aeth + clean examples) green. One known TRUE positive on
+  the ungated evidence corpus: `bench/realworld_xss/vulnerable.aeth`
+  now fires E0730 alongside E0725 (header comment updated, nothing
+  suppressed).
+- **Ratchet raised same commit:** 39→40 codes, 29→30 detectors (8bb33db).
+- **Files:** `passes/effects.py` (`_walk_returns`,
+  `check_return_laundering`), `cli.py`, `grammar/diagnostics.md` (row +
+  prose), `tests/test_effect_scope.py` (7 tests),
+  `tests/ratchet_baseline.json`, `playground/examples/25_*.aeth`,
+  `demos/case_studies/return_laundering/`, q1 + taxonomy updated.
+- **TYPE gap surfaced for next iter:** stdlib transform propagation —
+  `trim(secret)` / `padLeft(secret, …)` return plain values from stdlib
+  signatures the marker model doesn't cover: the last laundering channel
+  inside the modeled surface. Needs a stdlib marker-propagation table
+  (input-marker → output-marker per stdlib fn). Sibling residual:
+  boundary-sanitizer coarseness (any per-sink sanitizer clears the
+  generic boundary — a `sanitizeLog`'d value returned as String could
+  still XSS at an HTML sink). Both pushed to q1.
+- **Suite:** exit 0 (ratchet green at floor = current 40/30).
+
+---
+
 ## Infra — monotonic ratchet (Aether may only improve)
 
 - **Author:** main thread (Fable 5), at the human's request: guarantee the

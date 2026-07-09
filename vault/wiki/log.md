@@ -1,5 +1,11 @@
 # Operation Log (append-only — newest on top)
 
+## [2026-07-09] iter 40 | E0730 return laundering; q1 body-level residual closed
+- Loop-1 iteration 40 (same day as 39): E0730 refuses a marker-carrying return under a plain declared type — the signature loop is closed (seeding in, E0729 params, E0730 returns). Ratchet 40/30.
+- q1: body-level-return residual marked CLOSED (new Evidence row); Recommended Actions rescoped to E0717 value-equality, stdlib transform propagation, HOFs, boundary-sanitizer coarseness.
+- violation-taxonomy: E0730 row added; iter-39 row's residual list struck through accordingly.
+- Next surfaced TYPE gap: stdlib marker-propagation table (`trim(secret)` → plain String).
+
 ## [2026-07-09] iter 39 | E0729 + return-type seeding; q1 residuals appended
 - Loop-1 iteration 39 shipped (see `demos/case_studies/LOOP_LOG.md`): taint now seeds from marker-typed return signatures; E0729 refuses marker→unmarked-param laundering; ratchet 39/29.
 - q1 updated: Short Answer boundary sentence rewritten (signature-level interprocedural now IN the model), 2 Evidence rows added, Recommended Actions re-scoped to what remains (E0717 value-equality, body-level return inference, stdlib transforms).

@@ -45,6 +45,7 @@ boundary; bodies are still not analyzed across calls.
 | The trusted-dynamic over-flag has an explicit-boundary escape, not a full provenance pass | iter-13: `trusted(x)` clears E0719/E0720 (the two no-sanitizer sinks) — the dual of `reveal`/`redact`. It relaxes only, so it is non-breaking, but it is an *assertion*, not *inference*: real source-taint (auto-mark `readFile`/network reads) remains unbuilt | high |
 | Taint now seeds from marker-typed RETURN signatures | iter-39: `_marker_source_fns` (stdlib `classify`/`classifyPII`/`classifyUntrusted` + user `returns Secret<...>` decls) feeds the shared fixpoint for E0712/E0715/E0724/E0725/E0726/E0728; signature-level only — a body that returns a tainted local under a plain declared return type still launders (residual: body-level return-taint inference unbuilt) | high |
 | Marker→unmarked-param crossings are refused, not tracked | iter-39: E0729 flags Secret/PII/Untrusted into a plain param of a user-declared callee; marker-typed params are the sanctioned crossing (arg pruned in the leak walk — the callee owns the value, its return is covered by seeding). Residuals: stdlib transforms (`trim(secret)`) out of scope; HOF/function-typed callees skipped; `Authorized<T>` deliberately excluded (proof marker — seeding/laundering rules there would RELAX acceptance, the wrong direction) | high |
+| Body-level return laundering CLOSED | iter-40: E0730 refuses a marker-carrying `Return` value under a plain declared return type. With seeding + E0729 + E0730 the declared signature is enforced in BOTH directions — "signature-level" no longer means "signature-trusted". Sanctioned exits mirror E0729 (declare the marker-typed return, or unwrap at the return site) | high |
 
 ## Recommended Actions
 
@@ -52,13 +53,17 @@ boundary; bodies are still not analyzed across calls.
   contract and state its residual limit explicitly (as every prior
   iteration did). See [[q3-what-makes-a-good-backlog-target]].
 - The highest-leverage soundness upgrade was **interprocedural flow** —
-  PARTIALLY SHIPPED iter 39 the signature-level way (return-type
-  seeding + E0729 boundary refusal; see Evidence). What remains of the
-  original v0.4 ask: **value-equality / alias reasoning for E0717's
-  resource ids** (still literal-or-stable-name only), **body-level
-  return-taint inference** (a plain-typed return of a tainted local
-  launders), and **stdlib transform propagation** (`trim(secret)` is
-  outside E0729 v1 scope).
+  SHIPPED at signature level across iters 39–40 (return-type seeding,
+  E0729 param-crossing refusal, E0730 return-crossing refusal; see
+  Evidence — the signature is now enforced both directions). What
+  remains of the original v0.4 ask: **value-equality / alias reasoning
+  for E0717's resource ids** (still literal-or-stable-name only),
+  **stdlib transform propagation** (`trim(secret)` returns a plain
+  value from an unmodeled stdlib signature — the last laundering
+  channel inside the modeled surface), **HOF / function-typed callees**,
+  and **boundary-sanitizer coarseness** (any per-sink sanitizer clears
+  the generic boundary at E0729/E0730 — a `sanitizeLog`'d value
+  returned as String could still XSS at an HTML sink).
 - Never describe these passes as "sound" without the qualifier
   "within the intraprocedural, syntactic surface" — overstating is a
   Never-Do (vault manifest, runtime-vs-static honesty).
