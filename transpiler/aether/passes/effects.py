@@ -553,6 +553,52 @@ def _expr_leaks_marked(node: Any, tainted: Set[str], unwrap,
     return False
 
 
+def _fn_aliases(fn_decl: Dict[str, Any], targets: frozenset) -> Dict[str, Set[str]]:
+    """alias name -> set of target function names it may refer to, from
+    straight-line `let f = fnName` / `f = g` bindings (bare Ident
+    values; chains followed by fixpoint; conservative UNION when a name
+    is rebound). Used flag-more only — an aliased unwrapper is never
+    honored."""
+    binds: List[Tuple[str, str]] = []
+
+    def collect(node: Any):
+        if isinstance(node, dict):
+            if node.get("kind") in ("Let", "Assign") and "name" in node:
+                v = node.get("value")
+                if isinstance(v, dict) and v.get("kind") == "Ident":
+                    binds.append((node["name"], v["name"]))
+            for x in node.values():
+                collect(x)
+        elif isinstance(node, list):
+            for x in node:
+                collect(x)
+
+    collect(fn_decl.get("body", []))
+    out: Dict[str, Set[str]] = {}
+    changed = True
+    while changed:
+        changed = False
+        for name, src in binds:
+            ts = ({src} if src in targets else set()) | out.get(src, set())
+            if ts - out.get(name, set()):
+                out.setdefault(name, set()).update(ts)
+                changed = True
+    return out
+
+
+def _aliased_mask(pmask: Dict[str, Tuple[bool, ...]],
+                  aliases: Dict[str, Set[str]]) -> Dict[str, Tuple[bool, ...]]:
+    """pmask extended with alias entries — ONLY single-target aliases
+    (pruning is the accept-more direction; ambiguity must over-flag)."""
+    out = dict(pmask)
+    for a, ts in aliases.items():
+        if len(ts) == 1:
+            t = next(iter(ts))
+            if t in pmask and a not in out:
+                out[a] = pmask[t]
+    return out
+
+
 def _pattern_bind_names(pat: Any) -> Set[str]:
     """Names bound by a match pattern (BindPat leaves, recursively —
     nested constructor patterns included)."""
@@ -642,8 +688,11 @@ def check_secret_flow(ast: Dict[str, Any]) -> List[Diagnostic]:
     for d in ast.get("decls", []):
         if d.get("kind") != "FunctionDecl":
             continue
-        tainted = _secret_tainted_names(d, src_fns, pmask)
-        if not tainted and not src_fns:
+        al = _fn_aliases(d, src_fns | frozenset(pmask))
+        src_l = src_fns | frozenset(a for a, ts in al.items() if ts & src_fns)
+        pmask_l = _aliased_mask(pmask, al)
+        tainted = _secret_tainted_names(d, src_l, pmask_l)
+        if not tainted and not src_l:
             continue
         fn = d["name"]
         fpos = d.get("pos") or {"line": 0, "column": 0}
@@ -654,7 +703,7 @@ def check_secret_flow(ast: Dict[str, Any]) -> List[Diagnostic]:
             args = call.get("args") or []
             idxs = _SECRET_SINKS[sink]
             checked = args if idxs is None else [args[i] for i in idxs if i < len(args)]
-            if not any(_expr_leaks_secret(a, tainted, src_fns, pmask) for a in checked):
+            if not any(_expr_leaks_secret(a, tainted, src_l, pmask_l) for a in checked):
                 continue
             where = "logs" if sink == "print" else "persists to disk"
             pos = call.get("pos") or fpos
@@ -908,8 +957,11 @@ def check_pii_flow(ast: Dict[str, Any]) -> List[Diagnostic]:
     for d in ast.get("decls", []):
         if d.get("kind") != "FunctionDecl":
             continue
-        tainted = _marked_tainted_names(d, _PII_MARKER, _PII_REDACT, src_fns, pmask)
-        if not tainted and not src_fns:
+        al = _fn_aliases(d, src_fns | frozenset(pmask))
+        src_l = src_fns | frozenset(a for a, ts in al.items() if ts & src_fns)
+        pmask_l = _aliased_mask(pmask, al)
+        tainted = _marked_tainted_names(d, _PII_MARKER, _PII_REDACT, src_l, pmask_l)
+        if not tainted and not src_l:
             continue
         fn = d["name"]
         fpos = d.get("pos") or {"line": 0, "column": 0}
@@ -920,7 +972,7 @@ def check_pii_flow(ast: Dict[str, Any]) -> List[Diagnostic]:
             args = call.get("args") or []
             idxs = _PII_SINKS[sink]
             checked = args if idxs is None else [args[i] for i in idxs if i < len(args)]
-            if not any(_expr_leaks_marked(a, tainted, _PII_REDACT, src_fns, pmask) for a in checked):
+            if not any(_expr_leaks_marked(a, tainted, _PII_REDACT, src_l, pmask_l) for a in checked):
                 continue
             where = "logs" if sink == "print" else "persists to disk"
             pos = call.get("pos") or fpos
@@ -970,8 +1022,11 @@ def check_log_injection(ast: Dict[str, Any]) -> List[Diagnostic]:
     for d in ast.get("decls", []):
         if d.get("kind") != "FunctionDecl":
             continue
-        tainted = _marked_tainted_names(d, _UNTRUSTED_MARKER, _UNTRUSTED_SANITIZE, src_fns, pmask)
-        if not tainted and not src_fns:
+        al = _fn_aliases(d, src_fns | frozenset(pmask))
+        src_l = src_fns | frozenset(a for a, ts in al.items() if ts & src_fns)
+        pmask_l = _aliased_mask(pmask, al)
+        tainted = _marked_tainted_names(d, _UNTRUSTED_MARKER, _UNTRUSTED_SANITIZE, src_l, pmask_l)
+        if not tainted and not src_l:
             continue
         fn = d["name"]
         fpos = d.get("pos") or {"line": 0, "column": 0}
@@ -979,7 +1034,7 @@ def check_log_injection(ast: Dict[str, Any]) -> List[Diagnostic]:
             if _callee_name(call) != "print":
                 continue
             args = call.get("args") or []
-            if not any(_expr_leaks_marked(a, tainted, _UNTRUSTED_SANITIZE, src_fns, pmask) for a in args):
+            if not any(_expr_leaks_marked(a, tainted, _UNTRUSTED_SANITIZE, src_l, pmask_l) for a in args):
                 continue
             pos = call.get("pos") or fpos
             diags.append(Diagnostic(
@@ -1024,8 +1079,11 @@ def check_reflected_xss(ast: Dict[str, Any]) -> List[Diagnostic]:
     for d in ast.get("decls", []):
         if d.get("kind") != "FunctionDecl":
             continue
-        tainted = _marked_tainted_names(d, _UNTRUSTED_MARKER, _HTML_ESCAPE, src_fns, pmask)
-        if not tainted and not src_fns:
+        al = _fn_aliases(d, src_fns | frozenset(pmask))
+        src_l = src_fns | frozenset(a for a, ts in al.items() if ts & src_fns)
+        pmask_l = _aliased_mask(pmask, al)
+        tainted = _marked_tainted_names(d, _UNTRUSTED_MARKER, _HTML_ESCAPE, src_l, pmask_l)
+        if not tainted and not src_l:
             continue
         fn = d["name"]
         fpos = d.get("pos") or {"line": 0, "column": 0}
@@ -1033,7 +1091,7 @@ def check_reflected_xss(ast: Dict[str, Any]) -> List[Diagnostic]:
             if _callee_name(call) not in _HTML_SINKS:
                 continue
             args = call.get("args") or []
-            if not any(_expr_leaks_marked(a, tainted, _HTML_ESCAPE, src_fns, pmask) for a in args):
+            if not any(_expr_leaks_marked(a, tainted, _HTML_ESCAPE, src_l, pmask_l) for a in args):
                 continue
             pos = call.get("pos") or fpos
             diags.append(Diagnostic(
@@ -1080,8 +1138,11 @@ def check_header_injection(ast: Dict[str, Any]) -> List[Diagnostic]:
     for d in ast.get("decls", []):
         if d.get("kind") != "FunctionDecl":
             continue
-        tainted = _marked_tainted_names(d, _UNTRUSTED_MARKER, _HEADER_SANITIZE, src_fns, pmask)
-        if not tainted and not src_fns:
+        al = _fn_aliases(d, src_fns | frozenset(pmask))
+        src_l = src_fns | frozenset(a for a, ts in al.items() if ts & src_fns)
+        pmask_l = _aliased_mask(pmask, al)
+        tainted = _marked_tainted_names(d, _UNTRUSTED_MARKER, _HEADER_SANITIZE, src_l, pmask_l)
+        if not tainted and not src_l:
             continue
         fn = d["name"]
         fpos = d.get("pos") or {"line": 0, "column": 0}
@@ -1089,7 +1150,7 @@ def check_header_injection(ast: Dict[str, Any]) -> List[Diagnostic]:
             if _callee_name(call) not in _HEADER_SINKS:
                 continue
             args = call.get("args") or []
-            if not any(_expr_leaks_marked(a, tainted, _HEADER_SANITIZE, src_fns, pmask) for a in args):
+            if not any(_expr_leaks_marked(a, tainted, _HEADER_SANITIZE, src_l, pmask_l) for a in args):
                 continue
             pos = call.get("pos") or fpos
             diags.append(Diagnostic(
@@ -1136,8 +1197,11 @@ def check_csv_injection(ast: Dict[str, Any]) -> List[Diagnostic]:
     for d in ast.get("decls", []):
         if d.get("kind") != "FunctionDecl":
             continue
-        tainted = _marked_tainted_names(d, _UNTRUSTED_MARKER, _CSV_ESCAPE, src_fns, pmask)
-        if not tainted and not src_fns:
+        al = _fn_aliases(d, src_fns | frozenset(pmask))
+        src_l = src_fns | frozenset(a for a, ts in al.items() if ts & src_fns)
+        pmask_l = _aliased_mask(pmask, al)
+        tainted = _marked_tainted_names(d, _UNTRUSTED_MARKER, _CSV_ESCAPE, src_l, pmask_l)
+        if not tainted and not src_l:
             continue
         fn = d["name"]
         fpos = d.get("pos") or {"line": 0, "column": 0}
@@ -1145,7 +1209,7 @@ def check_csv_injection(ast: Dict[str, Any]) -> List[Diagnostic]:
             if _callee_name(call) not in _CSV_SINKS:
                 continue
             args = call.get("args") or []
-            if not any(_expr_leaks_marked(a, tainted, _CSV_ESCAPE, src_fns, pmask) for a in args):
+            if not any(_expr_leaks_marked(a, tainted, _CSV_ESCAPE, src_l, pmask_l) for a in args):
                 continue
             pos = call.get("pos") or fpos
             diags.append(Diagnostic(
@@ -1206,50 +1270,57 @@ def check_marker_boundary(ast: Dict[str, Any]) -> List[Diagnostic]:
         src_fns = _marker_source_fns(ast, marker)
         pmask = _marker_param_mask(ast, marker)
         for d in decls.values():
-            tainted = _marked_tainted_names(d, marker, unwraps, src_fns, pmask)
-            if not tainted and not src_fns:
+            al = _fn_aliases(d, src_fns | frozenset(pmask))
+            src_l = src_fns | frozenset(a for a, ts in al.items() if ts & src_fns)
+            pmask_l = _aliased_mask(pmask, al)
+            tainted = _marked_tainted_names(d, marker, unwraps, src_l, pmask_l)
+            if not tainted and not src_l:
                 continue
             fn = d["name"]
             fpos = d.get("pos") or {"line": 0, "column": 0}
             for call in _walk_calls(d.get("body", [])):
-                callee = decls.get(_callee_name(call))
-                if callee is None:
+                cname = _callee_name(call)
+                direct = decls.get(cname)
+                cands = [direct] if direct is not None else \
+                    [decls[t] for t in sorted(al.get(cname, set())) if t in decls]
+                if not cands:
                     continue  # stdlib / unknown: covered by sink passes
-                params = callee.get("params", [])
-                for i, arg in enumerate(call.get("args") or []):
-                    if i >= len(params):
-                        break
-                    if _is_marker_type(params[i].get("type"), marker):
-                        continue  # marker declared — taint travels
-                    if not _expr_leaks_marked(arg, tainted, unwraps,
-                                              src_fns, pmask):
-                        continue
-                    pos = call.get("pos") or fpos
-                    diags.append(Diagnostic(
-                        code="E0729",
-                        category="capability",
-                        severity="error",
-                        message=(
-                            f"function {fn!r} passes a {marker}<...>-marked "
-                            f"value to parameter {params[i].get('name')!r} of "
-                            f"{callee['name']!r}, which is not typed "
-                            f"{marker}<...>; inside the callee the marker is "
-                            f"erased and every sink check goes blind "
-                            f"(taint laundering)"
-                        ),
-                        position=Position(pos.get("line", 0),
-                                          pos.get("column", 0)),
-                        suggestion=(
-                            f"type the parameter as {marker}<...> so the "
-                            f"marker travels with the value, or unwrap "
-                            f"explicitly at the call site via one of: "
-                            + ", ".join(sorted(unwraps)) + "(...)"
-                        ),
-                        confidence=1.0,
-                        extra={"function": fn, "callee": callee["name"],
-                               "param": params[i].get("name"),
-                               "marker": marker},
-                    ))
+                for callee in cands:
+                    params = callee.get("params", [])
+                    for i, arg in enumerate(call.get("args") or []):
+                        if i >= len(params):
+                            break
+                        if _is_marker_type(params[i].get("type"), marker):
+                            continue  # marker declared — taint travels
+                        if not _expr_leaks_marked(arg, tainted, unwraps,
+                                                  src_l, pmask_l):
+                            continue
+                        pos = call.get("pos") or fpos
+                        diags.append(Diagnostic(
+                            code="E0729",
+                            category="capability",
+                            severity="error",
+                            message=(
+                                f"function {fn!r} passes a {marker}<...>-marked "
+                                f"value to parameter {params[i].get('name')!r} of "
+                                f"{callee['name']!r}, which is not typed "
+                                f"{marker}<...>; inside the callee the marker is "
+                                f"erased and every sink check goes blind "
+                                f"(taint laundering)"
+                            ),
+                            position=Position(pos.get("line", 0),
+                                              pos.get("column", 0)),
+                            suggestion=(
+                                f"type the parameter as {marker}<...> so the "
+                                f"marker travels with the value, or unwrap "
+                                f"explicitly at the call site via one of: "
+                                + ", ".join(sorted(unwraps)) + "(...)"
+                            ),
+                            confidence=1.0,
+                            extra={"function": fn, "callee": callee["name"],
+                                   "param": params[i].get("name"),
+                                   "marker": marker},
+                        ))
     return diags
 
 
@@ -1286,8 +1357,11 @@ def check_return_laundering(ast: Dict[str, Any]) -> List[Diagnostic]:
                 continue
             if _is_marker_type(d.get("return_type"), marker):
                 continue  # honest signature — callers taint via seeding
-            tainted = _marked_tainted_names(d, marker, unwraps, src_fns, pmask)
-            if not tainted and not src_fns:
+            al = _fn_aliases(d, src_fns | frozenset(pmask))
+            src_l = src_fns | frozenset(a for a, ts in al.items() if ts & src_fns)
+            pmask_l = _aliased_mask(pmask, al)
+            tainted = _marked_tainted_names(d, marker, unwraps, src_l, pmask_l)
+            if not tainted and not src_l:
                 continue
             fn = d["name"]
             fpos = d.get("pos") or {"line": 0, "column": 0}
@@ -1297,7 +1371,7 @@ def check_return_laundering(ast: Dict[str, Any]) -> List[Diagnostic]:
                 if val is None:
                     continue
                 if not _expr_leaks_marked(val, tainted, unwraps,
-                                          src_fns, pmask):
+                                          src_l, pmask_l):
                     continue
                 pos = ret.get("pos") or fpos
                 diags.append(Diagnostic(
