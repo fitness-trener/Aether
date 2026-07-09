@@ -23,7 +23,7 @@ from aether.passes.effects import (                   # noqa: E402
     check_template_injection, check_deserialization, check_cleartext_transmission,
     check_metadata_fetch, check_hardcoded_secret, check_log_injection,
     check_reflected_xss, check_header_injection, check_xxe,
-    check_csv_injection, check_marker_boundary,
+    check_csv_injection, check_marker_boundary, check_return_laundering,
     _net_authority_wildcarded,
 )
 
@@ -1582,6 +1582,106 @@ end
     print("E0729: stdlib callee skipped (v1 scope)")
 
 
+# --- E0730 return laundering: tainted value under a plain return type ---
+# The dual of E0729 closes the signature loop: seeding trusts declared
+# return types, so a body that RETURNS a marker-carrying value under a
+# plain declared type must be refused - otherwise the signature lies.
+
+def _rl_codes(src: str):
+    ast = parse(src, "<rl>")
+    return [d.code for d in check_return_laundering(ast)]
+
+
+RETURN_LAUNDER_SRC = """
+function leak(pw: Secret<String>) returns String
+  effects pure
+do
+  return pw
+end
+"""
+
+
+def test_secret_return_laundered_rejected():
+    assert _rl_codes(RETURN_LAUNDER_SRC) == ["E0730"], \
+        "returning a Secret under a plain String return type washes the marker"
+    print("E0730: secret returned under plain type rejected")
+
+
+def test_marker_return_type_clean():
+    src = """
+function getToken() returns Secret<String>
+  effects pure
+do
+  return classify("tok_live_secret")
+end
+"""
+    assert _rl_codes(src) == [], \
+        "a marker-typed return declaration is the honest signature"
+    print("E0730: marker-typed return declaration passes clean")
+
+
+def test_revealed_return_clean():
+    src = """
+function audit(pw: Secret<String>) returns String
+  effects pure
+do
+  return reveal(pw)
+end
+"""
+    assert _rl_codes(src) == [], "reveal() at the return site is sanctioned"
+    print("E0730: reveal() at return passes clean")
+
+
+def test_untrusted_return_laundered_rejected():
+    src = """
+function passthru(q: Untrusted<String>) returns String
+  effects pure
+do
+  return q
+end
+"""
+    assert _rl_codes(src) == ["E0730"], \
+        "returning an Untrusted under a plain type washes the danger flag"
+    print("E0730: untrusted returned under plain type rejected")
+
+
+def test_source_call_return_laundered_rejected():
+    src = """
+function mint() returns String
+  effects pure
+do
+  return classify("tok_live_secret")
+end
+"""
+    assert _rl_codes(src) == ["E0730"], \
+        "a source-call result returned under a plain type is laundering"
+    print("E0730: source call returned under plain type rejected")
+
+
+def test_plain_return_clean():
+    src = """
+function greet(name: String) returns String
+  effects pure
+do
+  return "hello " + name
+end
+"""
+    assert _rl_codes(src) == [], "no marker involved - clean"
+    print("E0730: plain function passes clean")
+
+
+def test_unit_function_clean():
+    src = """
+function emitAudit(pw: Secret<String>) returns Unit
+  effects log
+do
+  print(reveal(pw))
+end
+"""
+    assert _rl_codes(src) == [], "no value-carrying return - nothing to launder"
+    print("E0730: Unit function passes clean")
+
+
 if __name__ == "__main__":
     test_authority_predicate()
     test_broad_rejected()
@@ -1684,4 +1784,11 @@ if __name__ == "__main__":
     test_untrusted_laundered_rejected()
     test_pii_source_call_laundered_rejected()
     test_stdlib_callee_not_flagged()
-    print("E0710..E0729 ALL REACH-SCOPE TESTS PASS")
+    test_secret_return_laundered_rejected()
+    test_marker_return_type_clean()
+    test_revealed_return_clean()
+    test_untrusted_return_laundered_rejected()
+    test_source_call_return_laundered_rejected()
+    test_plain_return_clean()
+    test_unit_function_clean()
+    print("E0710..E0730 ALL REACH-SCOPE TESTS PASS")
