@@ -1,0 +1,17 @@
+// Return laundering — the fixed shape. The return type is declared
+// Secret<String>, so the marker travels with the value to every caller;
+// the only disclosure is an explicit, auditable reveal().
+//
+// aether check: OK (0 diagnostics)
+
+function getSession(token: Secret<String>) returns Secret<String>
+  effects pure
+do
+  return token
+end
+
+function main(token: Secret<String>) returns Unit
+  effects log
+do
+  print("session ok; audit=" + reveal(getSession(token)))
+end

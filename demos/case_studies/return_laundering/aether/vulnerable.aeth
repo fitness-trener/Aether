@@ -1,0 +1,18 @@
+// Return laundering — the vulnerable shape (iteration 40). getSession
+// takes a properly marked Secret<String> and returns it as a plain
+// String: the signature lies, the marker is washed off, and the caller
+// prints a live credential that no sink pass can see.
+//
+// aether check: [E0730] (marked value returned under a plain type)
+
+function getSession(token: Secret<String>) returns String
+  effects pure
+do
+  return token
+end
+
+function main(token: Secret<String>) returns Unit
+  effects log
+do
+  print(getSession(token))
+end

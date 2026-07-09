@@ -1,0 +1,24 @@
+// Example 25 — Return laundering (iter 40). getSession properly receives
+// a Secret<String>, but its declared return type is plain String: the
+// marker is washed off at the signature, and every caller - including
+// the print below - handles a live credential that looks like an
+// ordinary string. Aether refuses the lying signature itself: [E0730].
+// Fix: declare `returns Secret<String>` (taint travels to callers), or
+// reveal(...) at the return site for an explicit, auditable disclosure.
+
+module SessionService
+  requires capability log
+  exports main
+end
+
+function getSession(token: Secret<String>) returns String
+  effects pure
+do
+  return token
+end
+
+function main(token: Secret<String>) returns Unit
+  effects log
+do
+  print(getSession(token))
+end
