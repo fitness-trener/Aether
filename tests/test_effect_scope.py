@@ -1794,6 +1794,131 @@ end
     print("E0730: match-destructured return laundering rejected")
 
 
+# --- Iter 42: function-alias laundering (gaps E / E2) --------------------
+# `let f = logIt; f(password)` bypassed E0729's callee lookup, and
+# `let f = getToken; f()` defeated return-type seeding - both false
+# accepts. Aliases are resolved conservatively: flag-more only; an
+# aliased unwrapper (let r = reveal) is deliberately NOT honored.
+
+FN_ALIAS_LAUNDER_SRC = """
+function logIt(msg: String) returns Unit
+  effects log
+do
+  print(msg)
+end
+
+function main(password: Secret<String>) returns Unit
+  effects log
+do
+  let f = logIt
+  f(password)
+end
+"""
+
+
+def test_fn_alias_launder_rejected():
+    assert _mb_codes(FN_ALIAS_LAUNDER_SRC) == ["E0729"], \
+        "an aliased callee with a plain param must still refuse the marker"
+    print("E0729: function-alias laundering rejected")
+
+
+def test_fn_alias_chain_rejected():
+    src = """
+function logIt(msg: String) returns Unit
+  effects log
+do
+  print(msg)
+end
+
+function main(password: Secret<String>) returns Unit
+  effects log
+do
+  let f = logIt
+  let g = f
+  g(password)
+end
+"""
+    assert _mb_codes(src) == ["E0729"], \
+        "alias chains (let g = f) must resolve to the target function"
+    print("E0729: alias chain rejected")
+
+
+def test_fn_alias_marked_param_clean():
+    src = """
+function logIt(msg: Secret<String>) returns Unit
+  effects log
+do
+  print(reveal(msg))
+end
+
+function main(password: Secret<String>) returns Unit
+  effects log
+do
+  let f = logIt
+  f(password)
+end
+"""
+    assert _mb_codes(src) == [], \
+        "single-target alias of a marker-param fn is the sanctioned crossing"
+    print("E0729: alias of marker-param fn passes clean")
+
+
+def test_source_alias_seeding_rejected():
+    src = """
+function getToken() returns Secret<String>
+  effects pure
+do
+  return classify("tok_live_secret")
+end
+
+function main() returns Unit
+  effects log
+do
+  let f = getToken
+  let t: Secret<String> = f()
+  print(t)
+end
+"""
+    assert _sec_codes(src) == ["E0712"], \
+        "a source call through an alias must still seed taint"
+    print("E0712: source-alias seeding rejected")
+
+
+def test_fn_alias_clean_arg_clean():
+    src = """
+function logIt(msg: String) returns Unit
+  effects log
+do
+  print(msg)
+end
+
+function main(password: Secret<String>) returns Unit
+  effects log
+do
+  let f = logIt
+  f("static text")
+end
+"""
+    assert _mb_codes(src) == [], "an alias call with a clean arg is fine"
+    print("E0729: alias call with clean arg passes clean")
+
+
+def test_unwrap_alias_not_honored():
+    # Deliberate over-flag: an aliased reveal does NOT clear taint - the
+    # sanctioned exits are recognized by name at the call site only.
+    src = """
+function main(pw: Secret<String>) returns Unit
+  effects log
+do
+  let r = reveal
+  print(r(pw))
+end
+"""
+    assert _sec_codes(src) == ["E0712"], \
+        "aliasing an unwrapper must NOT clear taint (over-flag by design)"
+    print("E0712: aliased unwrapper still flagged (documented over-flag)")
+
+
 if __name__ == "__main__":
     test_authority_predicate()
     test_broad_rejected()
@@ -1908,4 +2033,10 @@ if __name__ == "__main__":
     test_match_clean_scrutinee_clean()
     test_match_revealed_arm_clean()
     test_match_destructured_return_laundered_rejected()
+    test_fn_alias_launder_rejected()
+    test_fn_alias_chain_rejected()
+    test_fn_alias_marked_param_clean()
+    test_source_alias_seeding_rejected()
+    test_fn_alias_clean_arg_clean()
+    test_unwrap_alias_not_honored()
     print("E0710..E0730 ALL REACH-SCOPE TESTS PASS")
