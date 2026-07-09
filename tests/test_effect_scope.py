@@ -1682,6 +1682,118 @@ end
     print("E0730: Unit function passes clean")
 
 
+# --- Iter 41: taint through match-arm destructuring ----------------------
+# A binding introduced by a match pattern over a tainted scrutinee must
+# be tainted. Pre-fix this was a FALSE ACCEPT (the contract-breach
+# class): case Some(v) do print(v) leaked a wrapped Secret at exit 0.
+
+MATCH_LEAK_SRC = """
+function f(pw: Secret<String>) returns Unit
+  effects log
+do
+  let o: Option<Secret<String>> = Some(pw)
+  match o do
+    case Some(v) do
+      print(v)
+    end
+    case None() do
+      print("none")
+    end
+  end
+end
+"""
+
+
+def test_match_destructured_secret_rejected():
+    assert _sec_codes(MATCH_LEAK_SRC) == ["E0712"], \
+        "a binding destructured from a tainted scrutinee must be tainted"
+    print("E0712: match-destructured secret rejected")
+
+
+def test_match_destructured_untrusted_rejected():
+    src = """
+function f(q: Untrusted<String>) returns Unit
+  effects log
+do
+  let o: Option<Untrusted<String>> = Some(q)
+  match o do
+    case Some(v) do
+      print(v)
+    end
+    case None() do
+      print("none")
+    end
+  end
+end
+"""
+    assert _li_codes(src) == ["E0724"], \
+        "untrusted destructured from a tainted Option must stay untrusted"
+    print("E0724: match-destructured untrusted rejected")
+
+
+def test_match_clean_scrutinee_clean():
+    src = """
+function f() returns Unit
+  effects log
+do
+  let o: Option<String> = Some("plain")
+  match o do
+    case Some(v) do
+      print(v)
+    end
+    case None() do
+      print("none")
+    end
+  end
+end
+"""
+    assert _sec_codes(src) == [] and _li_codes(src) == [], \
+        "destructuring an untainted scrutinee must not taint the binding"
+    print("E0712/E0724: clean scrutinee destructure passes clean")
+
+
+def test_match_revealed_arm_clean():
+    src = """
+function f(pw: Secret<String>) returns Unit
+  effects log
+do
+  let o: Option<Secret<String>> = Some(pw)
+  match o do
+    case Some(v) do
+      print(reveal(v))
+    end
+    case None() do
+      print("none")
+    end
+  end
+end
+"""
+    assert _sec_codes(src) == [], \
+        "reveal() of the destructured binding is the sanctioned exit"
+    print("E0712: reveal() of destructured binding passes clean")
+
+
+def test_match_destructured_return_laundered_rejected():
+    src = """
+function f(pw: Secret<String>) returns String
+  effects pure
+do
+  let o: Option<Secret<String>> = Some(pw)
+  match o do
+    case Some(v) do
+      return v
+    end
+    case None() do
+      return "none"
+    end
+  end
+end
+"""
+    assert _rl_codes(src) == ["E0730"], \
+        "returning a destructured tainted binding under a plain type launders"
+    print("E0730: match-destructured return laundering rejected")
+
+
 if __name__ == "__main__":
     test_authority_predicate()
     test_broad_rejected()
@@ -1791,4 +1903,9 @@ if __name__ == "__main__":
     test_source_call_return_laundered_rejected()
     test_plain_return_clean()
     test_unit_function_clean()
+    test_match_destructured_secret_rejected()
+    test_match_destructured_untrusted_rejected()
+    test_match_clean_scrutinee_clean()
+    test_match_revealed_arm_clean()
+    test_match_destructured_return_laundered_rejected()
     print("E0710..E0730 ALL REACH-SCOPE TESTS PASS")
