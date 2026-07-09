@@ -1226,6 +1226,79 @@ def check_marker_boundary(ast: Dict[str, Any]) -> List[Diagnostic]:
 
 
 # ----------------------------------------------------------------------
+# E0730 — return laundering: tainted value under a plain return type
+# ----------------------------------------------------------------------
+
+def _walk_returns(node: Any):
+    """Yield every Return node in a body (generic dict/list walk)."""
+    if isinstance(node, dict):
+        if node.get("kind") == "Return":
+            yield node
+        for v in node.values():
+            yield from _walk_returns(v)
+    elif isinstance(node, list):
+        for x in node:
+            yield from _walk_returns(x)
+
+
+def check_return_laundering(ast: Dict[str, Any]) -> List[Diagnostic]:
+    """Return E0730 diagnostics for a function that RETURNS a
+    marker-carrying value while its declared return type does not carry
+    the marker. The dual of E0729: seeding trusts declared return types,
+    so a plain-typed return of a tainted value makes the signature lie
+    and washes the marker for every caller. Sanctioned exits: declare
+    the marker-typed return (taint then travels via seeding), or unwrap
+    at the return site. Authorized<T> excluded (proof marker)."""
+    diags: List[Diagnostic] = []
+    for marker, unwraps in _boundary_markers().items():
+        src_fns = _marker_source_fns(ast, marker)
+        pmask = _marker_param_mask(ast, marker)
+        for d in ast.get("decls", []):
+            if d.get("kind") != "FunctionDecl":
+                continue
+            if _is_marker_type(d.get("return_type"), marker):
+                continue  # honest signature — callers taint via seeding
+            tainted = _marked_tainted_names(d, marker, unwraps, src_fns, pmask)
+            if not tainted and not src_fns:
+                continue
+            fn = d["name"]
+            fpos = d.get("pos") or {"line": 0, "column": 0}
+            declared = (d.get("return_type") or {}).get("name", "Unit")
+            for ret in _walk_returns(d.get("body", [])):
+                val = ret.get("value")
+                if val is None:
+                    continue
+                if not _expr_leaks_marked(val, tainted, unwraps,
+                                          src_fns, pmask):
+                    continue
+                pos = ret.get("pos") or fpos
+                diags.append(Diagnostic(
+                    code="E0730",
+                    category="capability",
+                    severity="error",
+                    message=(
+                        f"function {fn!r} returns a {marker}<...>-marked "
+                        f"value but its declared return type "
+                        f"({declared}) does not carry the marker; every "
+                        f"caller receives the value with the marker "
+                        f"washed off (return laundering)"
+                    ),
+                    position=Position(pos.get("line", 0),
+                                      pos.get("column", 0)),
+                    suggestion=(
+                        f"declare the return type as {marker}<...> so "
+                        f"taint travels to callers, or unwrap explicitly "
+                        f"at the return site via one of: "
+                        + ", ".join(sorted(unwraps)) + "(...)"
+                    ),
+                    confidence=1.0,
+                    extra={"function": fn, "marker": marker,
+                           "declared_return": declared},
+                ))
+    return diags
+
+
+# ----------------------------------------------------------------------
 # E0202 — non-exhaustive match on a union (unhandled variant)
 # ----------------------------------------------------------------------
 # Aether's `match` is exhaustive at RUNTIME (a missed variant raises). This

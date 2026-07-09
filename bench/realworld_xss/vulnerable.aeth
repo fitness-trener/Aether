@@ -1,0 +1,19 @@
+// Real-world validation — reflected XSS (CWE-79), the Express /search
+// shape in `express_repro.js`: a request query param reflected into the
+// HTML response unescaped, so `<script>` runs in the victim's browser.
+//
+// Run:  aether check vulnerable.aeth   -> E0725 (+ E0730 since iter 40:
+//       the untrusted value is also returned under a plain String type)
+
+function search(q: Untrusted<String>) returns String
+  effects pure
+do
+  // Models res.send("<h1>Results for " + q + "</h1>").
+  return htmlResponse("<h1>Results for " + q + "</h1>")
+end
+
+function main() returns Unit
+  effects log
+do
+  print(search(classifyUntrusted("<script>steal(document.cookie)</script>")))
+end

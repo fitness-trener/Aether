@@ -158,6 +158,7 @@ Bench-harness only. The CLI does not currently enforce timeouts;
 | **E0727** | a `parseXml` argument is untrusted (non-literal) instead of a `parseXmlSafe(data)` call — XML external entity injection (file read / SSRF, CWE-611) | `function`, `sink`, `reason` |
 | **E0728** | an `Untrusted<...>`-marked value reaches a CSV cell (`csvCell`) without `csvEscape(...)` — spreadsheet formula injection (CWE-1236) | `function`, `sink` |
 | **E0729** | a `Secret<...>`/`PII<...>`/`Untrusted<...>`-marked value is passed to a user-function parameter not typed with that marker — the callee holds the value with the marker erased, blinding every downstream sink check (taint laundering). Sanctioned exits: the marker's unwrapper (`reveal`/`redact`/the per-sink sanitizers/`trusted`) at the call site, or a marker-typed parameter | `function`, `callee`, `param`, `marker` |
+| **E0730** | a function returns a `Secret<...>`/`PII<...>`/`Untrusted<...>`-carrying value while its declared return type does not carry the marker — every caller receives the value with the marker washed off (return laundering, the dual of E0729). Sanctioned exits: declare the marker-typed return, or unwrap (`reveal`/`redact`/the per-sink sanitizers/`trusted`) at the return site | `function`, `marker`, `declared_return` |
 
 E0701 comes from the B.3 default-on capability pass. E0702/E0703/E0704
 come from the D.3 module-validation pass — also default-on, opt out
@@ -200,6 +201,10 @@ dual guard is **E0729**: a marked value passed to a parameter NOT typed
 with the marker is refused as laundering. `Authorized<T>` (E0716/E0717)
 keeps its own machinery and is deliberately outside both rules — it is a
 proof marker, and widening acceptance there would relax, not tighten.
+Iteration 40 closes the remaining direction with **E0730**: a body that
+returns a marker-carrying value under a plain declared return type is
+refused, so declared signatures are enforced on the way out as well as
+trusted on the way in.
 
 E0713 is the injection sibling in the same reach-scope pass. The
 `sqlQuery` sink (effect `db.query`) must receive a fixed string literal

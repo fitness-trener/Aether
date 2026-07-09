@@ -34,7 +34,7 @@ from .passes.effects import (
     check_template_injection, check_deserialization, check_cleartext_transmission,
     check_metadata_fetch, check_hardcoded_secret, check_log_injection,
     check_reflected_xss, check_header_injection, check_xxe,
-    check_csv_injection, check_marker_boundary,
+    check_csv_injection, check_marker_boundary, check_return_laundering,
     check_exhaustiveness, check_unreachable_arms,
     check_dead_code, check_unused_binding, check_ignored_result,
     check_unsatisfiable_refinement,
@@ -222,7 +222,8 @@ def _run_effect_scope_check(ast, as_json) -> int:
              + check_metadata_fetch(ast) + check_hardcoded_secret(ast)
              + check_log_injection(ast) + check_reflected_xss(ast)
              + check_header_injection(ast) + check_xxe(ast)
-             + check_csv_injection(ast) + check_marker_boundary(ast))
+             + check_csv_injection(ast) + check_marker_boundary(ast)
+             + check_return_laundering(ast))
     if not diags:
         return 0
     for d in diags:
