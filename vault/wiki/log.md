@@ -1,5 +1,10 @@
 # Operation Log (append-only — newest on top)
 
+## [2026-07-09] iter 42 | function-alias laundering closed (BUG-002); HOF residual re-framed; E0717 precision probe-confirmed
+- Three probes before code: gap E (`let f = logIt; f(password)` bypassed E0729, exit 0) and gap E2 (`let f = getToken; f()` defeated seeding, exit 0) — both real misses, both closed via `_fn_aliases` applied flag-more only (aliased unwrappers deliberately not honored). BUGS.md BUG-002 [FIXED f6b8bf3], gate prints 2 ratchet-locked fixed bugs.
+- Grammar finding: no function types exist in `grammar.ebnf` — iter-41's "HOF/function-typed callees" residual re-framed to the alias surface and closed; q1 updated.
+- Third probe confirmed E0717 copy-alias over-flag (precision target, relax direction) — enters q1 backlog probe-confirmed, deferred behind miss-side work.
+
 ## [2026-07-09] iter 41 | match-destructure false accept fixed; stdlib-transform residual proven phantom
 - Probe-first iteration: iter-40's "stdlib transform propagation" residual DISPROVED empirically (generic leak-walk recursion already over-flags `trim(secret)` everywhere) — no-op avoided; same probe session found a real FALSE ACCEPT: match-arm bindings dropped taint (`case Some(v) do print(v)` over a wrapped Secret, exit 0). Fixed in the shared fixpoint (all-arm conservative propagation, 8 passes widened); BUGS.md BUG-001 [FIXED 8d928d9], ratchet-locked.
 - q1: two Evidence rows (miss closed; phantom correction) + Recommended Actions rescoped (E0717 value-equality, HOFs, sanitizer coarseness). New method lesson recorded: probe residuals before they enter the backlog, exactly like gaps.

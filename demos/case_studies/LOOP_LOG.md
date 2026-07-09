@@ -1322,6 +1322,50 @@ State carried forward: the full gate suite must stay green
 
 ---
 
+## Iteration 42 — function-alias laundering (two false accepts closed)
+
+- **Author:** main thread (Fable 5). Probe-first, per the iter-41 lesson.
+  THREE probes run before any code:
+  1. **Gap E** — `let f = logIt; f(password)`: E0729's callee lookup is
+     by declared name, "f" resolves to nothing → exit 0, MISS.
+  2. **Gap E2** — `let f = getToken; let t = f(); print(t)`: the source
+     set is keyed by declared names → exit 0, MISS.
+  3. **E0717 copy-alias** — `let id2 = docId` + proof on `docId` →
+     E0717 FIRES (over-flag confirmed): a PRECISION target, recorded,
+     deferred behind the misses (repro `probe_e0717_alias.aeth`).
+- **Grammar finding (re-frames iter-41's residual):** `grammar.ebnf`
+  has NO function types — "HOF / function-typed callees" was
+  mis-framed; the only expressible indirect-call surface is a function
+  ALIAS (`let f = fnName`), and E0716 already refuses gated-fn escape
+  for Authorized. This iteration closes the alias surface for the
+  confidentiality markers; nothing HOF-shaped remains expressible.
+- **Fix:** per-function alias map `_fn_aliases` (straight-line bare-
+  Ident bindings, chains via fixpoint, conservative UNION on
+  rebinding), applied FLAG-MORE only: aliases resolving to a source fn
+  join the local source set; single-target aliases extend the
+  sanctioned-crossing mask (`_aliased_mask` — ambiguity must
+  over-flag); E0729 checks EVERY function an alias may name. An aliased
+  unwrapper (`let r = reveal`) is deliberately NOT honored — sanctioned
+  exits are recognized by name at the call site (the audit contract);
+  the over-flag is documented and pinned by a test.
+- **BUGS.md BUG-002** `[FIXED f6b8bf3]` with `test:` line — gate prints
+  "2 FIXED bug(s), all with a live regression test".
+- **No new diagnostic code** → floors unchanged (40/30). 6 new tests;
+  playground example 27.
+- **Files:** `passes/effects.py` (`_fn_aliases`, `_aliased_mask`,
+  per-decl locals in 8 passes, E0729 multi-target callee resolution),
+  `tests/test_effect_scope.py`, `BUGS.md`, `grammar/diagnostics.md`
+  (prose), `playground/examples/27_*.aeth`, q1 + this log.
+- **TYPE gap surfaced for next iter:** E0717 value-equality / copy-alias
+  precision — probe-confirmed TODAY (over-flag on `let id2 = id1`); the
+  fix is copy-tracking for resource ids, a RELAX-direction change that
+  must keep the entire E0716/E0717 test wall green and the IDOR case
+  study refusing. Sibling: boundary-sanitizer coarseness (probe for a
+  MISS first; if none, it is doctrine, not backlog).
+- **Suite:** exit 0.
+
+---
+
 ## Infra — monotonic ratchet (Aether may only improve)
 
 - **Author:** main thread (Fable 5), at the human's request: guarantee the

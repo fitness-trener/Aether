@@ -48,6 +48,8 @@ boundary; bodies are still not analyzed across calls.
 | Body-level return laundering CLOSED | iter-40: E0730 refuses a marker-carrying `Return` value under a plain declared return type. With seeding + E0729 + E0730 the declared signature is enforced in BOTH directions — "signature-level" no longer means "signature-trusted". Sanctioned exits mirror E0729 (declare the marker-typed return, or unwrap at the return site) | high |
 | Match-destructure MISS found & CLOSED | iter-41 (BUGS.md BUG-001, fixed 8d928d9): arm bindings over a tainted scrutinee were fresh untainted names — a genuine FALSE ACCEPT inside the modeled surface, the contract-breach class. Fixed by conservative all-arm propagation in `_marked_tainted_names`; regression ratchet-locked via the fixed-bugs layer | high |
 | CORRECTION: "stdlib transform propagation" residual was PHANTOM | iter-41 probe: `print(trim(pw))` and `let t = trim(pw); print(t)` both already fire E0712 — the leak walk's generic recursion into unmodeled calls over-flags stdlib transforms at sinks, bindings, and returns. The iter-40 residual note was written without a probe. **Lesson: residuals enter the backlog only probe-confirmed, exactly like gaps** | high |
+| Function-alias laundering MISS found & CLOSED | iter-42 (BUGS.md BUG-002, fixed f6b8bf3): callee/source resolution was by declared name only — `let f = logIt; f(secret)` bypassed E0729 and `let f = getToken; f()` defeated seeding, both exit 0. Fixed by per-function alias resolution (`_fn_aliases`) applied flag-more only; single-target aliases extend the sanctioned-crossing mask; aliased unwrappers deliberately NOT honored (documented, test-pinned over-flag) | high |
+| HOF residual RE-FRAMED and closed | iter-42 grammar check: `grammar.ebnf` has no function types — "HOF/function-typed callees" was never expressible; the real indirect-call surface was function ALIASES, now resolved. Nothing HOF-shaped remains in the language | high |
 
 ## Recommended Actions
 
@@ -58,16 +60,18 @@ boundary; bodies are still not analyzed across calls.
   SHIPPED at signature level across iters 39–40 (return-type seeding,
   E0729 param-crossing refusal, E0730 return-crossing refusal; see
   Evidence — the signature is now enforced both directions; iter-41
-  additionally closed the match-destructure false accept). What remains
-  of the original v0.4 ask: **value-equality / alias reasoning for
-  E0717's resource ids** (still literal-or-stable-name only — an
-  over-flag precision target, not a miss), **HOF / function-typed
-  callees** (E0729 skips them — the remaining miss-side surface), and
-  **boundary-sanitizer coarseness** (any per-sink sanitizer clears the
-  generic boundary at E0729/E0730 — a `sanitizeLog`'d value returned as
-  String could still XSS at an HTML sink). The former "stdlib transform
-  propagation" item is REMOVED — proven phantom by the iter-41 probe
-  (see Evidence); probe residuals before backlog entry.
+  closed the match-destructure false accept; iter-42 closed
+  function-alias laundering and re-framed the HOF item out of
+  existence). What remains: **value-equality / copy-alias reasoning for
+  E0717's resource ids** — now PROBE-CONFIRMED (iter-42,
+  `probe_e0717_alias.aeth`: `let id2 = docId` + proof on `docId` is
+  refused — over-flag precision target, RELAX direction, must keep the
+  E0716/E0717 wall green) — and **boundary-sanitizer coarseness** (any
+  per-sink sanitizer clears the generic boundary at E0729/E0730; probe
+  for a MISS before acting — if none exists it is doctrine, not
+  backlog). The former "stdlib transform propagation" item is REMOVED —
+  proven phantom by the iter-41 probe (see Evidence); probe residuals
+  before backlog entry.
 - Never describe these passes as "sound" without the qualifier
   "within the intraprocedural, syntactic surface" — overstating is a
   Never-Do (vault manifest, runtime-vs-static honesty).
