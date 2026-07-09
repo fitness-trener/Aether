@@ -210,6 +210,12 @@ pattern bindings destructured from a tainted scrutinee are now tainted
 (every arm, every binding — conservative), so wrapping a marked value
 in `Some(...)`/`Ok(...)` and unwrapping it via `match` no longer washes
 the marker.
+Iteration 42 resolved function ALIASES (`let f = logIt; f(secret)`)
+across every boundary mechanism, conservatively: an alias joins the
+taint-source set and E0729 checks every function it may name, but an
+aliased unwrapper (`let r = reveal`) never clears taint — recognizing
+sanctioned exits by name at the call site is the audit contract, and
+the alias over-flag is deliberate.
 
 E0713 is the injection sibling in the same reach-scope pass. The
 `sqlQuery` sink (effect `db.query`) must receive a fixed string literal

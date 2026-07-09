@@ -36,3 +36,19 @@ Fix: destructure propagation — every arm-pattern binding over a leaking
 scrutinee is tainted (all arms, conservative). Regression tests:
 `test_match_destructured_secret_rejected` and 4 siblings in
 tests/test_effect_scope.py.
+
+### BUG-002  function aliases laundered the taint boundary (false accept)  [FIXED f6b8bf3]
+test: tests/test_effect_scope.py
+
+Found 2026-07-09 (iter-42 probes, this repo). Two repros, both exit 0:
+`let f = logIt; f(password)` bypassed E0729's callee lookup (callee
+name "f" is not a declared function), and `let f = getToken; f()`
+defeated return-type seeding (source set keyed by declared names).
+Root cause: every boundary mechanism resolved callees by literal name
+only. Fix: per-function alias map (`_fn_aliases`, straight-line bare-
+Ident bindings, chains followed, union on rebinding) applied FLAG-MORE
+only — aliases join the source set, single-target aliases extend the
+sanctioned-crossing mask, E0729 checks every alias target; an aliased
+unwrapper (`let r = reveal`) is deliberately NOT honored (documented
+over-flag). Regression tests: `test_fn_alias_launder_rejected` and 5
+siblings in tests/test_effect_scope.py.

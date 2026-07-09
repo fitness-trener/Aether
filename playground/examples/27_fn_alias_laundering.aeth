@@ -1,0 +1,24 @@
+// Example 27 — Function-alias laundering (iter 42). logIt takes a plain
+// String, and the call goes through the alias f - before iteration 42
+// the boundary check only knew callees by their declared names, so this
+// exact program checked CLEAN (a false accept). Aliases now resolve to
+// their targets: [E0729]. Fix: type the param Secret<String>, or
+// reveal(...) at the call site.
+
+module AuthService
+  requires capability log
+  exports main
+end
+
+function logIt(msg: String) returns Unit
+  effects log
+do
+  print(msg)
+end
+
+function main(password: Secret<String>) returns Unit
+  effects log
+do
+  let f = logIt
+  f(password)
+end
