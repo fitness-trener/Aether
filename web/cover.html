@@ -1,0 +1,78 @@
+<style>
+  html,body{margin:0;padding:0;background:#0B0D10;}
+  .c{width:1920px;height:1080px;position:relative;overflow:hidden;
+     font-family:"Segoe UI",Inter,system-ui,sans-serif;color:#E8EAED;
+     background:
+       radial-gradient(1100px 700px at 78% 22%, rgba(60,120,255,.16), transparent 62%),
+       radial-gradient(900px 600px at 12% 88%, rgba(0,220,190,.09), transparent 60%),
+       #0B0D10;}
+  .grid{position:absolute;inset:0;
+     background-image:linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),
+                      linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px);
+     background-size:80px 80px;
+     -webkit-mask-image:radial-gradient(1400px 900px at 50% 45%,#000 30%,transparent 78%);
+             mask-image:radial-gradient(1400px 900px at 50% 45%,#000 30%,transparent 78%);}
+  .wrap{position:relative;padding:118px 130px;height:100%;box-sizing:border-box;
+        display:flex;flex-direction:column;justify-content:space-between;}
+  .mark{display:flex;align-items:center;gap:22px;}
+  .glyph{width:56px;height:56px;}
+  .name{font-size:40px;font-weight:600;letter-spacing:.22em;text-transform:uppercase;}
+  .ver{font-size:19px;color:#6B7280;letter-spacing:.16em;margin-left:4px;padding-top:6px;}
+  h1{font-size:112px;line-height:1.06;font-weight:640;letter-spacing:-.028em;margin:0 0 34px;max-width:1400px;}
+  h1 .r{color:#FF5C5C;}
+  .sub{font-size:32px;line-height:1.5;color:#9AA3AF;max-width:900px;font-weight:350;margin:0;}
+  .sub b{color:#D5DAE1;font-weight:500;}
+  .term{position:absolute;right:130px;top:404px;width:560px;background:#111418;
+        border:1px solid #23282F;border-radius:14px;padding:26px 28px;
+        font-family:"Cascadia Code",Consolas,monospace;font-size:20px;line-height:1.85;
+        box-shadow:0 34px 90px rgba(0,0,0,.55);}
+  .dots{display:flex;gap:9px;margin-bottom:20px;}
+  .dots i{width:12px;height:12px;border-radius:50%;background:#2A3038;display:block;}
+  .p{color:#4F5A66;}
+  .err{color:#FF5C5C;}
+  .dim{color:#79838F;}
+  .ok{color:#3FD98A;}
+  .foot{display:flex;gap:78px;align-items:flex-end;}
+  .stat .n{font-size:52px;font-weight:600;letter-spacing:-.02em;}
+  .stat .l{font-size:19px;color:#6B7280;margin-top:9px;letter-spacing:.05em;}
+  .rule{height:1px;background:linear-gradient(90deg,#232830,transparent);margin-bottom:44px;}
+</style>
+<div class="c">
+  <div class="grid"></div>
+  <div class="wrap">
+    <div class="mark">
+      <svg class="glyph" viewBox="0 0 56 56" fill="none">
+        <path d="M28 4 L50 46 H40.5 L28 20 L15.5 46 H6 Z" fill="#4C8DFF"/>
+        <rect x="18" y="33" width="20" height="4.5" rx="2.25" fill="#FF5C5C"/>
+      </svg>
+      <span class="name">Aether</span><span class="ver">v0.3</span>
+    </div>
+
+    <div>
+      <h1>The compiler that<br><span class="r">refuses</span> unsafe code.</h1>
+      <p class="sub">A programming language for AI agents. Security and architecture violations
+      are <b>compile errors</b>, not warnings — with diagnostics an agent repairs mechanically.</p>
+    </div>
+
+    <div>
+      <div class="rule"></div>
+      <div class="foot">
+        <div class="stat"><div class="n">25</div><div class="l">shipped detectors</div></div>
+        <div class="stat"><div class="n">8/8</div><div class="l">real CVEs refused</div></div>
+        <div class="stat"><div class="n">0</div><div class="l">third-party deps</div></div>
+        <div class="stat"><div class="n">→ Python</div><div class="l">transpiles to</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="term">
+    <div class="dots"><i></i><i></i><i></i></div>
+    <div><span class="p">$</span> aether check payments.aeth</div>
+    <div><span class="err">error[E0713]</span>: <span class="dim">SQL injection</span></div>
+    <div class="dim">&nbsp;&nbsp;→ tainted input reaches query sink</div>
+    <div class="dim">&nbsp;&nbsp;fix: sanitize with escapeSql</div>
+    <div>&nbsp;</div>
+    <div><span class="p">$</span> aether check payments.aeth</div>
+    <div><span class="ok">ok</span> <span class="dim">— 0 diagnostics</span></div>
+  </div>
+</div>
