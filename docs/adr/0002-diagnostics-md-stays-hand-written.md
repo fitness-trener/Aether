@@ -21,11 +21,28 @@ and tested but documented nowhere**. The catalog test's stated promise —
 "every diagnostic code the toolchain can emit is documented" — was false, and
 green.
 
+**Amended 2026-07-25** (during implementation): it misses **10** codes, not
+9 — add **E0101**, `lexer.py`'s `self._err("E0101", …)`. The original count
+came from scanning `transpiler/` + `tools/` + `bench/` with the narrow
+regex, which finds 45. The scanner as written walks only `transpiler/` and
+`bench/` (`tests/test_diagnostic_catalog.py:69`) and finds **44**. E0101 was
+picked up from `tools/py_surface.py`, a root the scanner did not walk, so it
+looked already-covered and dropped off the misses list. Both errors point
+the same way and cancelled in the prose; they do not cancel in the table.
+Corrected figures: 44 found, 10 missed, 54 constructed in total.
+
 ## Decision
 
 Fix the scanner, not the construction sites. Widen the regex to positional
 first-argument forms, walk `tools/` as well as `transpiler/` and `bench/`,
 and add the missing rows. **Defer the CATALOG refactor.**
+
+**Implemented 2026-07-25** in `tools/diagnostic_codes.py`, the single
+scanner `tests/test_diagnostic_catalog.py` and `tests/test_ratchet.py` both
+call. Three construction forms are recognised; the widened set is 54 and a
+strict superset of the old 44. E0705/E0706 gained catalog rows, so
+`grammar/diagnostics.md` is 54 rows = 54 constructed codes. The ratchet
+floor rose 40 → 54 in the same commit.
 
 ## Consequences
 

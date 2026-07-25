@@ -1,5 +1,10 @@
 # Candidate 02 — handoff
 
+> **LANDED 2026-07-25** in `88bef18`. This file is the record of what was
+> measured and decided, not work to pick up. Every figure below describes
+> the tree BEFORE the refactor: `effects.py` was 2,981 lines and is now
+> 1,549; the 13 detectors live in `transpiler/aether/passes/detector_specs.py`.
+
 Written 2026-07-25 by the session that shipped candidates 01 and 04.
 Read this plus the sources it points at; no prior conversation needed.
 
