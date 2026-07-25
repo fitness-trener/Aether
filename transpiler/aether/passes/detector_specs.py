@@ -64,6 +64,25 @@ def _is_marker_type(ty: Any, marker: str) -> bool:
         and ty.get("name") == marker
 
 
+def _type_carries_marker(ty: Any, marker: str) -> bool:
+    """True if `marker` appears ANYWHERE in the type tree: at the top
+    (`PII<String>`) or nested inside a container's type arguments
+    (`List<PII<String>>`, `Option<Secret<T>>`, `Map<String, PII<T>>`).
+
+    Deliberately separate from `_is_marker_type`, which stays
+    top-level-only because it also serves `Authorized<T>` — a PROOF
+    marker, where widening what counts as a proof RELAXES acceptance
+    (the wrong direction). For the three TAINT markers widening flags
+    more at sinks and prunes more at the sanctioned crossings, both
+    consistent with over-flag-never-miss."""
+    if _is_marker_type(ty, marker):
+        return True
+    if isinstance(ty, dict) and ty.get("kind") == "GenericType":
+        return any(_type_carries_marker(a, marker)
+                   for a in ty.get("args") or [])
+    return False
+
+
 # Stdlib constructors that produce a marker-carrying value. User functions
 # declared `returns <Marker><...>` are added per-module by
 # _marker_source_fns; a call to any of these is a taint source.
@@ -81,33 +100,64 @@ def _marker_source_fns(ast: Dict[str, Any], marker: str) -> frozenset:
     names = set(_STDLIB_MARKER_CONSTRUCTORS.get(marker, frozenset()))
     for d in ast.get("decls", []):
         if d.get("kind") == "FunctionDecl" \
-                and _is_marker_type(d.get("return_type"), marker):
+                and _type_carries_marker(d.get("return_type"), marker):
             names.add(d["name"])
     return frozenset(names)
 
 
+def _marker_field_names(ast: Dict[str, Any], marker: str) -> frozenset:
+    """Record FIELD names declared with a type carrying `marker`.
+
+    Matched by name, not by resolved record type: the `Field` node holds
+    only the field name and a base expression, and resolving the base's
+    record type needs type inference this pass does not have. Over-flags
+    a same-named plain field on an unrelated record — the accepted
+    direction (over-flag, never miss within the modeled surface).
+    Residual: `vault/wiki/questions/q1-taint-marker-soundness-boundary.md`."""
+    out = set()
+    for d in ast.get("decls", []):
+        if d.get("kind") == "RecordDecl":
+            for f in d.get("fields", []):
+                if _type_carries_marker(f.get("type"), marker):
+                    out.add(f["name"])
+    return frozenset(out)
+
+
 def _marker_param_mask(ast: Dict[str, Any], marker: str) -> Dict[str, Tuple[bool, ...]]:
-    """fn name -> per-param mask, True where the declared param type
+    """callable name -> per-argument mask, True where the declared type
     carries `marker`. Passing a marked value into such a slot is a
     sanctioned crossing — the callee owns the value from there (its own
     body is checked; what escapes is its return, covered by
-    _marker_source_fns)."""
+    _marker_source_fns).
+
+    Records are in this table too, keyed by the record name: a v0.1
+    record constructor IS a call, positional in declared field order
+    (`grammar/types.md`, "Records"), and a marker-typed FIELD preserves
+    the marker exactly as a marker-typed param does. Without this, a
+    record could never legitimately hold a marked value — every
+    construction site would report E0729/E0730."""
     out: Dict[str, Tuple[bool, ...]] = {}
     for d in ast.get("decls", []):
         if d.get("kind") == "FunctionDecl":
-            out[d["name"]] = tuple(_is_marker_type(p.get("type"), marker)
+            out[d["name"]] = tuple(_type_carries_marker(p.get("type"), marker)
                                    for p in d.get("params", []))
+        elif d.get("kind") == "RecordDecl":
+            out[d["name"]] = tuple(_type_carries_marker(f.get("type"), marker)
+                                   for f in d.get("fields", []))
     return out
 
 
 def _expr_leaks_marked(node: Any, tainted: Set[str], unwrap,
                        source_fns: frozenset = frozenset(),
-                       param_mask: Optional[Dict[str, Tuple[bool, ...]]] = None) -> bool:
-    """True if `node` exposes a tainted name, or a call to a marker-
-    producing function, outside an `unwrap(...)` call (the sanctioned
-    exit for this marker). `unwrap` is a single name or a set of names.
-    An argument consumed by a marker-typed parameter of a user-declared
-    callee (per `param_mask`) is pruned — that crossing is sanctioned."""
+                       param_mask: Optional[Dict[str, Tuple[bool, ...]]] = None,
+                       marked_fields: frozenset = frozenset()) -> bool:
+    """True if `node` exposes a tainted name, a read of a marker-typed
+    record field, or a call to a marker-producing function, outside an
+    `unwrap(...)` call (the sanctioned exit for this marker). `unwrap` is
+    a single name or a set of names. An argument consumed by a
+    marker-typed parameter of a user-declared callee — or by a
+    marker-typed FIELD of a record constructor — is pruned per
+    `param_mask`: that crossing is sanctioned."""
     unwraps = {unwrap} if isinstance(unwrap, str) else unwrap
     if isinstance(node, dict):
         kind = node.get("kind")
@@ -124,13 +174,17 @@ def _expr_leaks_marked(node: Any, tainted: Set[str], unwrap,
                              if i >= len(mask) or not mask[i]]
                 rest = [v for k, v in node.items() if k != "args"]
                 return _expr_leaks_marked(open_args + rest, tainted, unwrap,
-                                          source_fns, param_mask)
+                                          source_fns, param_mask, marked_fields)
+        if kind == "Field" and node.get("name") in marked_fields:
+            return True   # read of a marker-typed record field
         if kind == "Ident" and node.get("name") in tainted:
             return True
-        return any(_expr_leaks_marked(v, tainted, unwrap, source_fns, param_mask)
+        return any(_expr_leaks_marked(v, tainted, unwrap, source_fns,
+                                      param_mask, marked_fields)
                    for v in node.values())
     if isinstance(node, list):
-        return any(_expr_leaks_marked(x, tainted, unwrap, source_fns, param_mask)
+        return any(_expr_leaks_marked(x, tainted, unwrap, source_fns,
+                                      param_mask, marked_fields)
                    for x in node)
     return False
 
@@ -180,15 +234,21 @@ def _pattern_bind_names(pat: Any) -> Set[str]:
 
 def _marked_tainted_names(fn_decl: Dict[str, Any], marker: str, unwrap,
                           source_fns: frozenset = frozenset(),
-                          param_mask: Optional[Dict[str, Tuple[bool, ...]]] = None) -> Set[str]:
+                          param_mask: Optional[Dict[str, Tuple[bool, ...]]] = None,
+                          marked_fields: frozenset = frozenset()) -> Set[str]:
     """Names holding a `marker`-typed value: marker-typed params, plus any
     let/assign target bound to an expression carrying a tainted name
     (fixpoint; an `unwrap(...)` call breaks the taint). A call to a
     `source_fns` member seeds taint (signature-level interprocedural).
     Match-arm pattern bindings over a tainted scrutinee are tainted
-    (every arm, every binding — conservative)."""
+    (every arm, every binding — conservative).
+
+    A read of a marker-typed record field (`marked_fields`) is a taint
+    source; the record-typed name itself is NOT tainted, so passing the
+    record on stays a clean crossing."""
     tainted: Set[str] = {
-        p["name"] for p in fn_decl.get("params", []) if _is_marker_type(p.get("type"), marker)
+        p["name"] for p in fn_decl.get("params", [])
+        if _type_carries_marker(p.get("type"), marker)
     }
     binds: List[Tuple[str, Any]] = []
     destructures: List[Tuple[Set[str], Any]] = []  # (arm-bound names, scrutinee)
@@ -209,11 +269,13 @@ def _marked_tainted_names(fn_decl: Dict[str, Any], marker: str, unwrap,
     while changed:
         changed = False
         for name, value in binds:
-            if name not in tainted and _expr_leaks_marked(value, tainted, unwrap, source_fns, param_mask):
+            if name not in tainted and _expr_leaks_marked(
+                    value, tainted, unwrap, source_fns, param_mask, marked_fields):
                 tainted.add(name)
                 changed = True
         for names, scrut in destructures:
-            if not names <= tainted and _expr_leaks_marked(scrut, tainted, unwrap, source_fns, param_mask):
+            if not names <= tainted and _expr_leaks_marked(
+                    scrut, tainted, unwrap, source_fns, param_mask, marked_fields):
                 tainted |= names
                 changed = True
     return tainted
@@ -613,6 +675,7 @@ def marker_flow(spec: MarkerFlowSpec) -> Callable[[Dict[str, Any]], List[Diagnos
         diags: List[Diagnostic] = []
         src_fns = _marker_source_fns(ast, spec.marker)
         pmask = _marker_param_mask(ast, spec.marker)
+        mfields = _marker_field_names(ast, spec.marker)
         for d in ast.get("decls", []):
             if d.get("kind") != "FunctionDecl":
                 continue
@@ -620,8 +683,10 @@ def marker_flow(spec: MarkerFlowSpec) -> Callable[[Dict[str, Any]], List[Diagnos
             src_l = src_fns | frozenset(a for a, ts in al.items() if ts & src_fns)
             pmask_l = _aliased_mask(pmask, al)
             tainted = _marked_tainted_names(d, spec.marker, spec.sanitizer,
-                                            src_l, pmask_l)
-            if not tainted and not src_l:
+                                            src_l, pmask_l, mfields)
+            # `not mfields` is load-bearing: a function that only reads
+            # `u.email` has no tainted NAMES, and the old guard skipped it.
+            if not tainted and not src_l and not mfields:
                 continue
             fn = d["name"]
             fpos = d.get("pos") or {"line": 0, "column": 0}
@@ -634,7 +699,8 @@ def marker_flow(spec: MarkerFlowSpec) -> Callable[[Dict[str, Any]], List[Diagnos
                 checked = args if sink.arg_indices is None else \
                     [args[i] for i in sink.arg_indices if i < len(args)]
                 if not any(_expr_leaks_marked(a, tainted, spec.sanitizer,
-                                              src_l, pmask_l) for a in checked):
+                                              src_l, pmask_l, mfields)
+                           for a in checked):
                     continue
                 pos = call.get("pos") or fpos
                 diags.append(Diagnostic(

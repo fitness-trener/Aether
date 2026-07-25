@@ -227,6 +227,14 @@ taint-source set and E0729 checks every function it may name, but an
 aliased unwrapper (`let r = reveal`) never clears taint — recognizing
 sanctioned exits by name at the call site is the audit contract, and
 the alias over-flag is deliberate.
+A marker also travels inside the two containers Aether has: a generic type
+argument (`List<PII<String>>`, `Option<Secret<T>>`) and a record field
+(`record User do email: PII<String> end`). Reading a marker-typed field is
+a taint source; constructing the record with a marked value into that field
+is a sanctioned crossing, so it raises neither E0729 nor E0730. Putting a
+marked value into a PLAIN field still launders the marker and is refused.
+Record fields are matched by NAME, not by resolved record type — an
+over-flag, not inference.
 
 E0713 is the injection sibling in the same reach-scope pass. The
 `sqlQuery` sink (effect `db.query`) must receive a fixed string literal

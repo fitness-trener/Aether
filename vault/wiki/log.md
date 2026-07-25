@@ -1,5 +1,27 @@
 # Operation Log (append-only — newest on top)
 
+## [2026-07-26] container-carried markers | q1 + violation-taxonomy
+- **q1 gained three Evidence rows and an amended Recommended Action.**
+  Iter-43 closed a genuine FALSE ACCEPT inside the modeled surface:
+  `_is_marker_type` matched a taint marker only at the TOP of a type
+  node, so a `List<PII<String>>` param and a `record User do email:
+  PII<String> end` field read were both exit 0. Probe-confirmed on
+  `f98fdce` before any code moved, per the iter-41 lesson.
+- **Both directions recorded, not just the catch.** The same blindness
+  produced symmetric FALSE POSITIVES — construction into a marker-typed
+  field and returning such a record raised spurious E0729/E0730 — so
+  the safe shape was unwritable. That is *why* the false accept went
+  unnoticed, and the row says so rather than reporting only the win.
+- **One deliberate non-change recorded:** `Authorized<T>` keeps the
+  top-level-only rule. It is a proof marker; widening what counts as a
+  proof relaxes acceptance and could silence E0716/E0717. Test-pinned.
+- **New residual, stated as an over-flag not an inference:** record
+  fields are matched by NAME, not by resolved record type. Filed with
+  the probe-before-backlog condition attached.
+- **violation-taxonomy** gained the matching row in the security table:
+  no new code, widened reach for the six marker rows plus E0729/E0730,
+  linked to [[../questions/q1-taint-marker-soundness-boundary|q1]] and
+  [[effect-system]].
 ## [2026-07-26] Q5 added | sink-vs-purity name matching, with its measured cost
 - **New question_page `q5-sink-matching-vs-purity-matching`**, linked from
   `index.md` (q4 was already taken by the formal-methods filter). Answers

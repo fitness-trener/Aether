@@ -36,7 +36,12 @@ diagnostics an agent fix-loop acts on; the full catalog is in
 2. **taint** — a marker type (`Secret<T>`, `PII<T>`, `Authorized<T>`)
    whose value must not reach a sink (E0712/E0715) or, inverted, whose
    proof a sink *requires* (E0716/E0717). Straight-line, intraprocedural,
-   over-flag-never-miss (see `vault/wiki/questions/q1`).
+   over-flag-never-miss (see `vault/wiki/questions/q1`). Markers survive
+   the two containers the language has: a generic type argument
+   (`List<PII<String>>`) and a record field (`record User do email:
+   PII<String> end`) — a field read is a taint source, and construction
+   into a marker-typed field is the sanctioned crossing. Record fields are
+   matched by NAME, not by resolved record type: over-flag, not inference.
 3. **effect-string** — a property read straight off the declared
    `net.fetch` effect annotation: host pinning (E0710), scheme (E0721),
    destination range (E0722).

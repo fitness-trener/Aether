@@ -1454,6 +1454,43 @@ State carried forward: the full gate suite must stay green
   byte-identical vulnerable and safe. Handled by hand for lxml; a session
   configured at import time or a flag set in a constructor is not. Probe
   for a live instance before building the general version (iter-41 lesson).
+## Iteration 44 — markers erased by containers (record fields, generic args)
+
+- **Target:** an externally reported hole — `PII<String>` declared inside
+  a `record` field was silent. Chosen over other backlog items by q3
+  (reuse × prevalence ÷ new machinery): zero new machinery, and every
+  real service passes personal data inside a struct rather than as a
+  bare parameter.
+- **Gap confirmed empirically:** four probes on `f98fdce`. `record User do
+  email: PII<String> end` + `print("user=" + u.email)` + a `writeFile` of
+  the same → **exit 0**. `function leak(xs: List<PII<String>>)` printing
+  `xs` → **exit 0**. And the mirror image: `leak(User(classifyPII(e),
+  "jane"))` raised a **spurious E0729**, `returns User` raised a **spurious
+  E0730** — so the safe shape was unwritable, which is why the unsafe one
+  went unnoticed.
+- **Improvement (eliminates TYPE):** no new code, no new detector. Two
+  changes in the shared machinery, inherited by all six marker-flow rows
+  and both boundary detectors: `_type_carries_marker` searches the whole
+  type tree (nested generic arguments); `_marker_param_mask` emits a mask
+  per `RecordDecl` (positional, declared field order) and
+  `_marker_field_names` makes a marker-typed field read a taint source.
+  `_is_marker_type` keeps its top-level-only rule for `Authorized<T>` —
+  widening a PROOF marker relaxes acceptance, the wrong direction.
+- **Wiring:** `passes/detector_specs.py` + the two hand-written detectors
+  in `passes/effects.py`; 12 tests in `tests/test_effect_scope.py`;
+  `playground/examples/28_record_field_marker.aeth`; case study with a
+  `fixed.aeth` that joins the false-positive corpus; `SECURITY_POSTURE.md`
+  + `grammar/diagnostics.md` reach prose.
+- **Ratchet:** unchanged (54 codes / 30 detectors) — this iteration widens
+  existing detectors' reach rather than adding one.
+- **Report:** `demos/case_studies/record_field_marker/REPORT.md`.
+- **TYPE gap surfaced for next iter:** record-field matching is by NAME.
+  A plain `email` field on an unrelated record is flagged (over-flag,
+  documented). The type-directed version needs the base expression's
+  record type resolved from a param or `let` annotation — the same
+  machinery `check_exhaustiveness` already uses for union scrutinees
+  (`passes/effects.py`, `_union_cases`). Probe first whether the
+  over-flag is live on any real corpus file before building it.
 - **Suite:** exit 0.
 
 ---
