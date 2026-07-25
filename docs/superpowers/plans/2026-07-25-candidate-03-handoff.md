@@ -35,25 +35,25 @@ Gate green: `python -B scripts/run_all.py` exits 0.
 time you read this** — see `2026-07-25-candidate-02-handoff.md`. The two
 are independent; 03 does not depend on 02.
 
-## Scope — INFERRED, confirm before starting
+## Scope
 
-There is no candidate-03 plan file. Candidate 03 is inferred to be the
-**`passes/detector_specs.py` refactor** on this evidence:
+Candidate 03 is the **`passes/detector_specs.py` refactor** — confirmed
+by the user 2026-07-25. There is no candidate-03 plan file, so the spec
+is `CONTEXT.md`'s three vocabulary entries plus the measurement below.
 
-- `CONTEXT.md` describes `passes/detector_specs.py`, `marker_flow(spec)`
-  and `literal_or_wrapper(spec)` as though they exist. **They do not.**
-  No such file or function is in the tree. That whole vocabulary block
-  is a description of planned work.
-- ADR-0004 says the frozen test file "keeps a frozen 2042-line surface
-  across the `passes/detector_specs.py` refactor — which is precisely
-  what makes that refactor provable", and that "`effects.py` re-exports
-  the generated `check_*` names so its 26 import sites never move".
-- Candidate 01's plan orders the work "04, then 02, then 03".
+Note that `CONTEXT.md` describes `passes/detector_specs.py`,
+`marker_flow(spec)` and `literal_or_wrapper(spec)` as though they exist.
+**They do not** — no such file or function is in the tree. That block is
+a description of the target, and building it is this candidate.
 
-The user confirmed 02 = diagnostics catalog when asked. **Ask the same
-question for 03 before writing code.** Candidate 05 remains
-unidentified; candidate 01's plan says its "minimum fix is independent
-and can land any time".
+ADR-0004 is the other half of the spec: the frozen test file "keeps a
+frozen 2042-line surface across the `passes/detector_specs.py`
+refactor — which is precisely what makes that refactor provable", and
+"`effects.py` re-exports the generated `check_*` names so its 26 import
+sites never move".
+
+Candidate 05 remains unidentified; candidate 01's plan says its
+"minimum fix is independent and can land any time".
 
 ## The defect, measured against the current tree (2026-07-25)
 
