@@ -52,6 +52,9 @@ This pass is read-only and side-effect free.
 from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
+# Aliased: `callee_name` is already a parameter name in _patch_call_arg.
+from .ast_walk import callee_name as _callee_name
+
 
 PathElem = Tuple[str, Optional[int]]
 Path = List[PathElem]
@@ -103,22 +106,6 @@ def _walk_calls_with_path(node: Any, prefix: Path):
                     yield from _walk_calls_with_path(item, prefix + [(k, i)])
         elif isinstance(v, dict):
             yield from _walk_calls_with_path(v, prefix + [(k, None)])
-
-
-# ---------------------------------------------------------------------
-# Callee-name extraction (mirrors passes/effects.py)
-# ---------------------------------------------------------------------
-
-def _callee_name(call_node: Dict[str, Any]) -> Optional[str]:
-    func = call_node.get("func") or {}
-    kind = func.get("kind")
-    if kind == "Ident":
-        return func.get("name")
-    if kind == "Field":
-        inner = func.get("value") or {}
-        if inner.get("kind") == "Ident":
-            return func.get("name")
-    return None
 
 
 # ---------------------------------------------------------------------

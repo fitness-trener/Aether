@@ -36,55 +36,22 @@ the modeled surface, and are not a soundness proof. Recorded residuals:
 
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from ..diagnostics import Diagnostic, Position
+from .ast_walk import walk, callee_name
 
 
 # ----------------------------------------------------------------------
 # Generic AST access
 # ----------------------------------------------------------------------
 
-def _walk_calls(node: Any) -> Iterable[Dict[str, Any]]:
-    """Yield every Call expression node reachable from `node`."""
-    if isinstance(node, dict):
-        if node.get("kind") == "Call":
-            yield node
-        for v in node.values():
-            yield from _walk_calls(v)
-    elif isinstance(node, list):
-        for x in node:
-            yield from _walk_calls(x)
-
-
-def _callee_name(call_node: Dict[str, Any]) -> Optional[str]:
-    """Extract a simple name from a Call's `func` if direct/named."""
-    func = call_node.get("func") or {}
-    kind = func.get("kind")
-    if kind == "Ident":
-        return func.get("name")
-    if kind == "Field":
-        inner = func.get("value") or {}
-        if inner.get("kind") == "Ident":
-            return func.get("name")
-    return None
-
-
 def _bindings(body: Any) -> Dict[str, List[Any]]:
     """name -> every Let/Assign value bound to it in this body."""
     out: Dict[str, List[Any]] = {}
-
-    def collect(node: Any):
-        if isinstance(node, dict):
-            if node.get("kind") in ("Let", "Assign") and "name" in node and "value" in node:
-                out.setdefault(node["name"], []).append(node["value"])
-            for v in node.values():
-                collect(v)
-        elif isinstance(node, list):
-            for x in node:
-                collect(x)
-
-    collect(body)
+    for n in walk(body, "Let", "Assign"):
+        if "name" in n and "value" in n:
+            out.setdefault(n["name"], []).append(n["value"])
     return out
 
 
@@ -145,7 +112,7 @@ def _expr_leaks_marked(node: Any, tainted: Set[str], unwrap,
     if isinstance(node, dict):
         kind = node.get("kind")
         if kind == "Call":
-            callee = _callee_name(node)
+            callee = callee_name(node)
             if callee in unwraps:
                 return False  # sanctioned, audited exit — prune
             if callee in source_fns:
@@ -175,20 +142,11 @@ def _fn_aliases(fn_decl: Dict[str, Any], targets: frozenset) -> Dict[str, Set[st
     is rebound). Used flag-more only — an aliased unwrapper is never
     honored."""
     binds: List[Tuple[str, str]] = []
-
-    def collect(node: Any):
-        if isinstance(node, dict):
-            if node.get("kind") in ("Let", "Assign") and "name" in node:
-                v = node.get("value")
-                if isinstance(v, dict) and v.get("kind") == "Ident":
-                    binds.append((node["name"], v["name"]))
-            for x in node.values():
-                collect(x)
-        elif isinstance(node, list):
-            for x in node:
-                collect(x)
-
-    collect(fn_decl.get("body", []))
+    for n in walk(fn_decl.get("body", []), "Let", "Assign"):
+        if "name" in n:
+            v = n.get("value")
+            if isinstance(v, dict) and v.get("kind") == "Ident":
+                binds.append((n["name"], v["name"]))
     out: Dict[str, Set[str]] = {}
     changed = True
     while changed:
@@ -217,16 +175,7 @@ def _aliased_mask(pmask: Dict[str, Tuple[bool, ...]],
 def _pattern_bind_names(pat: Any) -> Set[str]:
     """Names bound by a match pattern (BindPat leaves, recursively —
     nested constructor patterns included)."""
-    out: Set[str] = set()
-    if isinstance(pat, dict):
-        if pat.get("kind") == "BindPat" and "name" in pat:
-            out.add(pat["name"])
-        for v in pat.values():
-            out |= _pattern_bind_names(v)
-    elif isinstance(pat, list):
-        for x in pat:
-            out |= _pattern_bind_names(x)
-    return out
+    return {n["name"] for n in walk(pat, "BindPat") if "name" in n}
 
 
 def _marked_tainted_names(fn_decl: Dict[str, Any], marker: str, unwrap,
@@ -244,23 +193,18 @@ def _marked_tainted_names(fn_decl: Dict[str, Any], marker: str, unwrap,
     binds: List[Tuple[str, Any]] = []
     destructures: List[Tuple[Set[str], Any]] = []  # (arm-bound names, scrutinee)
 
-    def collect(node: Any):
-        if isinstance(node, dict):
-            if node.get("kind") in ("Let", "Assign") and "name" in node and "value" in node:
-                binds.append((node["name"], node["value"]))
-            if node.get("kind") == "Match" and "scrutinee" in node:
-                names: Set[str] = set()
-                for arm in node.get("arms", []):
-                    names |= _pattern_bind_names(arm.get("pattern"))
-                if names:
-                    destructures.append((names, node["scrutinee"]))
-            for v in node.values():
-                collect(v)
-        elif isinstance(node, list):
-            for x in node:
-                collect(x)
-
-    collect(fn_decl.get("body", []))
+    body = fn_decl.get("body", [])
+    for n in walk(body, "Let", "Assign"):
+        if "name" in n and "value" in n:
+            binds.append((n["name"], n["value"]))
+    for n in walk(body, "Match"):
+        if "scrutinee" not in n:
+            continue
+        names: Set[str] = set()
+        for arm in n.get("arms", []):
+            names |= _pattern_bind_names(arm.get("pattern"))
+        if names:
+            destructures.append((names, n["scrutinee"]))
     changed = True
     while changed:
         changed = False
@@ -591,7 +535,7 @@ def _arg_reason(node: Any, safe_names: Set[str], rule: ArgRule) -> Optional[str]
                 return why
         return None
     if kind == "Call":
-        if _callee_name(node) in rule.wrappers:
+        if callee_name(node) in rule.wrappers:
             return None
         return rule.call if rule.call is not None else rule.default
     if kind == "Ident" and node.get("name") in safe_names:
@@ -635,8 +579,8 @@ def literal_or_wrapper(spec: LiteralOrWrapperSpec) -> Callable[[Dict[str, Any]],
             fpos = d.get("pos") or {"line": 0, "column": 0}
             body = d.get("body", [])
             safe_names = _safe_names(body, safe_rule)
-            for call in _walk_calls(body):
-                sink = _callee_name(call)
+            for call in walk(body, "Call"):
+                sink = callee_name(call)
                 if sink not in spec.sinks:
                     continue
                 args = call.get("args") or []
@@ -681,8 +625,8 @@ def marker_flow(spec: MarkerFlowSpec) -> Callable[[Dict[str, Any]], List[Diagnos
                 continue
             fn = d["name"]
             fpos = d.get("pos") or {"line": 0, "column": 0}
-            for call in _walk_calls(d.get("body", [])):
-                name = _callee_name(call)
+            for call in walk(d.get("body", []), "Call"):
+                name = callee_name(call)
                 sink = sinks.get(name)
                 if sink is None:
                     continue

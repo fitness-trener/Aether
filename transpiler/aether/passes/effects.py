@@ -38,8 +38,9 @@ import re
 from typing import Any, Dict, List, Set, Tuple, Iterable, Optional
 
 from ..diagnostics import Diagnostic, Position
+from .ast_walk import walk, callee_name
 from .detector_specs import (
-    build, boundary_markers, _walk_calls, _callee_name, _is_marker_type,
+    build, boundary_markers, _is_marker_type,
     _marker_source_fns, _marker_param_mask, _expr_leaks_marked,
     _fn_aliases, _aliased_mask, _marked_tainted_names,
 )
@@ -482,8 +483,8 @@ def check_marker_boundary(ast: Dict[str, Any]) -> List[Diagnostic]:
                 continue
             fn = d["name"]
             fpos = d.get("pos") or {"line": 0, "column": 0}
-            for call in _walk_calls(d.get("body", [])):
-                cname = _callee_name(call)
+            for call in walk(d.get("body", []), "Call"):
+                cname = callee_name(call)
                 direct = decls.get(cname)
                 cands = [direct] if direct is not None else \
                     [decls[t] for t in sorted(al.get(cname, set())) if t in decls]
@@ -532,18 +533,6 @@ def check_marker_boundary(ast: Dict[str, Any]) -> List[Diagnostic]:
 # E0730 — return laundering: tainted value under a plain return type
 # ----------------------------------------------------------------------
 
-def _walk_returns(node: Any):
-    """Yield every Return node in a body (generic dict/list walk)."""
-    if isinstance(node, dict):
-        if node.get("kind") == "Return":
-            yield node
-        for v in node.values():
-            yield from _walk_returns(v)
-    elif isinstance(node, list):
-        for x in node:
-            yield from _walk_returns(x)
-
-
 def check_return_laundering(ast: Dict[str, Any]) -> List[Diagnostic]:
     """Return E0730 diagnostics for a function that RETURNS a
     marker-carrying value while its declared return type does not carry
@@ -570,7 +559,7 @@ def check_return_laundering(ast: Dict[str, Any]) -> List[Diagnostic]:
             fn = d["name"]
             fpos = d.get("pos") or {"line": 0, "column": 0}
             declared = (d.get("return_type") or {}).get("name", "Unit")
-            for ret in _walk_returns(d.get("body", [])):
+            for ret in walk(d.get("body", []), "Return"):
                 val = ret.get("value")
                 if val is None:
                     continue
@@ -644,17 +633,6 @@ def _is_catch_all(pat: Any) -> bool:
     return isinstance(pat, dict) and pat.get("kind") in ("WildcardPat", "BindPat")
 
 
-def _walk_matches(node: Any) -> Iterable[Dict[str, Any]]:
-    if isinstance(node, dict):
-        if node.get("kind") in ("Match", "MatchExpr"):
-            yield node
-        for v in node.values():
-            yield from _walk_matches(v)
-    elif isinstance(node, list):
-        for x in node:
-            yield from _walk_matches(x)
-
-
 def check_exhaustiveness(ast: Dict[str, Any]) -> List[Diagnostic]:
     """Return E0202 diagnostics for a match that omits a union case with no
     catch-all, when the scrutinee's union type is statically resolvable."""
@@ -673,20 +651,13 @@ def check_exhaustiveness(ast: Dict[str, Any]) -> List[Diagnostic]:
             if tn:
                 types[p["name"]] = tn
 
-        def collect_lets(node: Any):
-            if isinstance(node, dict):
-                if node.get("kind") == "Let" and "name" in node:
-                    tn = _type_name(node.get("type"))
-                    if tn:
-                        types[node["name"]] = tn
-                for v in node.values():
-                    collect_lets(v)
-            elif isinstance(node, list):
-                for x in node:
-                    collect_lets(x)
-        collect_lets(d.get("body", []))
+        for n in walk(d.get("body", []), "Let"):
+            if "name" in n:
+                tn = _type_name(n.get("type"))
+                if tn:
+                    types[n["name"]] = tn
 
-        for m in _walk_matches(d.get("body", [])):
+        for m in walk(d.get("body", []), "Match", "MatchExpr"):
             scrut = m.get("scrutinee") or {}
             if scrut.get("kind") != "Ident":
                 continue
@@ -739,7 +710,7 @@ def check_unreachable_arms(ast: Dict[str, Any]) -> List[Diagnostic]:
         if d.get("kind") != "FunctionDecl":
             continue
         fn = d["name"]
-        for m in _walk_matches(d.get("body", [])):
+        for m in walk(d.get("body", []), "Match", "MatchExpr"):
             arms = m.get("arms") or []
             mpos = m.get("pos") or d.get("pos") or {"line": 0, "column": 0}
             seen: Set[str] = set()
@@ -849,14 +820,8 @@ def check_dead_code(ast: Dict[str, Any]) -> List[Diagnostic]:
 # Ident nowhere in the function body is unused.
 
 def _ident_reads(node: Any, out: Set[str]) -> None:
-    if isinstance(node, dict):
-        if node.get("kind") == "Ident" and isinstance(node.get("name"), str):
-            out.add(node["name"])
-        for v in node.values():
-            _ident_reads(v, out)
-    elif isinstance(node, list):
-        for x in node:
-            _ident_reads(x, out)
+    out.update(n["name"] for n in walk(node, "Ident")
+               if isinstance(n.get("name"), str))
 
 
 def check_unused_binding(ast: Dict[str, Any]) -> List[Diagnostic]:
@@ -873,16 +838,8 @@ def check_unused_binding(ast: Dict[str, Any]) -> List[Diagnostic]:
         # Collect let bindings in source order.
         lets: List[Dict[str, Any]] = []
 
-        def collect(node: Any):
-            if isinstance(node, dict):
-                if node.get("kind") == "Let" and isinstance(node.get("name"), str):
-                    lets.append(node)
-                for v in node.values():
-                    collect(v)
-            elif isinstance(node, list):
-                for x in node:
-                    collect(x)
-        collect(body)
+        lets.extend(n for n in walk(body, "Let")
+                    if isinstance(n.get("name"), str))
 
         for let in lets:
             name = let["name"]
@@ -936,42 +893,35 @@ def check_ignored_result(ast: Dict[str, Any]) -> List[Diagnostic]:
     result_fns = _result_returning_fns(ast)
     diags: List[Diagnostic] = []
 
-    def walk_stmts(node: Any, fn: str, fpos: Dict[str, Any]):
-        if isinstance(node, dict):
-            if node.get("kind") == "ExprStmt":
-                expr = node.get("expr") or {}
-                if expr.get("kind") == "Call" and _callee_name(expr) in result_fns:
-                    callee = _callee_name(expr)
-                    pos = expr.get("pos") or node.get("pos") or fpos
-                    diags.append(Diagnostic(
-                        code="E0206",
-                        category="type",
-                        severity="error",
-                        message=(
-                            f"function {fn!r} discards the Result of "
-                            f"{callee!r}; an unchecked error (e.g. a failed "
-                            f"write) is silently ignored"
-                        ),
-                        position=Position(pos.get("line", 0), pos.get("column", 0)),
-                        suggestion=(
-                            f"bind and handle it (`let r = {callee}(...)` then "
-                            f"`match r`), or `let _r = ...` to discard the "
-                            f"error explicitly"
-                        ),
-                        confidence=1.0,
-                        extra={"function": fn, "callee": callee},
-                    ))
-            for v in node.values():
-                walk_stmts(v, fn, fpos)
-        elif isinstance(node, list):
-            for x in node:
-                walk_stmts(x, fn, fpos)
-
     for d in ast.get("decls", []):
         if d.get("kind") != "FunctionDecl":
             continue
-        walk_stmts(d.get("body", []), d["name"],
-                   d.get("pos") or {"line": 0, "column": 0})
+        fn = d["name"]
+        fpos = d.get("pos") or {"line": 0, "column": 0}
+        for stmt in walk(d.get("body", []), "ExprStmt"):
+            expr = stmt.get("expr") or {}
+            if expr.get("kind") != "Call" or callee_name(expr) not in result_fns:
+                continue
+            callee = callee_name(expr)
+            pos = expr.get("pos") or stmt.get("pos") or fpos
+            diags.append(Diagnostic(
+                code="E0206",
+                category="type",
+                severity="error",
+                message=(
+                    f"function {fn!r} discards the Result of "
+                    f"{callee!r}; an unchecked error (e.g. a failed "
+                    f"write) is silently ignored"
+                ),
+                position=Position(pos.get("line", 0), pos.get("column", 0)),
+                suggestion=(
+                    f"bind and handle it (`let r = {callee}(...)` then "
+                    f"`match r`), or `let _r = ...` to discard the "
+                    f"error explicitly"
+                ),
+                confidence=1.0,
+                extra={"function": fn, "callee": callee},
+            ))
     return diags
 
 
@@ -1132,7 +1082,7 @@ def _expr_is_authorized(node: Any, authorized: Set[str],
         return False
     kind = node.get("kind")
     if kind == "Call":
-        callee = _callee_name(node)
+        callee = callee_name(node)
         if callee in _AUTH_GUARDS or callee in minters:
             return True
         return False
@@ -1163,7 +1113,7 @@ def _is_result_proof_expr(node: Any, r_proven: Set[str],
     if not isinstance(node, dict):
         return False
     kind = node.get("kind")
-    if kind == "Call" and _callee_name(node) in result_minters:
+    if kind == "Call" and callee_name(node) in result_minters:
         return True
     if kind == "Ident" and node.get("name") in r_proven:
         return True
@@ -1203,27 +1153,20 @@ def _authorized_names(fn_decl: Dict[str, Any],
     binds: Dict[str, List[Any]] = {}
     grants: List[Tuple[Any, List[str]]] = []  # (scrutinee, Ok/Some-bound names)
 
-    def collect(node: Any):
-        if isinstance(node, dict):
-            # Let/Var carry "name"; Assign carries "target". All three are
-            # bindings — missing Assign here would let `tok = raw` keep a
-            # previously-proven name authorized (silent demotion miss).
-            if node.get("kind") in ("Let", "Var", "Assign") and "value" in node:
-                tgt = node.get("name") or node.get("target")
-                if isinstance(tgt, str):
-                    binds.setdefault(tgt, []).append(node["value"])
-            if node.get("kind") in ("Match", "MatchExpr"):
-                for arm in node.get("arms", []) or []:
-                    names = _ok_pattern_bindings(arm.get("pattern"))
-                    if names:
-                        grants.append((node.get("scrutinee"), names))
-            for v in node.values():
-                collect(v)
-        elif isinstance(node, list):
-            for x in node:
-                collect(x)
-
-    collect(fn_decl.get("body", []))
+    # Let/Var carry "name"; Assign carries "target". All three are
+    # bindings — missing Assign here would let `tok = raw` keep a
+    # previously-proven name authorized (silent demotion miss).
+    body = fn_decl.get("body", [])
+    for n in walk(body, "Let", "Var", "Assign"):
+        if "value" in n:
+            tgt = n.get("name") or n.get("target")
+            if isinstance(tgt, str):
+                binds.setdefault(tgt, []).append(n["value"])
+    for n in walk(body, "Match", "MatchExpr"):
+        for arm in n.get("arms", []) or []:
+            names = _ok_pattern_bindings(arm.get("pattern"))
+            if names:
+                grants.append((n.get("scrutinee"), names))
     r_proven: Set[str] = set()
     changed = True
     while changed:
@@ -1259,29 +1202,10 @@ def _authorized_param_indices(fn_decl: Dict[str, Any]) -> List[Tuple[int, str]]:
             if _is_marker_type(p.get("type"), _AUTH_MARKER)]
 
 
-def _walk_returns(node: Any) -> Iterable[Dict[str, Any]]:
-    """Yield every Return statement node reachable from `node`."""
-    if isinstance(node, dict):
-        if node.get("kind") == "Return":
-            yield node
-        for v in node.values():
-            yield from _walk_returns(v)
-    elif isinstance(node, list):
-        for x in node:
-            yield from _walk_returns(x)
-
-
 def _walk_marker_binds(node: Any) -> Iterable[Dict[str, Any]]:
     """Yield every Let/Var node annotated with the Authorized<...> marker."""
-    if isinstance(node, dict):
-        if node.get("kind") in ("Let", "Var") \
-                and _is_marker_type(node.get("type"), _AUTH_MARKER):
-            yield node
-        for v in node.values():
-            yield from _walk_marker_binds(v)
-    elif isinstance(node, list):
-        for x in node:
-            yield from _walk_marker_binds(x)
+    return (n for n in walk(node, "Let", "Var")
+            if _is_marker_type(n.get("type"), _AUTH_MARKER))
 
 
 def _escaped_gated_idents(node: Any, gated: Set[str]) -> Iterable[str]:
@@ -1362,8 +1286,8 @@ def check_authorization(ast: Dict[str, Any]) -> List[Diagnostic]:
         # Obligation 1 — call-site proof for Authorized<...> parameters.
         # This is what makes trusting those parameters (above) sound: a
         # raw value is rejected where it enters, so it can never arrive.
-        for call in _walk_calls(body):
-            callee = _callee_name(call)
+        for call in walk(body, "Call"):
+            callee = callee_name(call)
             idxs = gated.get(callee)
             if not idxs:
                 continue
@@ -1423,14 +1347,14 @@ def check_authorization(ast: Dict[str, Any]) -> List[Diagnostic]:
         # This is what lets _expr_is_authorized trust minter calls.
         mint = _minted_kind(d)
         if mint:
-            for ret in _walk_returns(body):
+            for ret in walk(body, "Return"):
                 val = ret.get("value")
                 ok = False
                 if mint == "direct":
                     ok = _expr_is_authorized(val, authorized, minters)
                 elif isinstance(val, dict):
                     if val.get("kind") == "Call":
-                        cn = _callee_name(val)
+                        cn = callee_name(val)
                         rargs = val.get("args") or []
                         if cn in ("Err", "None"):
                             ok = True
@@ -1455,8 +1379,8 @@ def check_authorization(ast: Dict[str, Any]) -> List[Diagnostic]:
                         f"declared return type",
                         {"reason": "return does not mint declared proof"},
                     ))
-        for call in _walk_calls(d.get("body", [])):
-            sink = _callee_name(call)
+        for call in walk(d.get("body", []), "Call"):
+            sink = callee_name(call)
             if sink not in _MUTATION_SINKS:
                 continue
             args = call.get("args") or []
@@ -1520,19 +1444,10 @@ def _stable_names(fn_decl: Dict[str, Any]) -> Set[str]:
     witness that the guard's id and the sink's id are the same value."""
     counts: Dict[str, int] = {}
 
-    def collect(node: Any):
-        if isinstance(node, dict):
-            if node.get("kind") in ("Let", "Assign"):
-                tgt = node.get("name") or node.get("target")
-                if isinstance(tgt, str):
-                    counts[tgt] = counts.get(tgt, 0) + 1
-            for v in node.values():
-                collect(v)
-        elif isinstance(node, list):
-            for x in node:
-                collect(x)
-
-    collect(fn_decl.get("body", []))
+    for n in walk(fn_decl.get("body", []), "Let", "Assign"):
+        tgt = n.get("name") or n.get("target")
+        if isinstance(tgt, str):
+            counts[tgt] = counts.get(tgt, 0) + 1
     params = {p["name"] for p in fn_decl.get("params", [])}
     stable = {p for p in params if counts.get(p, 0) == 0}
     stable |= {n for n, c in counts.items() if c == 1 and n not in params}
@@ -1559,24 +1474,17 @@ def _resource_proof_ids(fn_decl: Dict[str, Any],
     names qualify — a rebindable proof name proves nothing."""
     out: Dict[str, Tuple[str, Any]] = {}
 
-    def collect(node: Any):
-        if isinstance(node, dict):
-            if node.get("kind") in ("Let", "Assign") and "name" in node and "value" in node:
-                name, val = node["name"], node["value"]
-                if name in stable and isinstance(val, dict) \
-                        and val.get("kind") == "Call" \
-                        and _callee_name(val) == _RES_AUTH_GUARD:
-                    args = val.get("args") or []
-                    key = _id_key(args[2], stable) if len(args) > 2 else None
-                    if key is not None:
-                        out[name] = key
-            for v in node.values():
-                collect(v)
-        elif isinstance(node, list):
-            for x in node:
-                collect(x)
-
-    collect(fn_decl.get("body", []))
+    for n in walk(fn_decl.get("body", []), "Let", "Assign"):
+        if "name" not in n or "value" not in n:
+            continue
+        name, val = n["name"], n["value"]
+        if name in stable and isinstance(val, dict) \
+                and val.get("kind") == "Call" \
+                and callee_name(val) == _RES_AUTH_GUARD:
+            args = val.get("args") or []
+            key = _id_key(args[2], stable) if len(args) > 2 else None
+            if key is not None:
+                out[name] = key
     return out
 
 
@@ -1588,7 +1496,7 @@ def _proof_id_key(node: Any, proof_ids: Dict[str, Tuple[str, Any]],
     if not isinstance(node, dict):
         return None
     kind = node.get("kind")
-    if kind == "Call" and _callee_name(node) == _RES_AUTH_GUARD:
+    if kind == "Call" and callee_name(node) == _RES_AUTH_GUARD:
         args = node.get("args") or []
         return _id_key(args[2], stable) if len(args) > 2 else None
     if kind == "Ident":
@@ -1613,8 +1521,8 @@ def check_resource_authorization(ast: Dict[str, Any]) -> List[Diagnostic]:
         fpos = d.get("pos") or {"line": 0, "column": 0}
         stable = _stable_names(d)
         proof_ids = _resource_proof_ids(d, stable)
-        for call in _walk_calls(d.get("body", [])):
-            if _callee_name(call) != _RESOURCE_SINK:
+        for call in walk(d.get("body", []), "Call"):
+            if callee_name(call) != _RESOURCE_SINK:
                 continue
             args = call.get("args") or []
             rid = args[1] if len(args) > 1 else None
@@ -1684,23 +1592,11 @@ _CREDENTIAL_PATTERNS = [
 ]
 
 
-def _walk_string_lits(node: Any) -> Iterable[Dict[str, Any]]:
-    """Yield every StringLit node reachable from `node`."""
-    if isinstance(node, dict):
-        if node.get("kind") == "StringLit":
-            yield node
-        for v in node.values():
-            yield from _walk_string_lits(v)
-    elif isinstance(node, list):
-        for x in node:
-            yield from _walk_string_lits(x)
-
-
 def check_hardcoded_secret(ast: Dict[str, Any]) -> List[Diagnostic]:
     """Return E0723 diagnostics for string literals that match a known
     provider-credential shape (a hardcoded secret, CWE-798)."""
     diags: List[Diagnostic] = []
-    for lit in _walk_string_lits(ast):
+    for lit in walk(ast, "StringLit"):
         val = lit.get("value")
         if not isinstance(val, str):
             continue
@@ -1732,9 +1628,6 @@ def check_hardcoded_secret(ast: Dict[str, Any]) -> List[Diagnostic]:
 # ----------------------------------------------------------------------
 # AST walking
 # ----------------------------------------------------------------------
-
-# _walk_calls / _callee_name moved to passes/detector_specs.py with the
-# drivers that are their heaviest user; imported at the top of this file.
 
 def _format_effect(eff: EffectEntry) -> str:
     path, arg = eff
@@ -1778,8 +1671,8 @@ def check_effects(ast: Dict[str, Any]) -> List[Diagnostic]:
         caller_effects = _declared_effects(d)
         pos = d.get("pos") or {"line": 0, "column": 0}
 
-        for call in _walk_calls(d.get("body", [])):
-            callee = _callee_name(call)
+        for call in walk(d.get("body", []), "Call"):
+            callee = callee_name(call)
             if callee is None or callee in union_cases:
                 continue
             if callee in user_effects:

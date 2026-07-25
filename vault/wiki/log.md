@@ -1,5 +1,26 @@
 # Operation Log (append-only — newest on top)
 
+## [2026-07-25] architecture review candidate 03 | shared AST walker
+- Not a loop-1 iteration: no detector added, removed or weakened; ratchet
+  unchanged at 40 codes / 30 detectors. `passes/ast_walk.py` holds the
+  recursion once as `walk(node, *kinds)`; `callee_name` rides along
+  because it was the same clone in the same three files.
+- Re-measured after 02 landed rather than trusting the handoff's pre-02
+  numbers: 7 named `_walk_*` generators in `passes/` became 1 (a two-line
+  filter over `walk`), and open-coded `isinstance(node, dict)` recursions
+  went 39 (pre-02) → 30 (post-02) → 14, of which 1 is `walk` itself and 4
+  are `patch_target.py`'s path-carrying walks, left untouched by design.
+- Everything still hand-written PRUNES (`_expr_leaks_marked`,
+  `_escaped_gated_idents`, `_expr_is_authorized`, `_is_result_proof_expr`)
+  or dispatches on a single node (`_arg_reason`, `_id_key`,
+  `_proof_id_key`, `_clause_bound`) or yields statement LISTS
+  (`_stmt_lists`). A walk that stops early is not this walk — recorded in
+  the module docstring so the next pass does not force it.
+- Behaviour proven identical, not assumed: the same three dumps as 02
+  (83-file corpus, all 427 in-tree `.aeth`, 67-row prose probe) diff
+  empty. No `// expect:` header changed. Deleted the shadowed duplicate
+  `_walk_returns` and the 0-byte orphan `passes/effects_new.py`.
+
 ## [2026-07-25] architecture review candidate 02 | detector spec tables
 - Not a loop-1 iteration: no detector added, removed or weakened; ratchet
   unchanged at 40 codes / 30 detectors. `passes/detector_specs.py` now

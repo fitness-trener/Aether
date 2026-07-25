@@ -51,9 +51,10 @@ Limits / known gaps (v1 scope):
 """
 
 from __future__ import annotations
-from typing import Any, Dict, List, Set, Tuple, Iterable, Optional
+from typing import Any, Dict, List, Set, Tuple, Optional
 
 from ..diagnostics import Diagnostic, Position
+from .ast_walk import walk, callee_name
 
 
 # Effects that require no capability.
@@ -86,33 +87,6 @@ def collect_declared_capabilities(ast: Dict[str, Any]) -> Set[str]:
         if d.get("kind") == "ModuleDecl":
             out.update(d.get("capabilities", []))
     return out
-
-
-# ----------------------------------------------------------------------
-# AST helpers (shared shape with passes/effects.py)
-# ----------------------------------------------------------------------
-
-def _walk_calls(node: Any) -> Iterable[Dict[str, Any]]:
-    if isinstance(node, dict):
-        if node.get("kind") == "Call":
-            yield node
-        for v in node.values():
-            yield from _walk_calls(v)
-    elif isinstance(node, list):
-        for x in node:
-            yield from _walk_calls(x)
-
-
-def _callee_name(call_node: Dict[str, Any]) -> Optional[str]:
-    func = call_node.get("func") or {}
-    kind = func.get("kind")
-    if kind == "Ident":
-        return func.get("name")
-    if kind == "Field":
-        inner = func.get("value") or {}
-        if inner.get("kind") == "Ident":
-            return func.get("name")
-    return None
 
 
 # ----------------------------------------------------------------------
@@ -200,8 +174,8 @@ def check_capabilities(ast: Dict[str, Any]) -> List[Diagnostic]:
         name = d["name"]
         direct_effects[name] = _direct_effect_paths(d)
         callees: Set[str] = set()
-        for call in _walk_calls(d.get("body", [])):
-            n = _callee_name(call)
+        for call in walk(d.get("body", []), "Call"):
+            n = callee_name(call)
             if n is not None:
                 callees.add(n)
         call_graph[name] = callees
