@@ -34,14 +34,12 @@ Branch `claude/magical-allen-679031`, off `58f1ec2`.
 
 Gate is green: `python -B scripts/run_all.py` exits 0.
 
-## There is no candidate-02 plan file
+## Scope
 
-Only candidate 01 got a written plan. **Candidate 02 is inferred to be
-ADR-0002's work** — the diagnostic-catalog scanner — because ADR-0002 is
-the only remaining accepted decision with unexecuted work, and candidate
-01's plan lists the order as "04, then 02, then 03". That inference is
-not confirmed by any document. **Confirm with the user before starting**
-if anything below does not match what they expect candidate 02 to be.
+Candidate 02 is the **diagnostics catalog** — confirmed by the user
+2026-07-25. Only candidate 01 got a written plan file, so the spec below
+is ADR-0002 plus the measurement re-taken this session. There is no
+other plan document to find.
 
 (Candidate 03 appears to be the `passes/detector_specs.py` refactor —
 `marker_flow(spec)` / `literal_or_wrapper(spec)` drivers over a spec
