@@ -1495,7 +1495,7 @@ State carried forward: the full gate suite must stay green
 
 ---
 
-## Iteration 44 — the guard is not the argument (three false accepts)
+## Iteration 45 — the guard is not the argument (three false accepts)
 
 - **Target:** iteration 43's own surfaced residual, "guard bound
   elsewhere", recorded in q5 with a probe-before-building condition

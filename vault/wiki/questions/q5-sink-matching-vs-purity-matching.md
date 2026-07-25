@@ -79,7 +79,7 @@ the row leads or waits — the same discipline
 ## The rule extends from NAMES to VALUES — and the cost of getting it backwards
 
 The guard-bound-elsewhere item was filed here as a precision residual.
-Probing it (iter-44) found something else: **three false accepts**, which
+Probing it (iter-45) found something else: **three false accepts**, which
 is the contract-breach class, not a precision gap. Silent before the fix:
 
 | Shape | Expected |
