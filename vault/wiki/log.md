@@ -1,5 +1,32 @@
 # Operation Log (append-only — newest on top)
 
+## [2026-07-25] architecture review candidate 05 | diagnostics catalog scanner
+- Executes ADR-0002. The catalog test promised "every diagnostic code the
+  toolchain can emit is documented" while matching 2 of 3 construction
+  forms over 2 of 3 roots — false, and green. `tools/diagnostic_codes.py`
+  is now the ONE scanner; `test_diagnostic_catalog.py` and
+  `test_ratchet.py` both call it, which also makes the ratchet's
+  "same enumeration as the D.2 catalog test" docstring true (it walked a
+  different root).
+- Re-measured rather than trusting the handoff, which is off by one:
+  the narrow regex finds **44**, not 45, and the widened scanner finds
+  **54**, not 51. The 10 newly-visible codes are E0101–E0106, E0301,
+  E0304, E0705, E0706 — the handoff listed 9, omitting E0101. Confirmed
+  44 both before and after candidates 02/03, so the discrepancy is the
+  handoff's, not a regression.
+- The invisible form was the code passed POSITIONALLY to a constructing
+  helper (`lexer.py` `_err`, `passes/imports.py` `_diag`). E0705 and
+  E0706 were live, tested (`tests/test_multi_file.py`) and documented
+  nowhere; both now have rows. `grammar/diagnostics.md` is 54 rows = 54
+  constructed codes, exactly.
+- Ratchet gain locked in the same commit: `min_emitted_codes` 40 → 54.
+  The legitimacy guard now protects 33 detector codes, up from 31.
+- **Residual kept explicit, per ADR-0002:** a code built from an f-string,
+  a constant, or a lookup is invisible to the widened scanner too. The
+  test docstring states the exact promise and refuses the stronger one.
+  The CATALOG refactor stays deferred; reopen when diagnostic prose gets
+  reused (LSP quick-fixes, fix-loop hint templating, a second renderer).
+
 ## [2026-07-25] architecture review candidate 03 | shared AST walker
 - Not a loop-1 iteration: no detector added, removed or weakened; ratchet
   unchanged at 40 codes / 30 detectors. `passes/ast_walk.py` holds the
