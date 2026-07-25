@@ -27,7 +27,10 @@ coverage: `vault/wiki/clusters/violation-taxonomy.md`.
 4. **Eliminate the TYPE, not one instance.** Over-flag rather than miss;
    provide a sanctioned exit/sanitizer where one exists (none for SSTI).
 5. **Ship the full slice:** detector in `transpiler/aether/passes/effects.py`
-   folded into `_run_effect_scope_check` in `cli.py`; any new stdlib
+   registered in the `security` stage of `STAGES` in
+   `transpiler/aether/passes/__init__.py` — the ONE place detector
+   membership is spelled out; every caller (CLI, SDK, LSP, `tools/scan.py`,
+   the tests) crosses `analyze()` and picks it up automatically; any new stdlib
    sink/guard in `runtime.py` (+ register effects in `passes/effects.py`
    `_STDLIB_EFFECTS` and `passes/capability.py` `_STDLIB_EFFECT_PATHS`,
    + `_KNOWN_CAPABILITIES` in `passes/modules.py` if a new capability);

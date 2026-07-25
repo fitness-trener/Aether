@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Aether scanner — point it at a directory of `.aeth` files (e.g. a corpus
 of AI-generated code) and get a findings report across the full detector
-suite: the base effect/capability passes, the 19 security detectors
-(E0710-E0728), and the 5 static-semantic checks (E0202-E0206).
+suite. Membership is `aether.passes.STAGES`, the same registry the CLI,
+the SDK and the LSP cross — this scanner does not keep its own list (it
+used to, and drifted three detectors behind).
 
 This is the product shape of Aether's phase-2 story: not "model a known
 CVE", but "scan real code and surface real issues".
@@ -32,25 +33,7 @@ sys.path.insert(0, os.path.join(ROOT, "transpiler"))
 
 from aether.parser import parse                        # noqa: E402
 from aether.diagnostics import AetherError             # noqa: E402
-from aether.passes import effects as fx                # noqa: E402
-from aether.passes.capability import check_capabilities  # noqa: E402
-from aether.passes.modules import check_modules        # noqa: E402
-
-# Every default-on analysis, in one list.
-_CHECKS = [
-    fx.check_effects, check_capabilities, check_modules,
-    # security (E0710-E0728)
-    fx.check_effect_scope, fx.check_cleartext_transmission, fx.check_metadata_fetch,
-    fx.check_fs_path_safety, fx.check_secret_flow, fx.check_injection,
-    fx.check_command_injection, fx.check_pii_flow, fx.check_log_injection,
-    fx.check_reflected_xss, fx.check_header_injection, fx.check_csv_injection,
-    fx.check_authorization, fx.check_resource_authorization, fx.check_open_redirect,
-    fx.check_template_injection, fx.check_deserialization, fx.check_xxe,
-    fx.check_hardcoded_secret,
-    # static-semantic (E0202-E0206)
-    fx.check_exhaustiveness, fx.check_unreachable_arms, fx.check_dead_code,
-    fx.check_unused_binding, fx.check_ignored_result,
-]
+from aether.passes import analyze_flat                 # noqa: E402
 
 
 def _files(target: str):
@@ -68,14 +51,8 @@ def scan_file(path: str) -> dict:
     except AetherError as e:
         # Generation failure — invalid syntax. Reported separately.
         return {"path": path, "parse_error": str(e), "findings": []}
-    findings = []
-    for chk in _CHECKS:
-        try:
-            for d in chk(ast):
-                findings.append({"code": d.code, "message": d.message,
-                                 "line": d.position.line})
-        except Exception:
-            pass  # a pass that trips on partial AST does not sink the scan
+    findings = [{"code": d.code, "message": d.message, "line": d.position.line}
+                for d in analyze_flat(ast)]
     findings.sort(key=lambda x: (x["line"], x["code"]))
     return {"path": path, "findings": findings}
 

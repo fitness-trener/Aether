@@ -26,20 +26,7 @@ from .lexer import tokenize
 from .parser import parse, parse_collect
 from .emitter import emit
 from .pretty import pretty
-from .passes.capability import check_capabilities
-from .passes.effects import (
-    check_effects, check_effect_scope, check_fs_path_safety, check_secret_flow,
-    check_injection, check_command_injection, check_pii_flow,
-    check_authorization, check_resource_authorization, check_open_redirect,
-    check_template_injection, check_deserialization, check_cleartext_transmission,
-    check_metadata_fetch, check_hardcoded_secret, check_log_injection,
-    check_reflected_xss, check_header_injection, check_xxe,
-    check_csv_injection, check_marker_boundary, check_return_laundering,
-    check_exhaustiveness, check_unreachable_arms,
-    check_dead_code, check_unused_binding, check_ignored_result,
-    check_unsatisfiable_refinement,
-)
-from .passes.modules import check_modules
+from .passes import analyze
 from .passes.imports import resolve_imports
 from .runtime import build_namespace, set_effect_strict, set_deterministic
 
@@ -189,69 +176,29 @@ def cmd_fmt(args) -> int:
     return 0
 
 
-def _run_capability_check(ast, as_json) -> int:
-    """Returns 0 if all capabilities OK, 2 otherwise (writes diagnostics)."""
-    diags = check_capabilities(ast)
-    if not diags:
-        return 0
-    for d in diags:
-        _emit_error(d, as_json)
-    return 2
+# Which `--no-*` flag opts out of which registry stage. Stage membership
+# itself lives in passes/STAGES and is never restated here.
+_STAGE_OPT_OUT = {
+    "effects":    "no_static_effects",      # B.1/B.2
+    "security":   "no_scope_check",         # E0710-E0730
+    "semantic":   "no_exhaustiveness_check",  # E0202-E0207
+    "capability": "no_capability_check",    # B.3
+    "modules":    "no_module_check",        # D.3
+}
 
 
-def _run_effects_check(ast, as_json) -> int:
-    """Returns 0 if all call-site effects ⊆ caller declared effects, 2 otherwise."""
-    diags = check_effects(ast)
-    if not diags:
-        return 0
-    for d in diags:
-        _emit_error(d, as_json)
-    return 2
-
-
-def _run_effect_scope_check(ast, as_json) -> int:
-    """Reach-scope discipline: E0710 (net.fetch host must be pinned) +
-    E0711 (fs read/write path must be literal or safeJoin-sanitized).
-    0 if clean, 2 otherwise."""
-    diags = (check_effect_scope(ast) + check_fs_path_safety(ast)
-             + check_secret_flow(ast) + check_injection(ast)
-             + check_command_injection(ast) + check_pii_flow(ast)
-             + check_authorization(ast) + check_resource_authorization(ast)
-             + check_open_redirect(ast) + check_template_injection(ast)
-             + check_deserialization(ast) + check_cleartext_transmission(ast)
-             + check_metadata_fetch(ast) + check_hardcoded_secret(ast)
-             + check_log_injection(ast) + check_reflected_xss(ast)
-             + check_header_injection(ast) + check_xxe(ast)
-             + check_csv_injection(ast) + check_marker_boundary(ast)
-             + check_return_laundering(ast))
-    if not diags:
-        return 0
-    for d in diags:
-        _emit_error(d, as_json)
-    return 2
-
-
-def _run_exhaustiveness_check(ast, as_json) -> int:
-    """Static semantic checks: E0202 non-exhaustive match + E0203
-    unreachable arm + E0204 dead code after a terminator. 0 if clean."""
-    diags = (check_exhaustiveness(ast) + check_unreachable_arms(ast)
-             + check_dead_code(ast) + check_unused_binding(ast)
-             + check_ignored_result(ast) + check_unsatisfiable_refinement(ast))
-    if not diags:
-        return 0
-    for d in diags:
-        _emit_error(d, as_json)
-    return 2
-
-
-def _run_module_check(ast, as_json) -> int:
-    """D.3 module-validation pass. 0 if structurally OK, 2 otherwise."""
-    diags = check_modules(ast)
-    if not diags:
-        return 0
-    for d in diags:
-        _emit_error(d, as_json)
-    return 2
+def _run_analysis(ast, args) -> int:
+    """Run the static-analysis registry in stage order. Prints the first
+    stage that produced diagnostics and returns 2; 0 if every stage is
+    clean. Short-circuiting per stage is the pre-registry behaviour."""
+    skip = {stage for stage, flag in _STAGE_OPT_OUT.items()
+            if getattr(args, flag, False)}
+    for _stage, diags in analyze(ast, skip=skip):
+        if diags:
+            for d in diags:
+                _emit_error(d, args.json)
+            return 2
+    return 0
 
 
 def _run_smt_check(ast, as_json, timeout_ms):
@@ -300,36 +247,12 @@ def cmd_check(args) -> int:
     py = emit(ast)
     # Compile but don't execute.
     compile(py, args.file + ".py", "exec")
-    # Default-on static effect checking (B.1). Opt out with --no-static-effects.
-    if not getattr(args, "no_static_effects", False):
-        rc = _run_effects_check(ast, args.json)
-        if rc != 0:
-            return rc
-    # Default-on broad-scope check (E0710): reject unpinned net.fetch hosts
-    # that admit SSRF. Opt out with --no-scope-check.
-    if not getattr(args, "no_scope_check", False):
-        rc = _run_effect_scope_check(ast, args.json)
-        if rc != 0:
-            return rc
-    # Default-on match-exhaustiveness check (E0202). Opt out with
-    # --no-exhaustiveness-check.
-    if not getattr(args, "no_exhaustiveness_check", False):
-        rc = _run_exhaustiveness_check(ast, args.json)
-        if rc != 0:
-            return rc
-    # Default-on transitive capability check (B.3). No-op when no modules.
-    # Opt out entirely with --no-capability-check.
-    # --capability-strict is kept as an alias for the default behaviour for
-    # backward compat with v0.2 scripts.
-    if not getattr(args, "no_capability_check", False):
-        rc = _run_capability_check(ast, args.json)
-        if rc != 0:
-            return rc
-    # Default-on module-validation pass (D.3). No-op when no modules.
-    if not getattr(args, "no_module_check", False):
-        rc = _run_module_check(ast, args.json)
-        if rc != 0:
-            return rc
+    # Every default-on static stage, in registry order. Each `--no-*` flag
+    # in _STAGE_OPT_OUT drops its stage. (--capability-strict is kept as an
+    # alias for the default behaviour for backward compat with v0.2 scripts.)
+    rc = _run_analysis(ast, args)
+    if rc != 0:
+        return rc
     # SMT contract proving: default-on when z3-solver is installed
     # (wave 1 flip; was opt-in). --no-prove disables; --prove forces and
     # errors with an install hint when z3 is missing. E0901 refutations
@@ -371,21 +294,11 @@ def cmd_run(args) -> int:
     ast, rc = _maybe_resolve_imports(ast, args.file, args)
     if rc != 0:
         return rc
-    # Default-on static effect checking (B.1).
-    if not getattr(args, "no_static_effects", False):
-        rc = _run_effects_check(ast, args.json)
-        if rc != 0:
-            return rc
-    # Default-on broad-scope check (E0710). Opt out with --no-scope-check.
-    if not getattr(args, "no_scope_check", False):
-        rc = _run_effect_scope_check(ast, args.json)
-        if rc != 0:
-            return rc
-    # Default-on transitive capability check (B.3).
-    if not getattr(args, "no_capability_check", False):
-        rc = _run_capability_check(ast, args.json)
-        if rc != 0:
-            return rc
+    # Default-on static analysis — the same registry `check` runs, so a
+    # clean `check` now means something about what `run` verified.
+    rc = _run_analysis(ast, args)
+    if rc != 0:
+        return rc
     py = emit(ast, release=getattr(args, "release", False))
     code = compile(py, args.file + ".py", "exec")
     g = build_namespace()
@@ -399,6 +312,14 @@ def cmd_test(args) -> int:
     """Run a directory containing program.aeth + expected_stdout.txt.
 
     Exits 0 on match, 1 on mismatch, 2 on compile/runtime error.
+
+    Runs NO static passes, deliberately (ADR-0001). This is the fixture
+    runner — `scripts/run_all.py` drives it over every `reference/` dir
+    and `bench/harness.py` over `bench/tasks/`. Answering "does this
+    program still behave" must stay decoupled from "does it still
+    comply", or one new detector turns every fixture red at once and the
+    gate stops being bisectable. Compliance is `check`'s job; the gate
+    runs both.
     """
     pdir = args.dir
     src_path = os.path.join(pdir, "program.aeth")

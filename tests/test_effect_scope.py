@@ -1292,27 +1292,18 @@ end
 
 # --- composition: all reach-scope detectors fire additively -------------
 
-_ALL_SCOPE_CHECKS = [
-    check_effect_scope, check_fs_path_safety, check_secret_flow,
-    check_injection, check_command_injection, check_pii_flow,
-    check_authorization, check_resource_authorization, check_open_redirect,
-    check_template_injection, check_deserialization, check_cleartext_transmission,
-    check_metadata_fetch, check_hardcoded_secret,
-]
-
-
 def test_detectors_compose_additively():
     """One module with seven independent violations must yield all seven
-    codes — no pass masks another."""
+    codes — no pass masks another. Runs the whole registry, not a local
+    copy of it."""
     import os
+    from aether.passes import analyze_flat
     here = os.path.dirname(os.path.abspath(__file__))
     path = os.path.join(here, "..", "demos", "case_studies",
                         "composition_kitchen_sink", "aether", "multi_violation.aeth")
     with open(path, encoding="utf-8") as f:
         ast = parse(f.read(), "<kitchen>")
-    codes = set()
-    for chk in _ALL_SCOPE_CHECKS:
-        codes.update(d.code for d in chk(ast))
+    codes = {d.code for d in analyze_flat(ast)}
     expected = {"E0712", "E0713", "E0719", "E0720", "E0721", "E0722", "E0723"}
     assert expected <= codes, f"missing {expected - codes}; got {sorted(codes)}"
     print(f"composition: all 7 detectors fired together ({len(codes)} codes)")

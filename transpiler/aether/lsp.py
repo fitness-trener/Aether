@@ -53,6 +53,7 @@ import io
 import json
 import os
 import sys
+import traceback
 from typing import Any, Dict, List, Optional
 
 from .diagnostics import Diagnostic
@@ -256,7 +257,13 @@ class LspServer:
             try:
                 self.dispatch(msg)
             except Exception as e:
-                # Reply with internal error for requests; swallow for notifications.
+                # The ONE place analysis failures are caught. This is
+                # liveness, not analysis: a long-lived server must survive
+                # a bad request, but the crash is logged, never swallowed.
+                # `analyze()` itself has no exception handling — the CLI
+                # and CI must go red on a crashing detector.
+                traceback.print_exc(file=sys.stderr)
+                sys.stderr.flush()
                 if "id" in msg:
                     self.reply(msg["id"], error={
                         "code": -32603,
