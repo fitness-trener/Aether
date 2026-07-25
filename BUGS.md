@@ -91,3 +91,50 @@ the bug is in the Aether pass and reproduces with no Python involved.
 Fix: sort on an explicit ordering key, `(path, arg or "")`, so the arg
 slot is always str-vs-str. Regression test:
 `test_mixed_arg_effect_list_does_not_crash` in tests/test_effect_scope.py.
+
+### BUG-004  three sink guards defaulted "unknown" to "safe" (false accepts)  [FIXED 6606fe1]
+test: tests/test_py_frontend_sinks.py
+
+Found 2026-07-26, probing the guard-bound-elsewhere residual recorded in
+`vault/wiki/questions/q5`. Expected a precision gap; found three MISSES
+inside the modeled surface — the contract-breach class, same as BUG-001
+and BUG-002. All three are one mistake: the unknown case defaulted to
+"not a sink".
+
+Repros, all SILENT before the fix (stages effects/semantic/capability
+skipped, as `aether check-py` runs them):
+
+1.  yaml.load(raw, Loader=yaml.Loader)                    -> expected E0720
+2.  loader = yaml.Loader; yaml.load(raw, Loader=loader)   -> expected E0720
+3.  sh = True; subprocess.run('x ' + cmd, shell=sh)       -> expected E0714
+4.  cur.execute('SELECT * FROM t WHERE n=' + name, extra) -> expected E0713
+
+(1) is the worst and is not "bound elsewhere" at all: the unsafe value is
+written at the call site. The old gate read `if _has_kw(call, "Loader"):
+return None` — ANY Loader= meant safe. Adding `Loader=` is the commonest
+wrong fix for PyYAML's deprecation warning, and `yaml.Loader` is the RCE.
+
+Loader safety verified by EXECUTION on PyYAML 6.0.3, payload
+`!!python/object/apply:os.system [...]`:
+    yaml.Loader     -> CONSTRUCTED (unsafe)
+    yaml.UnsafeLoader -> CONSTRUCTED (unsafe)
+    yaml.FullLoader -> refused (ConstructorError)
+    yaml.SafeLoader -> refused (ConstructorError)
+FullLoader is deliberately NOT sanctioned regardless: CVE-2020-1747 and
+CVE-2020-14343 are FullLoader bypasses.
+
+(3) `_has_kw_true` required a literal `True` Constant, so a shell flag
+held in a variable was read as "no shell".
+
+(4) `_is_parameterized_query` cleared ANY two-argument execute. It was
+never needed: `_SQL_RULE` has no literal_bans, so
+`cur.execute("... id = ?", (uid,))` is already clean because argument 0
+is a StringLit. The recognizer only ever added a false accept, and the
+fix is its deletion.
+
+Fix: one declarative `SINK_GUARDS` table whose contract is that a guard
+clears a call ONLY when its value is positively identified as sanctioned.
+Unrecognized, computed, unresolvable, or absent all mean SINK. This is
+q5's rule ("never assume clean from a name") applied to values.
+Regression tests: `test_yaml_unsafe_loader_is_still_a_sink` and 5 siblings
+in tests/test_py_frontend_sinks.py.

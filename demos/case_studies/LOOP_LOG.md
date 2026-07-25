@@ -1495,6 +1495,61 @@ State carried forward: the full gate suite must stay green
 
 ---
 
+## Iteration 45 — the guard is not the argument (three false accepts)
+
+- **Target:** iteration 43's own surfaced residual, "guard bound
+  elsewhere", recorded in q5 with a probe-before-building condition
+  attached. The probe is the whole story here.
+- **Gap confirmed empirically — and it was NOT the expected gap.** Filed
+  as a precision residual; the probe found **three FALSE ACCEPTS**, the
+  contract-breach class (same as BUG-001, BUG-002). Silent before:
+  `yaml.load(raw, Loader=yaml.Loader)`; the same with the loader bound
+  one statement earlier; `sh = True` then `subprocess.run(..., shell=sh)`;
+  and `cur.execute('SELECT ... ' + name, extra)`.
+- **The worst one needed no "elsewhere" at all.** The unsafe value is at
+  the call site: the gate read `if _has_kw(call, "Loader"): return None`,
+  i.e. ANY `Loader=` meant safe. Adding `Loader=` is the commonest wrong
+  fix for PyYAML's deprecation warning, and `yaml.Loader` is the RCE —
+  verified by EXECUTION on PyYAML 6.0.3 with an
+  `!!python/object/apply:os.system` payload (Loader and UnsafeLoader
+  construct it; FullLoader and SafeLoader refuse). FullLoader is still
+  not sanctioned: CVE-2020-1747 and CVE-2020-14343 are its bypasses.
+- **Improvement (eliminates the TYPE):** one declarative `SINK_GUARDS`
+  table replacing three ad-hoc gates. A guard clears a call ONLY when its
+  value is positively identified as sanctioned; unrecognized, computed,
+  unresolvable and absent all mean SINK. That is q5's rule — never assume
+  clean from a NAME — applied one level down, to values. `_local_constants`
+  then recovers precision where it is decidable, resolving a local name
+  only when every binding in the function agrees. The SQL fix was a
+  DELETION: `_is_parameterized_query` cleared any two-argument execute and
+  was never needed, because argument 0 being a literal already clears the
+  parameterized form.
+- **Wiring:** `tools/py_frontend.py`; 10 tests in
+  `tests/test_py_frontend_sinks.py`; `bench/py_frontend/corpus/
+  guard_bound_repro.py` + 9 labels so the corpus can no longer be blind
+  to this class; BUGS.md BUG-004.
+- **Measured cost: zero.** Benign-corpus counts identical before and after
+  (E0711 11 · E0713 1 · E0720 1 over 76 modules). Detection went 10 → 15
+  true positives, 0 false negatives, 0 false positives. Soundness was free
+  here — a measurement, not a prediction.
+- **A second hole, found by the BENCH and not by a hand-written test:**
+  `subprocess.run(...).returncode` is an attribute READ of a call result,
+  so the call inside it vanished. The same shape without `.returncode`
+  was flagged, which is exactly why every unit test passed. Adding the
+  corpus is what exposed it.
+- **Ratchet:** unchanged (54 codes / 30 detectors).
+- **Report:** `bench/py_frontend/REPORT.md` §3b.
+- **TYPE gap surfaced for next iter:** what remains of the class is object
+  state **mutated after construction** (`s = requests.Session()` then
+  `s.verify = False`) and import-time configuration — both need a
+  different traversal. Note `session.verify` is silent for a DIFFERENT
+  reason: no detector models TLS verification at all, so that is a
+  missing-detector item for q3's normal selection, not a guard bug.
+  Probing one and reporting the other would manufacture a gap.
+- **Suite:** exit 0.
+
+---
+
 ## Next-iteration checklist (for the loop)
 
 1. Read the previous report's "TYPE gap for next iter".

@@ -145,15 +145,66 @@ SINK_BY_QUALIFIED: Dict[str, str] = {
     "xml.dom.minidom.parseString": "parseXml",
 }
 
-# Calls whose sink status depends on an argument — never mapped blindly.
-#   subprocess.*  : a shell sink ONLY with shell=True (an argv list never
-#                   reaches a shell, which is the documented fix).
-#   yaml.load     : a deserialization sink ONLY without an explicit safe
-#                   Loader (PyYAML 5.1+ requires one; that IS the fix).
-SINK_GATED_SUBPROCESS = {"subprocess.run", "subprocess.call",
-                         "subprocess.check_call", "subprocess.check_output",
-                         "subprocess.Popen"}
-SINK_GATED_YAML = {"yaml.load", "yaml.full_load", "yaml.unsafe_load"}
+# ----------------------------------------------------------------------
+# SINK GUARDS — when safety lives somewhere other than the judged argument
+# ----------------------------------------------------------------------
+# q5 settled that a NAME may not clear a call. A VALUE may not either.
+# Each guard answers "is this call safe?", and the answer is accepted only
+# when the value is positively identified as one of the sanctioned forms.
+# Unrecognized, computed, unresolvable, or absent all mean SINK.
+#
+# The ad-hoc gates this replaces defaulted the unknown case to "safe" and
+# produced three false accepts (BUGS.md BUG-004), one of them an RCE
+# written literally at the call site: `yaml.load(raw, Loader=yaml.Loader)`
+# was silent, because the old rule read "any Loader= means safe".
+
+class Guard:
+    """One sink's safety condition.
+
+    sink_name     — the Aether sink this call becomes when the guard says
+                    SINK. Lives here because the guarded callables are not
+                    in SINK_BY_QUALIFIED — the guard owns them entirely.
+    keyword       — the keyword argument that decides, or None for a
+                    positional slot (`arg_index`).
+    safe_values   — dotted spellings that make the call SAFE. Empty means
+                    no value is sanctioned; presence alone never is.
+    sink_values   — dotted spellings that make it a SINK. Used where the
+                    absent case is safe (`shell=` absent means no shell).
+    absent_is_sink— verdict when the keyword is not present at all.
+    """
+    def __init__(self, sink_name, keyword=None, arg_index=None,
+                 safe_values=(), sink_values=(), absent_is_sink=True):
+        self.sink_name = sink_name
+        self.keyword = keyword
+        self.arg_index = arg_index
+        self.safe_values = frozenset(safe_values)
+        self.sink_values = frozenset(sink_values)
+        self.absent_is_sink = absent_is_sink
+
+
+# Loader safety verified by EXECUTION on PyYAML 6.0.3 with the payload
+# `!!python/object/apply:os.system [...]`:
+#   yaml.Loader       -> CONSTRUCTED (unsafe)   yaml.UnsafeLoader -> CONSTRUCTED
+#   yaml.FullLoader   -> refused                yaml.SafeLoader   -> refused
+# FullLoader is deliberately NOT sanctioned: CVE-2020-1747 and
+# CVE-2020-14343 are FullLoader bypasses. Over-flag direction.
+_YAML_SAFE_LOADERS = ("yaml.SafeLoader", "yaml.CSafeLoader",
+                      "yaml.BaseLoader", "yaml.CBaseLoader")
+
+SINK_GUARDS: Dict[str, "Guard"] = {}
+for _fn in ("yaml.load", "yaml.full_load", "yaml.unsafe_load"):
+    # Absent Loader= is a sink (that is the classic yaml.load(x) RCE);
+    # a SANCTIONED loader clears it; anything else does not.
+    SINK_GUARDS[_fn] = Guard("deserialize", keyword="Loader",
+                             safe_values=_YAML_SAFE_LOADERS,
+                             absent_is_sink=True)
+for _fn in ("subprocess.run", "subprocess.call", "subprocess.check_call",
+            "subprocess.check_output", "subprocess.Popen"):
+    # No shell= means no shell — the argv form, which IS the documented
+    # fix — so absence is SAFE here. But a shell= we cannot resolve to a
+    # literal False is treated as a shell.
+    SINK_GUARDS[_fn] = Guard("shellExec", keyword="shell",
+                             safe_values=("False",), absent_is_sink=False)
 
 # Method name on a receiver of unresolved type -> sink (over-flag direction).
 SINK_BY_METHOD: Dict[str, str] = {
@@ -329,7 +380,8 @@ def _concat(parts: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def _expr(node: Any, imp: "_Imports",
-          safe_xml: Optional[Set[str]] = None) -> Dict[str, Any]:
+          safe_xml: Optional[Set[str]] = None,
+          resolver: Optional[Any] = None) -> Dict[str, Any]:
     """One Python expression -> one Aether expression node. Total: always
     returns a dict, never None."""
     if isinstance(node, _pyast.Constant):
@@ -345,9 +397,9 @@ def _expr(node: Any, imp: "_Imports",
         # is the same hazard, so it gets the same shape.
         if isinstance(node.op, _pyast.Add):
             return {"kind": "BinOp", "op": "+",
-                    "left": _expr(node.left, imp, safe_xml), "right": _expr(node.right, imp, safe_xml)}
+                    "left": _expr(node.left, imp, safe_xml, resolver), "right": _expr(node.right, imp, safe_xml, resolver)}
         if isinstance(node.op, _pyast.Mod) and _const_str(node.left) is not None:
-            return _concat([_expr(node.left, imp, safe_xml), _expr(node.right, imp, safe_xml)])
+            return _concat([_expr(node.left, imp, safe_xml, resolver), _expr(node.right, imp, safe_xml, resolver)])
         return {"kind": "PyExpr", "py": "BinOp"}
     if isinstance(node, _pyast.JoinedStr):
         # f-string. With >=1 FormattedValue it is a dynamic string — the
@@ -358,7 +410,7 @@ def _expr(node: Any, imp: "_Imports",
         for v in node.values:
             if isinstance(v, _pyast.FormattedValue):
                 dynamic = True
-                parts.append(_expr(v.value, imp, safe_xml))
+                parts.append(_expr(v.value, imp, safe_xml, resolver))
             elif isinstance(v, _pyast.Constant) and isinstance(v.value, str):
                 parts.append({"kind": "StringLit", "value": v.value})
             else:
@@ -371,20 +423,85 @@ def _expr(node: Any, imp: "_Imports",
                     "value": "".join(p.get("value", "") for p in parts)}
         return _concat(parts)
     if isinstance(node, _pyast.Call):
-        return _call_expr(node, imp, safe_xml)
+        return _call_expr(node, imp, safe_xml, resolver)
+    if isinstance(node, _pyast.Attribute):
+        # `subprocess.run(...).returncode`, `requests.get(u).text` — an
+        # attribute READ of a call result. Not a call itself, so it used
+        # to translate to a bare PyExpr and the call inside it vanished:
+        # the bench's `run_shell_bound_elsewhere` went silent while the
+        # same shape without `.returncode` was flagged. `walk` descends
+        # dict values, so carrying the base is enough to find it again.
+        return {"kind": "PyExpr", "py": "Attribute",
+                "base": _expr(node.value, imp, safe_xml, resolver)}
     return {"kind": "PyExpr", "py": type(node).__name__}
 
 
-def _has_kw_true(call: _pyast.Call, name: str) -> bool:
+def _dotted_of(node: Any, imp: "_Imports",
+               resolver: Optional[Any] = None) -> Optional[str]:
+    """The dotted spelling of a VALUE expression, or None if it cannot be
+    positively identified. `resolver` maps a local name to the single
+    value bound to it; without one, a bare Name is unresolved — which,
+    per the guard contract, means unsafe."""
+    if isinstance(node, _pyast.Constant):
+        return repr(node.value) if node.value is None else str(node.value)
+    if isinstance(node, _pyast.Attribute) and isinstance(node.value, _pyast.Name):
+        return imp.resolve_attr(node.value.id, node.attr) or \
+            (node.value.id + "." + node.attr)
+    if isinstance(node, _pyast.Name):
+        if resolver is not None:
+            return resolver(node.id)
+        return None
+    return None
+
+
+def _local_constants(fn_node: Any, imp: "_Imports") -> Dict[str, str]:
+    """local name -> the single dotted value bound to it in this function.
+
+    A name bound more than once to DIFFERENT values is omitted, and so is
+    one whose value could not be identified: ambiguity must over-flag,
+    never resolve. This only ever feeds `safe_values`, and a WRONG
+    resolution to a safe value IS a false accept — which is the whole of
+    BUG-004 — so the bar is a single unique binding, or nothing.
+
+    Straight-line: no control flow is modeled, so a name assigned in one
+    branch and read in another counts as one binding. That direction is
+    safe here precisely because disagreement, not agreement, is what
+    disqualifies a name."""
+    seen: Dict[str, Set[str]] = {}
+    for stmt in _pyast.walk(fn_node):
+        if not isinstance(stmt, _pyast.Assign) or len(stmt.targets) != 1:
+            continue
+        tgt = stmt.targets[0]
+        if not isinstance(tgt, _pyast.Name):
+            continue
+        val = _dotted_of(stmt.value, imp, None)
+        seen.setdefault(tgt.id, set()).add(val if val is not None
+                                           else "<unresolved>")
+    return {n: next(iter(vs)) for n, vs in seen.items()
+            if len(vs) == 1 and "<unresolved>" not in vs}
+
+
+def _guard_verdict(call: _pyast.Call, guard: "Guard", imp: "_Imports",
+                   resolver: Optional[Any] = None) -> bool:
+    """True if this call IS a sink under `guard`."""
+    node = None
     for kw in call.keywords or []:
-        if kw.arg == name and isinstance(kw.value, _pyast.Constant) \
-                and kw.value.value is True:
-            return True
-    return False
-
-
-def _has_kw(call: _pyast.Call, name: str) -> bool:
-    return any(kw.arg == name for kw in call.keywords or [])
+        if kw.arg == guard.keyword:
+            node = kw.value
+            break
+    if node is None and guard.arg_index is not None \
+            and len(call.args) > guard.arg_index:
+        node = call.args[guard.arg_index]
+    if node is None:
+        return guard.absent_is_sink
+    dotted = _dotted_of(node, imp, resolver)
+    if dotted is None:
+        return True                      # unresolved -> sink, never safe
+    if dotted in guard.safe_values:
+        return False
+    if guard.sink_values:
+        return dotted in guard.sink_values
+    return True                          # not positively sanctioned -> sink
 
 
 # XML parser constructors whose keyword arguments carry the XXE guard.
@@ -405,7 +522,14 @@ def _safe_xml_parser_names(fn_node: Any, imp: "_Imports") -> Set[str]:
 
     Conservative: a name is safe only when EVERY binding to it in this
     function is an explicit `resolve_entities=False`. Rebound, computed,
-    keyword absent, or constructor unknown — not safe."""
+    keyword absent, or constructor unknown — not safe.
+
+    This is the parser-shaped instance of `_local_constants`' discipline:
+    resolve a local name only when every binding agrees, and treat
+    disagreement as unsafe. Kept separate because the value being
+    resolved is a keyword INSIDE the bound call rather than the bound
+    value itself; merging them would change what each one accepts, and a
+    tidier guard that accepts more is a worse guard."""
     bound: Dict[str, List[bool]] = {}
     for stmt in _pyast.walk(fn_node):
         if not isinstance(stmt, _pyast.Assign) or len(stmt.targets) != 1:
@@ -424,26 +548,17 @@ def _safe_xml_parser_names(fn_node: Any, imp: "_Imports") -> Set[str]:
     return {n for n, flags in bound.items() if flags and all(flags)}
 
 
-def _is_parameterized_query(call: _pyast.Call) -> bool:
-    """`cursor.execute(sql, params)` with a second argument is the DB-API
-    parameterized form — the driver binds the values, so the string is not
-    the injection vector. This is Python's `sqlBind`, expressed as a call
-    SHAPE rather than as a wrapper function."""
-    return len(call.args) >= 2
-
-
 def _sink_name(call: _pyast.Call, imp: "_Imports",
-               safe_xml: Optional[Set[str]] = None) -> Optional[str]:
+               safe_xml: Optional[Set[str]] = None,
+               resolver: Optional[Any] = None) -> Optional[str]:
     """The Aether sink name for this Python call, or None."""
     dotted = _callee_spelling(call.func, imp)
     if dotted is None:
         return None
-    if dotted in SINK_GATED_SUBPROCESS:
-        # An argv list never reaches a shell; shell=True is the hazard.
-        return "shellExec" if _has_kw_true(call, "shell") else None
-    if dotted in SINK_GATED_YAML:
-        # An explicit Loader= is PyYAML's own documented fix.
-        return None if _has_kw(call, "Loader") else "deserialize"
+    guard = SINK_GUARDS.get(dotted)
+    if guard is not None:
+        return guard.sink_name if _guard_verdict(call, guard, imp, resolver) \
+            else None
     sink = SINK_BY_QUALIFIED.get(dotted)
     if sink == "parseXml":
         for a in call.args[1:]:
@@ -455,28 +570,33 @@ def _sink_name(call: _pyast.Call, imp: "_Imports",
     if dotted in SINK_BY_BUILTIN:
         return SINK_BY_BUILTIN[dotted]
     # Method on an unresolved receiver: over-flag by name (see doctrine note).
+    #
+    # No parameterized-query special case. `cur.execute("... id = ?", params)`
+    # is ALREADY clean because argument 0 is a StringLit and `_SQL_RULE` has
+    # no literal_bans — the rule clears it without help. The recognizer that
+    # used to live here cleared ANY two-argument execute, so
+    # `cur.execute("SELECT ... " + name, extra)` went silent: params do not
+    # launder a concatenated query. BUGS.md BUG-004.
     if isinstance(call.func, _pyast.Attribute):
-        m = SINK_BY_METHOD.get(call.func.attr)
-        if m is not None and _is_parameterized_query(call):
-            return None      # DB-API parameter binding — the sanctioned exit
-        return m
+        return SINK_BY_METHOD.get(call.func.attr)
     return None
 
 
 def _call_expr(node: _pyast.Call, imp: "_Imports",
-               safe_xml: Optional[Set[str]] = None) -> Dict[str, Any]:
+               safe_xml: Optional[Set[str]] = None,
+               resolver: Optional[Any] = None) -> Dict[str, Any]:
     """A Python call as an Aether Call node, named so the existing
     detectors recognize it: the Aether SINK name when it maps to one, the
     Aether WRAPPER name when it is a sanctioned exit, otherwise its Python
     spelling (which matches neither, so an argument that is one of these
     calls is refused — the flag-more direction)."""
     dotted = _callee_spelling(node.func, imp)
-    name = (_sink_name(node, imp, safe_xml)
+    name = (_sink_name(node, imp, safe_xml, resolver)
             or SANITIZER_BY_QUALIFIED.get(dotted or "")
             or dotted or "<expr>")
     out: Dict[str, Any] = {"kind": "Call",
                            "func": {"kind": "Ident", "name": name},
-                           "args": [_expr(a, imp, safe_xml) for a in node.args],
+                           "args": [_expr(a, imp, safe_xml, resolver) for a in node.args],
                            "pos": _pos(node)}
     # A call used as a RECEIVER is still a call: `open(p).read()`,
     # `conn.cursor().execute(sql)`, `requests.get(u).json()`. Chaining is
@@ -487,7 +607,7 @@ def _call_expr(node: _pyast.Call, imp: "_Imports",
     # so it cannot mistake a receiver for an argument.
     if isinstance(node.func, _pyast.Attribute) and \
             isinstance(node.func.value, _pyast.Call):
-        out["recv"] = _call_expr(node.func.value, imp, safe_xml)
+        out["recv"] = _call_expr(node.func.value, imp, safe_xml, resolver)
     return out
 
 
@@ -520,11 +640,16 @@ def _classify_dotted(dotted: str) -> Optional[Tuple[str, str]]:
 class _FnVisitor:
     """Walk one function body and emit (effects, local_calls, unprovable)."""
     def __init__(self, imports: _Imports, local_fns: Set[str], fn_name: str,
-                 fn_line: int, safe_xml: Optional[Set[str]] = None):
+                 fn_line: int, safe_xml: Optional[Set[str]] = None,
+                 consts: Optional[Dict[str, str]] = None):
         self.imp = imports
         # Names bound to an XML parser with entity resolution disabled —
         # the guard lives in a different statement than the parse call.
         self.safe_xml: Set[str] = safe_xml or set()
+        # local name -> the single dotted value bound to it (Task 2).
+        # Empty here means every bare Name is unresolved, which the guard
+        # contract reads as SINK — the sound default.
+        self.consts: Dict[str, str] = consts or {}
         self.local_fns = local_fns
         self.fn_name = fn_name
         self.fn_line = fn_line
@@ -567,14 +692,14 @@ class _FnVisitor:
             if len(targets) == 1 and isinstance(targets[0], _pyast.Name) \
                     and stmt.value is not None:
                 self.stmts.append({"kind": "Let", "name": targets[0].id,
-                                   "value": _expr(stmt.value, self.imp, self.safe_xml),
+                                   "value": _expr(stmt.value, self.imp, self.safe_xml, self.consts.get),
                                    "pos": _pos(stmt, self.fn_line)})
             return
         if isinstance(stmt, _pyast.Expr) and isinstance(stmt.value, _pyast.Call):
-            self.stmts.append(_expr(stmt.value, self.imp, self.safe_xml))
+            self.stmts.append(_expr(stmt.value, self.imp, self.safe_xml, self.consts.get))
             return
         if isinstance(stmt, _pyast.Return) and stmt.value is not None:
-            self.stmts.append({"kind": "Return", "value": _expr(stmt.value, self.imp, self.safe_xml),
+            self.stmts.append({"kind": "Return", "value": _expr(stmt.value, self.imp, self.safe_xml, self.consts.get),
                                "pos": _pos(stmt, self.fn_line)})
             return
         if isinstance(stmt, (_pyast.With, _pyast.AsyncWith)):
@@ -584,7 +709,7 @@ class _FnVisitor:
             # benign-corpus false-positive count looked good only because
             # most file opens were invisible.
             for item in stmt.items:
-                val = _expr(item.context_expr, self.imp, self.safe_xml)
+                val = _expr(item.context_expr, self.imp, self.safe_xml, self.consts.get)
                 tgt = item.optional_vars
                 if isinstance(tgt, _pyast.Name):
                     self.stmts.append({"kind": "Let", "name": tgt.id,
@@ -734,7 +859,8 @@ def py_to_ir(source: str) -> Tuple[Dict[str, Any], Dict[str, List[Dict[str, Any]
     for qual, node in func_nodes:
         line = getattr(node, "lineno", 0)
         v = _FnVisitor(imports, simple_names, qual, line,
-                       _safe_xml_parser_names(node, imports))
+                       _safe_xml_parser_names(node, imports),
+                       _local_constants(node, imports))
         # Two separate walks, deliberately. `visit_call` drives the untouched
         # capability/UNPROVABLE analysis over EVERY call anywhere in the
         # function (including inside comprehensions and nested calls);
@@ -793,8 +919,12 @@ def mapping_table() -> Dict[str, Any]:
         "sink_by_qualified": SINK_BY_QUALIFIED,
         "sink_by_method": SINK_BY_METHOD,
         "sink_by_builtin": SINK_BY_BUILTIN,
-        "sink_gated": {"subprocess_shell_true": sorted(SINK_GATED_SUBPROCESS),
-                       "yaml_without_loader": sorted(SINK_GATED_YAML)},
+        "sink_guards": {
+            name: {"sink": g.sink_name, "keyword": g.keyword,
+                   "safe_values": sorted(g.safe_values),
+                   "sink_values": sorted(g.sink_values),
+                   "absent_is_sink": g.absent_is_sink}
+            for name, g in sorted(SINK_GUARDS.items())},
         "sanitizer_by_qualified": SANITIZER_BY_QUALIFIED,
         "mode": "sound",
     }

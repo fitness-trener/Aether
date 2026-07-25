@@ -21,6 +21,16 @@
   "bench/py_frontend/corpus/hardcoded_secret_repro.py::make_client": "E0723",
   "bench/py_frontend/corpus/hardcoded_secret_repro.py::make_client_safe": "clean",
 
+  "bench/py_frontend/corpus/guard_bound_repro.py::load_explicit_unsafe": "E0720",
+  "bench/py_frontend/corpus/guard_bound_repro.py::load_unsafe_bound_elsewhere": "E0720",
+  "bench/py_frontend/corpus/guard_bound_repro.py::load_full_loader": "E0720",
+  "bench/py_frontend/corpus/guard_bound_repro.py::run_shell_bound_elsewhere": "E0714",
+  "bench/py_frontend/corpus/guard_bound_repro.py::query_concat_with_params": "E0713",
+  "bench/py_frontend/corpus/guard_bound_repro.py::load_explicit_unsafe_safe": "clean",
+  "bench/py_frontend/corpus/guard_bound_repro.py::load_unsafe_bound_elsewhere_safe": "clean",
+  "bench/py_frontend/corpus/guard_bound_repro.py::run_shell_bound_elsewhere_safe": "clean",
+  "bench/py_frontend/corpus/guard_bound_repro.py::query_concat_with_params_safe": "clean",
+
   "bench/realworld_subprocess_cmdi/subprocess_repro.py::make_thumbnail": "E0714",
   "bench/realworld_subprocess_cmdi/subprocess_repro.py::make_thumbnail_safe": "clean",
 

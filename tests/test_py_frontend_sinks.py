@@ -299,6 +299,105 @@ def test_xxe_default_parser_still_fires():
     print("sinks: XML parser with entities on still fires")
 
 
+# --- guard-bound-elsewhere: an unresolved guard means SINK ---------------
+# These gates decide safety from something other than the argument the
+# rule judges. All three shipped defaulting the unknown case to "safe",
+# which produced three false accepts (BUGS.md BUG-004). q5's rule applies
+# to values exactly as it does to names: never clear on weak evidence.
+
+def test_yaml_unsafe_loader_is_still_a_sink():
+    """`Loader=yaml.Loader` is the RCE. Verified by execution on PyYAML
+    6.0.3: yaml.Loader constructs !!python/object/apply. Adding Loader=
+    to silence the deprecation warning is the commonest wrong fix."""
+    src = "import yaml\ndef f(raw):\n    yaml.load(raw, Loader=yaml.Loader)\n"
+    assert "E0720" in _codes(src), "yaml.Loader is the unsafe loader"
+    print("guard: yaml.Loader still flagged")
+
+
+def test_yaml_unsafe_loader_named_elsewhere_is_still_a_sink():
+    src = ("import yaml\ndef f(raw):\n"
+           "    loader = yaml.Loader\n"
+           "    yaml.load(raw, Loader=loader)\n")
+    assert "E0720" in _codes(src), \
+        "a loader bound elsewhere must not clear the sink"
+    print("guard: loader bound elsewhere still flagged")
+
+
+def test_yaml_safe_loader_stays_clean():
+    src = "import yaml\ndef f(raw):\n    yaml.load(raw, Loader=yaml.SafeLoader)\n"
+    assert "E0720" not in _codes(src), "SafeLoader is the documented fix"
+    print("guard: SafeLoader stays clean")
+
+
+def test_yaml_full_loader_is_not_sanctioned():
+    """FullLoader refused this plan's probe payload but has its own
+    bypass CVEs (CVE-2020-1747, CVE-2020-14343). Over-flag."""
+    src = "import yaml\ndef f(raw):\n    yaml.load(raw, Loader=yaml.FullLoader)\n"
+    assert "E0720" in _codes(src), \
+        "FullLoader is deliberately not sanctioned - it has bypass CVEs"
+    print("guard: FullLoader deliberately not sanctioned")
+
+
+def test_shell_true_bound_elsewhere_is_still_a_sink():
+    src = ("import subprocess\ndef f(cmd):\n"
+           "    sh = True\n"
+           "    subprocess.run('x ' + cmd, shell=sh)\n")
+    assert "E0714" in _codes(src), \
+        "shell= whose value is not provably False must be treated as a shell"
+    print("guard: shell bound elsewhere still flagged")
+
+
+def test_concatenated_sql_with_params_is_still_a_sink():
+    """A second argument does not launder a concatenated query. The
+    parameterized form is already clean because argument 0 is a literal -
+    the recognizer was unnecessary AND wrong."""
+    src = ("def f(cur, name, extra):\n"
+           "    cur.execute('SELECT * FROM t WHERE n=' + name, extra)\n")
+    assert "E0713" in _codes(src), \
+        "params do not save a query built by concatenation"
+    print("guard: concatenated SQL with params still flagged")
+
+
+def test_attribute_read_of_a_call_result_is_not_lost():
+    """`subprocess.run(...).returncode` is an attribute READ of a call
+    result — not a call, so the call inside it used to vanish. Found by
+    the bench, not by a hand-written test: the same shape without
+    `.returncode` was flagged, so the unit tests all passed."""
+    src = ("import subprocess\ndef f(cmd):\n"
+           "    return subprocess.run('x ' + cmd, shell=True).returncode\n")
+    assert "E0714" in _codes(src), \
+        "a sink call under an attribute read must still be seen"
+    print("guard: attribute read of a call result is translated")
+
+
+def test_safe_loader_bound_elsewhere_is_clean():
+    src = ("import yaml\ndef f(raw):\n"
+           "    loader = yaml.SafeLoader\n"
+           "    yaml.load(raw, Loader=loader)\n")
+    assert "E0720" not in _codes(src), \
+        "a name bound once to a sanctioned loader is resolvable"
+    print("guard: SafeLoader bound elsewhere resolves clean")
+
+
+def test_rebound_loader_is_still_a_sink():
+    src = ("import yaml\ndef f(raw, flag):\n"
+           "    loader = yaml.SafeLoader\n"
+           "    loader = yaml.Loader\n"
+           "    yaml.load(raw, Loader=loader)\n")
+    assert "E0720" in _codes(src), \
+        "a name with disagreeing bindings must not resolve to safe"
+    print("guard: rebound loader stays flagged")
+
+
+def test_shell_false_bound_elsewhere_is_clean():
+    src = ("import subprocess\ndef f(cmd):\n"
+           "    sh = False\n"
+           "    subprocess.run(['x', cmd], shell=sh)\n")
+    assert "E0714" not in _codes(src), \
+        "shell provably False is not a shell sink"
+    print("guard: shell=False bound elsewhere resolves clean")
+
+
 # --- CLI ----------------------------------------------------------------
 # `_emit_error` writes diagnostics to STDERR and the summary to STDOUT,
 # so these assert against the combined output.
@@ -377,6 +476,16 @@ if __name__ == "__main__":
     test_xxe_default_parser_still_fires()
     test_repro_corpus_flags_the_bug()
     test_safe_functions_are_clean()
+    test_yaml_unsafe_loader_is_still_a_sink()
+    test_yaml_unsafe_loader_named_elsewhere_is_still_a_sink()
+    test_yaml_safe_loader_stays_clean()
+    test_yaml_full_loader_is_not_sanctioned()
+    test_shell_true_bound_elsewhere_is_still_a_sink()
+    test_concatenated_sql_with_params_is_still_a_sink()
+    test_attribute_read_of_a_call_result_is_not_lost()
+    test_safe_loader_bound_elsewhere_is_clean()
+    test_rebound_loader_is_still_a_sink()
+    test_shell_false_bound_elsewhere_is_clean()
     test_check_py_cli_reports_and_exits_2()
     test_check_py_clean_exits_0()
     test_e0711_is_held_back_by_default()

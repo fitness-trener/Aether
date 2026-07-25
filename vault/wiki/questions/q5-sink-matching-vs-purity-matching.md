@@ -76,17 +76,69 @@ shippable. Measure it on benign code, and let the ratio decide whether
 the row leads or waits — the same discipline
 [[q3-what-makes-a-good-backlog-target]] applies to choosing targets.
 
+## The rule extends from NAMES to VALUES — and the cost of getting it backwards
+
+The guard-bound-elsewhere item was filed here as a precision residual.
+Probing it (iter-45) found something else: **three false accepts**, which
+is the contract-breach class, not a precision gap. Silent before the fix:
+
+| Shape | Expected |
+|---|---|
+| `yaml.load(raw, Loader=yaml.Loader)` | E0720 |
+| `loader = yaml.Loader` … `yaml.load(raw, Loader=loader)` | E0720 |
+| `sh = True` … `subprocess.run('x ' + cmd, shell=sh)` | E0714 |
+| `cur.execute('SELECT ... ' + name, extra)` | E0713 |
+
+The first is the instructive one. It is **not "bound elsewhere" at all** —
+the unsafe value is written at the call site, and the gate read *any*
+`Loader=` as safe. Adding `Loader=` is the commonest wrong fix for
+PyYAML's deprecation warning, and `yaml.Loader` constructs
+`!!python/object/apply` (verified by execution, PyYAML 6.0.3). So the
+answer this page gives about names was **only half the rule**:
+
+> A NAME may not clear a call. **A VALUE may not either.** A guard clears
+> a call only when its value is positively identified as one of the
+> sanctioned forms. Unrecognized, computed, unresolvable, or absent all
+> mean SINK.
+
+All three bugs were one mistake — the unknown case defaulted to *safe* —
+made in three places because each gate was written ad hoc. They are now
+one declarative table (BUGS.md BUG-004).
+
+The corollary is about scope, not about Python: **the direction argument
+in the Short Answer above is not self-executing.** It says which way to
+err; it does not make you err that way. Every place the analysis draws a
+conclusion needs the default written down explicitly, because "I could
+not tell" is the case that will actually occur and the tempting default
+is silence.
+
+**Measured cost of the fix** (`bench/py_frontend/REPORT.md`, same 76
+benign modules): E0711 11, E0713 1, E0720 1 — **identical to before**.
+Making every unresolvable guard a sink cost zero measured precision on
+real code. That is a measurement, not a prediction; it could have gone
+the other way, and the decision rule would then have been the one applied
+to E0711 — publish the number and put the row behind `--strict`.
+
+Precision was recovered where it is decidable: `_local_constants`
+resolves a local name only when **every** binding in the function agrees,
+so `loader = yaml.SafeLoader` clears the sink while a name rebound from
+`SafeLoader` to `Loader` does not.
+
 ## Residual
 
-**Guard bound elsewhere.** When a call's safety lives in a *different
-statement* rather than in its argument shape, no argument-shape rule can
-see it. `lxml`'s XXE is the worked example: the vulnerable and safe call
-sites are byte-identical `etree.fromstring(raw, parser)`, and the guard
-is a keyword on the parser object bound earlier. Resolved by hand in the
-frontend for that one case; every other member of the class — a session
-configured at import time, a flag set in a constructor — is unhandled.
-Probe before building the general version, per the iter-41 lesson
-recorded in [[q1-taint-marker-soundness-boundary]].
+**Object state and import-time configuration.** What is handled now is a
+guard in a *keyword* and a guard in a *local binding*. What is not: state
+**mutated after construction** — `s = requests.Session()` then
+`s.verify = False` — and configuration set at module scope. Both need a
+different traversal (attribute assignment, module-level flow) and their
+own probe.
+
+Note `session.verify` was probed and is silent for a *different* reason:
+Aether has **no detector that models TLS verification at all**, so there
+is nothing to gate. That is a missing-detector item for
+[[q3-what-makes-a-good-backlog-target]]'s normal selection, not a guard
+bug — the distinction matters, because probing one and reporting the
+other would manufacture a gap that does not exist.
 
 ## Related
 - [[q1-taint-marker-soundness-boundary]] — the over-flag-never-miss contract every taint pass inherits
