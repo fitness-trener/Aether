@@ -15,13 +15,22 @@ a test can check it. The candidate roots:
 | `bench/**` | 249 | generated benchmark tasks |
 | `reference/**` | 10 | fixture programs for `cli test` |
 
+**Amended 2026-07-25** (during implementation): the in-scope count is **83**,
+not 84. `demos/payment_workflow/broken.fixed.aeth` is *generated* —
+`fix_loop.py` writes `<source>.fixed.aeth` and `test_fix_loop_demo.py`
+regenerates it on every gate run, silently overwriting anything placed there.
+It is excluded by that `.fixed.aeth` suffix. The hand-authored `fixed.aeth`
+files do not match the suffix and stay in scope. Caught because a corpus
+header written into the file vanished mid-session.
+
 Filenames in the first two roots already assert an expectation
 (`14_sql_injection.aeth`, `vulnerable.aeth`) that nothing read.
 
 ## Decision
 
-Corpus scope is `demos/**` + `playground/examples/**` — 84 files. `bench/`
-and `reference/` stay out.
+Corpus scope is `demos/**` + `playground/examples/**` — 83 files (see the
+amendment above). `bench/` and `reference/` stay out. Generated files are out
+of scope wherever they live: a file a test rewrites cannot carry a claim.
 
 ## Consequences
 
