@@ -1553,6 +1553,146 @@ end
     print("E0716: nested Authorized<T> is not a proof (top-level rule kept)")
 
 
+# --- container-carried markers: record fields ---------------------------
+# `record User do email: PII<String> end` declares that the record CARRIES
+# PII in that field. Two duties follow: reading `u.email` is a taint
+# source (or the sinks go blind), and putting a marked value INTO that
+# field is a sanctioned crossing (or the record can never legitimately
+# hold PII and the safe shape is unwritable). Field matching is by NAME —
+# no record-type resolution — so it over-flags a same-named plain field.
+
+RECORD_PII_SRC = """
+record User do
+  email: PII<String>
+  name: String
+end
+
+function leak(u: User) returns Unit
+  effects log
+do
+  print("user=" + u.email)
+end
+"""
+
+
+def test_record_field_read_tainted():
+    assert _pii_codes(RECORD_PII_SRC) == ["E0715"], \
+        "reading a PII-typed record field must taint at the sink"
+    print("E0715: PII record field read into a log rejected")
+
+
+def test_record_field_read_redacted_clean():
+    src = """
+record User do
+  email: PII<String>
+  name: String
+end
+
+function leak(u: User) returns Unit
+  effects log
+do
+  print("user=" + redact(u.email))
+end
+"""
+    assert _pii_codes(src) == [], \
+        "redact() on the field read is the sanctioned exit"
+    print("E0715: redacted record field read passes clean")
+
+
+def test_record_field_bound_then_leaked():
+    src = """
+record Creds do
+  token: Secret<String>
+end
+
+function leak(c: Creds) returns Unit
+  effects log
+do
+  let t: String = c.token
+  print("tok=" + t)
+end
+"""
+    assert "E0712" in _sec_codes(src), \
+        "a name bound to a marked field read must inherit the taint"
+    print("E0712: Secret record field via binding rejected")
+
+
+def test_plain_record_field_still_clean():
+    src = """
+record Event do
+  action: String
+end
+
+function report(e: Event) returns Unit
+  effects log
+do
+  print("action=" + e.action)
+end
+"""
+    assert _pii_codes(src) == [] and _sec_codes(src) == [], \
+        "a record with no marker-typed field must stay clean (non-breaking)"
+    print("E0715/E0712: plain record fields stay clean")
+
+
+def test_record_construction_is_sanctioned_crossing():
+    src = """
+record User do
+  email: PII<String>
+  name: String
+end
+
+function leak(u: User) returns Unit
+  effects log
+do
+  print("user=" + redact(u.email))
+end
+
+function main() returns Unit
+  effects log
+do
+  leak(User(classifyPII("jane@corp.example"), "jane"))
+end
+"""
+    assert _mb_codes(src) == [], \
+        "a marker-typed FIELD preserves the marker - the crossing is sanctioned"
+    print("E0729: construction into a marker-typed field passes clean")
+
+
+def test_record_return_is_not_laundering():
+    src = """
+record User do
+  email: PII<String>
+  name: String
+end
+
+function build(e: PII<String>) returns User
+  effects pure
+do
+  return User(e, "jane")
+end
+"""
+    assert _rl_codes(src) == [], \
+        "returning a record whose FIELD carries the marker is honest"
+    print("E0730: record return with a marker-typed field passes clean")
+
+
+def test_record_unmarked_field_still_launders():
+    src = """
+record Event do
+  who: String
+end
+
+function build(e: PII<String>) returns Event
+  effects pure
+do
+  return Event(e)
+end
+"""
+    assert _rl_codes(src) == ["E0730"], \
+        "a PLAIN field erases the marker - that is still laundering"
+    print("E0730: construction into a plain field still rejected")
+
+
 # --- E0729 marker laundering across a user-function boundary ------------
 # A Secret/PII/Untrusted value passed to a user-declared callee parameter
 # NOT typed with that marker erases the marker inside the callee — every
@@ -2119,6 +2259,13 @@ if __name__ == "__main__":
     test_nested_marker_param_crossing_sanctioned()
     test_nested_marker_return_type_clean()
     test_nested_authorized_still_unproven()
+    test_record_field_read_tainted()
+    test_record_field_read_redacted_clean()
+    test_record_field_bound_then_leaked()
+    test_plain_record_field_still_clean()
+    test_record_construction_is_sanctioned_crossing()
+    test_record_return_is_not_laundering()
+    test_record_unmarked_field_still_launders()
     test_secret_laundered_rejected()
     test_marked_param_clean()
     test_revealed_arg_clean()
