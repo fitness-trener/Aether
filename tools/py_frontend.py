@@ -445,6 +445,33 @@ def _dotted_of(node: Any, imp: "_Imports",
     return None
 
 
+def _local_constants(fn_node: Any, imp: "_Imports") -> Dict[str, str]:
+    """local name -> the single dotted value bound to it in this function.
+
+    A name bound more than once to DIFFERENT values is omitted, and so is
+    one whose value could not be identified: ambiguity must over-flag,
+    never resolve. This only ever feeds `safe_values`, and a WRONG
+    resolution to a safe value IS a false accept — which is the whole of
+    BUG-004 — so the bar is a single unique binding, or nothing.
+
+    Straight-line: no control flow is modeled, so a name assigned in one
+    branch and read in another counts as one binding. That direction is
+    safe here precisely because disagreement, not agreement, is what
+    disqualifies a name."""
+    seen: Dict[str, Set[str]] = {}
+    for stmt in _pyast.walk(fn_node):
+        if not isinstance(stmt, _pyast.Assign) or len(stmt.targets) != 1:
+            continue
+        tgt = stmt.targets[0]
+        if not isinstance(tgt, _pyast.Name):
+            continue
+        val = _dotted_of(stmt.value, imp, None)
+        seen.setdefault(tgt.id, set()).add(val if val is not None
+                                           else "<unresolved>")
+    return {n: next(iter(vs)) for n, vs in seen.items()
+            if len(vs) == 1 and "<unresolved>" not in vs}
+
+
 def _guard_verdict(call: _pyast.Call, guard: "Guard", imp: "_Imports",
                    resolver: Optional[Any] = None) -> bool:
     """True if this call IS a sink under `guard`."""
@@ -486,7 +513,14 @@ def _safe_xml_parser_names(fn_node: Any, imp: "_Imports") -> Set[str]:
 
     Conservative: a name is safe only when EVERY binding to it in this
     function is an explicit `resolve_entities=False`. Rebound, computed,
-    keyword absent, or constructor unknown — not safe."""
+    keyword absent, or constructor unknown — not safe.
+
+    This is the parser-shaped instance of `_local_constants`' discipline:
+    resolve a local name only when every binding agrees, and treat
+    disagreement as unsafe. Kept separate because the value being
+    resolved is a keyword INSIDE the bound call rather than the bound
+    value itself; merging them would change what each one accepts, and a
+    tidier guard that accepts more is a worse guard."""
     bound: Dict[str, List[bool]] = {}
     for stmt in _pyast.walk(fn_node):
         if not isinstance(stmt, _pyast.Assign) or len(stmt.targets) != 1:
@@ -816,7 +850,8 @@ def py_to_ir(source: str) -> Tuple[Dict[str, Any], Dict[str, List[Dict[str, Any]
     for qual, node in func_nodes:
         line = getattr(node, "lineno", 0)
         v = _FnVisitor(imports, simple_names, qual, line,
-                       _safe_xml_parser_names(node, imports))
+                       _safe_xml_parser_names(node, imports),
+                       _local_constants(node, imports))
         # Two separate walks, deliberately. `visit_call` drives the untouched
         # capability/UNPROVABLE analysis over EVERY call anywhere in the
         # function (including inside comprehensions and nested calls);

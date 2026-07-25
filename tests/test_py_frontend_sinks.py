@@ -358,6 +358,34 @@ def test_concatenated_sql_with_params_is_still_a_sink():
     print("guard: concatenated SQL with params still flagged")
 
 
+def test_safe_loader_bound_elsewhere_is_clean():
+    src = ("import yaml\ndef f(raw):\n"
+           "    loader = yaml.SafeLoader\n"
+           "    yaml.load(raw, Loader=loader)\n")
+    assert "E0720" not in _codes(src), \
+        "a name bound once to a sanctioned loader is resolvable"
+    print("guard: SafeLoader bound elsewhere resolves clean")
+
+
+def test_rebound_loader_is_still_a_sink():
+    src = ("import yaml\ndef f(raw, flag):\n"
+           "    loader = yaml.SafeLoader\n"
+           "    loader = yaml.Loader\n"
+           "    yaml.load(raw, Loader=loader)\n")
+    assert "E0720" in _codes(src), \
+        "a name with disagreeing bindings must not resolve to safe"
+    print("guard: rebound loader stays flagged")
+
+
+def test_shell_false_bound_elsewhere_is_clean():
+    src = ("import subprocess\ndef f(cmd):\n"
+           "    sh = False\n"
+           "    subprocess.run(['x', cmd], shell=sh)\n")
+    assert "E0714" not in _codes(src), \
+        "shell provably False is not a shell sink"
+    print("guard: shell=False bound elsewhere resolves clean")
+
+
 # --- CLI ----------------------------------------------------------------
 # `_emit_error` writes diagnostics to STDERR and the summary to STDOUT,
 # so these assert against the combined output.
@@ -442,6 +470,9 @@ if __name__ == "__main__":
     test_yaml_full_loader_is_not_sanctioned()
     test_shell_true_bound_elsewhere_is_still_a_sink()
     test_concatenated_sql_with_params_is_still_a_sink()
+    test_safe_loader_bound_elsewhere_is_clean()
+    test_rebound_loader_is_still_a_sink()
+    test_shell_false_bound_elsewhere_is_clean()
     test_check_py_cli_reports_and_exits_2()
     test_check_py_clean_exits_0()
     test_e0711_is_held_back_by_default()

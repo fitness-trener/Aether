@@ -92,7 +92,7 @@ Fix: sort on an explicit ordering key, `(path, arg or "")`, so the arg
 slot is always str-vs-str. Regression test:
 `test_mixed_arg_effect_list_does_not_crash` in tests/test_effect_scope.py.
 
-### BUG-004  three sink guards defaulted "unknown" to "safe" (false accepts)  [FIXED PENDING]
+### BUG-004  three sink guards defaulted "unknown" to "safe" (false accepts)  [FIXED 6606fe1]
 test: tests/test_py_frontend_sinks.py
 
 Found 2026-07-26, probing the guard-bound-elsewhere residual recorded in
