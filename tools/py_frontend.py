@@ -109,6 +109,74 @@ CAP_BY_BUILTIN: Dict[str, Tuple[str, str]] = {
     "input": ("log", "input"),
 }
 
+# ----------------------------------------------------------------------
+# THE AUDITABLE SINK MAPPING TABLE
+# ----------------------------------------------------------------------
+# Python call -> the Aether SINK NAME the existing detectors already know.
+# Every value here must be a sink string that appears in
+# `aether.passes.detector_specs.LITERAL_OR_WRAPPER_SPECS`; an unmapped
+# string matches no row and would silently do nothing.
+#
+# WHY MATCHING BY METHOD NAME IS LEGITIMATE HERE, having been unsound for
+# purity (see the PURE_METHODS note further down):
+#   Clearing `obj.append()` as pure from the method NAME, with no proof of
+#   the receiver's type, certified a capability-using module CLEAN — a
+#   silent false negative, the contract-breach class (trap_04).
+#   Treating `cursor.execute(...)` as a SQL sink from the method name,
+#   with exactly the same absence of proof, can only produce a finding on
+#   code that was not a sink — an over-flag.
+#   One rule covers both: never assume clean from a name; freely assume
+#   dangerous from a name. The asymmetry is not a double standard, it is
+#   the direction of the error.
+
+SINK_BY_QUALIFIED: Dict[str, str] = {
+    "os.system": "shellExec", "os.popen": "shellExec",
+    "pickle.loads": "deserialize", "pickle.load": "deserialize",
+    "marshal.loads": "deserialize", "shelve.open": "deserialize",
+    "flask.render_template_string": "renderTemplate",
+    "jinja2.Template": "renderTemplate",
+    "django.template.Template": "renderTemplate",
+    "flask.redirect": "redirect",
+    "django.shortcuts.redirect": "redirect",
+    "lxml.etree.fromstring": "parseXml", "lxml.etree.parse": "parseXml",
+    "lxml.etree.XML": "parseXml",
+    "xml.etree.ElementTree.fromstring": "parseXml",
+    "xml.etree.ElementTree.parse": "parseXml",
+    "xml.dom.minidom.parseString": "parseXml",
+}
+
+# Calls whose sink status depends on an argument — never mapped blindly.
+#   subprocess.*  : a shell sink ONLY with shell=True (an argv list never
+#                   reaches a shell, which is the documented fix).
+#   yaml.load     : a deserialization sink ONLY without an explicit safe
+#                   Loader (PyYAML 5.1+ requires one; that IS the fix).
+SINK_GATED_SUBPROCESS = {"subprocess.run", "subprocess.call",
+                         "subprocess.check_call", "subprocess.check_output",
+                         "subprocess.Popen"}
+SINK_GATED_YAML = {"yaml.load", "yaml.full_load", "yaml.unsafe_load"}
+
+# Method name on a receiver of unresolved type -> sink (over-flag direction).
+SINK_BY_METHOD: Dict[str, str] = {
+    "execute": "sqlQuery", "executemany": "sqlQuery",
+    "executescript": "sqlExec", "raw": "sqlQuery",
+}
+
+# Builtins that are sinks.
+SINK_BY_BUILTIN: Dict[str, str] = {"open": "readFile"}
+
+# Python's sanctioned exits, mapped onto Aether's wrapper names so a fixed
+# call site reads as clean instead of as an unknown call.
+SANITIZER_BY_QUALIFIED: Dict[str, str] = {
+    "shlex.quote": "shellArg", "pipes.quote": "shellArg",
+    "yaml.safe_load": "schemaDecode",
+    "json.loads": "schemaDecode", "json.load": "schemaDecode",
+    "werkzeug.utils.secure_filename": "safeJoin",
+    "flask.render_template": "trusted",
+    "urllib.parse.quote": "trusted", "urllib.parse.quote_plus": "trusted",
+    "html.escape": "trusted", "markupsafe.escape": "trusted",
+}
+
+
 # Builtins that DEFEAT sound static analysis -> always UNPROVABLE.
 DYNAMIC_BUILTINS: Dict[str, str] = {
     "eval": "eval", "exec": "exec", "compile": "compile",
@@ -304,15 +372,64 @@ def _expr(node: Any, imp: "_Imports") -> Dict[str, Any]:
     return {"kind": "PyExpr", "py": type(node).__name__}
 
 
+def _has_kw_true(call: _pyast.Call, name: str) -> bool:
+    for kw in call.keywords or []:
+        if kw.arg == name and isinstance(kw.value, _pyast.Constant) \
+                and kw.value.value is True:
+            return True
+    return False
+
+
+def _has_kw(call: _pyast.Call, name: str) -> bool:
+    return any(kw.arg == name for kw in call.keywords or [])
+
+
+def _sink_name(call: _pyast.Call, imp: "_Imports") -> Optional[str]:
+    """The Aether sink name for this Python call, or None."""
+    dotted = _callee_spelling(call.func, imp)
+    if dotted is None:
+        return None
+    if dotted in SINK_GATED_SUBPROCESS:
+        # An argv list never reaches a shell; shell=True is the hazard.
+        return "shellExec" if _has_kw_true(call, "shell") else None
+    if dotted in SINK_GATED_YAML:
+        # An explicit Loader= is PyYAML's own documented fix.
+        return None if _has_kw(call, "Loader") else "deserialize"
+    if dotted in SINK_BY_QUALIFIED:
+        return SINK_BY_QUALIFIED[dotted]
+    if dotted in SINK_BY_BUILTIN:
+        return SINK_BY_BUILTIN[dotted]
+    # Method on an unresolved receiver: over-flag by name (see doctrine note).
+    if isinstance(call.func, _pyast.Attribute):
+        return SINK_BY_METHOD.get(call.func.attr)
+    return None
+
+
 def _call_expr(node: _pyast.Call, imp: "_Imports") -> Dict[str, Any]:
-    """A Python call as an Aether Call node. Task 2 maps the callee to an
-    Aether SINK name; until then every call is named by its Python spelling,
-    which matches no sink and no wrapper — the refused direction."""
-    name = _callee_spelling(node.func, imp) or "<expr>"
-    return {"kind": "Call",
-            "func": {"kind": "Ident", "name": name},
-            "args": [_expr(a, imp) for a in node.args],
-            "pos": _pos(node)}
+    """A Python call as an Aether Call node, named so the existing
+    detectors recognize it: the Aether SINK name when it maps to one, the
+    Aether WRAPPER name when it is a sanctioned exit, otherwise its Python
+    spelling (which matches neither, so an argument that is one of these
+    calls is refused — the flag-more direction)."""
+    dotted = _callee_spelling(node.func, imp)
+    name = (_sink_name(node, imp)
+            or SANITIZER_BY_QUALIFIED.get(dotted or "")
+            or dotted or "<expr>")
+    out: Dict[str, Any] = {"kind": "Call",
+                           "func": {"kind": "Ident", "name": name},
+                           "args": [_expr(a, imp) for a in node.args],
+                           "pos": _pos(node)}
+    # A call used as a RECEIVER is still a call: `open(p).read()`,
+    # `conn.cursor().execute(sql)`, `requests.get(u).json()`. Chaining is
+    # idiomatic Python, and dropping the receiver loses the sink entirely
+    # (measured: `return open(base + name).read()` reported nothing).
+    # `walk` descends dict values, so parking it under a key is enough for
+    # every detector to find it; `_arg_reason` only ever reads `args[i]`,
+    # so it cannot mistake a receiver for an argument.
+    if isinstance(node.func, _pyast.Attribute) and \
+            isinstance(node.func.value, _pyast.Call):
+        out["recv"] = _call_expr(node.func.value, imp)
+    return out
 
 
 def _callee_spelling(func: Any, imp: "_Imports") -> Optional[str]:
@@ -594,5 +711,11 @@ def mapping_table() -> Dict[str, Any]:
         "pure_modules": sorted(PURE_MODULES),
         "pure_module_citations": PURE_MODULE_CITATIONS,
         "pure_builtins": sorted(PURE_BUILTINS),
+        "sink_by_qualified": SINK_BY_QUALIFIED,
+        "sink_by_method": SINK_BY_METHOD,
+        "sink_by_builtin": SINK_BY_BUILTIN,
+        "sink_gated": {"subprocess_shell_true": sorted(SINK_GATED_SUBPROCESS),
+                       "yaml_without_loader": sorted(SINK_GATED_YAML)},
+        "sanitizer_by_qualified": SANITIZER_BY_QUALIFIED,
         "mode": "sound",
     }

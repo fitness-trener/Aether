@@ -91,6 +91,90 @@ def test_unmodeled_expression_is_not_cleared():
     print("PyExpr: unmodeled expression stays opaque (flag-more direction)")
 
 
+# --- sink mapping: the detectors fire on unmodified Python --------------
+
+VULN_SRC = """
+import os
+import subprocess
+import pickle
+
+
+def get_user(conn, name):
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM users WHERE name = '" + name + "'")
+
+
+def ping(host):
+    subprocess.run("ping -c 1 " + host, shell=True)
+
+
+def read_upload(base, entry):
+    return open(base + "/" + entry).read()
+
+
+def load_session(blob):
+    pickle.loads(blob)
+
+
+def run_it(cmd):
+    os.system("sh -c " + cmd)
+"""
+
+
+def test_the_five_vulnerabilities_are_found():
+    codes = _codes(VULN_SRC)
+    assert codes.count("E0713") == 1, f"SQL injection via concat must fire: {codes}"
+    assert codes.count("E0714") == 2, f"both command injections must fire: {codes}"
+    assert codes.count("E0711") == 1, f"path traversal via concat must fire: {codes}"
+    assert codes.count("E0720") == 1, f"pickle.loads must fire: {codes}"
+    print("sinks: all five vulnerabilities found on unmodified Python")
+
+
+def test_fstring_sql_injection_found():
+    src = "def q(cur, uid):\n    cur.execute(f'SELECT * FROM t WHERE id={uid}')\n"
+    assert "E0713" in _codes(src), "an f-string query is a dynamic query"
+    print("sinks: f-string SQL injection found")
+
+
+def test_literal_query_is_clean():
+    src = "def q(cur):\n    cur.execute('SELECT 1')\n"
+    assert "E0713" not in _codes(src), "a fixed literal query is not an injection"
+    print("sinks: literal query stays clean")
+
+
+def test_shell_false_is_not_a_shell_sink():
+    src = ("import subprocess\n"
+           "def r(name):\n    subprocess.run(['convert', name])\n")
+    assert "E0714" not in _codes(src), \
+        "an argv list without shell=True never reaches a shell"
+    print("sinks: subprocess without shell=True is not a shell sink")
+
+
+def test_yaml_load_with_safe_loader_is_not_a_sink():
+    src = ("import yaml\n"
+           "def load(raw):\n    yaml.load(raw, Loader=yaml.SafeLoader)\n")
+    assert "E0720" not in _codes(src), \
+        "an explicit safe Loader is the documented safe form of yaml.load"
+    print("sinks: yaml.load with SafeLoader is not a deserialization sink")
+
+
+def test_chained_receiver_call_is_not_lost():
+    """`conn.cursor().execute(sql)` — the sink is reached through a call
+    used as a RECEIVER. Dropping receivers loses the finding entirely."""
+    src = "def q(conn, name):\n    conn.cursor().execute('SELECT ' + name)\n"
+    assert "E0713" in _codes(src), \
+        "a sink called on the result of another call must still be seen"
+    print("sinks: chained receiver call is translated")
+
+
+def test_sink_tables_are_auditable():
+    from tools.py_frontend import mapping_table
+    t = mapping_table()
+    for key in ("sink_by_qualified", "sink_by_method", "sink_by_builtin"):
+        assert key in t and t[key], f"{key} must be exposed for audit"
+    print("sinks: mapping tables exposed via mapping_table()")
+
+
 if __name__ == "__main__":
     test_body_is_no_longer_discarded()
     test_assign_becomes_let()
@@ -99,4 +183,11 @@ if __name__ == "__main__":
     test_constant_only_fstring_is_a_literal()
     test_percent_format_becomes_concat()
     test_unmodeled_expression_is_not_cleared()
+    test_the_five_vulnerabilities_are_found()
+    test_fstring_sql_injection_found()
+    test_literal_query_is_clean()
+    test_shell_false_is_not_a_shell_sink()
+    test_yaml_load_with_safe_loader_is_not_a_sink()
+    test_chained_receiver_call_is_not_lost()
+    test_sink_tables_are_auditable()
     print("PY FRONTEND: ALL TESTS PASS")
