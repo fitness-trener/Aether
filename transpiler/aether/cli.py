@@ -233,6 +233,27 @@ def _run_smt_check(ast, as_json, timeout_ms):
 #              than the program.
 _PY_SKIP_STAGES = ("effects", "semantic")
 
+# Rows held back from the DEFAULT Python output, by measurement, not by
+# taste. `bench/py_frontend/run_bench.py` over 76 benign modules
+# (tools/py_corpus{,2}) counted:
+#   E0711  11 findings — 1 clearly real (fa_04_upload writes to
+#          "/data/uploads/" + file.filename, a textbook upload
+#          traversal) and 8 of the form `open(path_param)`, where the
+#          path is the function's own parameter and nothing in the
+#          module constrains it. Those are provenance-UNKNOWN, not
+#          proven safe; Aether's rule (a path must be a literal or
+#          safeJoin'd) flags them because Python has no safeJoin
+#          convention. Real, but at a ratio that would bury the other
+#          rows, so it is opt-in rather than deleted.
+#   E0713   1 finding, E0720  1 finding — both on genuinely suspicious
+#          code (a migration runner executing SQL read from a file;
+#          trap_05_pickle's `pickle.load(fh)`). Those rows stay default-on.
+# The capability stage is opt-in for a different reason: on Python the
+# module policy is empty by construction, so every I/O call yields
+# E0701. That is an inventory, which `tools/py_surface.py` already
+# reports properly — not a security verdict.
+_PY_STRICT_ONLY_CODES = ("E0711",)
+
 
 def cmd_check_py(args) -> int:
     """Run the language-independent detectors over a Python file.
@@ -246,9 +267,14 @@ def cmd_check_py(args) -> int:
     from tools.py_frontend import py_to_ir
     from .passes import analyze_flat
 
+    strict = getattr(args, "strict", False)
+    skip = _PY_SKIP_STAGES if strict else _PY_SKIP_STAGES + ("capability",)
+
     src = _read(args.file)
     ast, unprovable, meta = py_to_ir(src)
-    diags = analyze_flat(ast, skip=_PY_SKIP_STAGES)
+    diags = analyze_flat(ast, skip=skip)
+    if not strict:
+        diags = [d for d in diags if d.code not in _PY_STRICT_ONLY_CODES]
 
     if args.json:
         json.dump({"ok": not diags, "lang": "python",
@@ -264,8 +290,12 @@ def cmd_check_py(args) -> int:
           f"{n_unp} unprovable region(s) in {len(unprovable)} function(s).")
     print("NOT checked on Python (no declared effects clause, no marker "
           "types): E0801 effect composition, and the taint-marker family "
-          "(E0712/E0715/E0716/E0717/E0724). Sink and capability checks "
-          "only. See PYTHON_VIABILITY.md for measured coverage.")
+          "(E0712/E0715/E0716/E0717/E0724).")
+    if not strict:
+        print("NOT checked by default (--strict adds both): E0711 dynamic "
+              "filesystem paths, and the capability inventory (E0701). "
+              "Held back by measurement, not taste - see "
+              "bench/py_frontend/REPORT.md.")
     return 2 if diags else 0
 
 
@@ -527,6 +557,11 @@ def main(argv=None) -> int:
                              "Python file (sinks + capability; no effect "
                              "composition, no marker taint)")
     sp.add_argument("file")
+    sp.add_argument("--strict", action="store_true",
+                    help="also report E0711 (dynamic filesystem paths) and "
+                         "the capability inventory (E0701); both are held "
+                         "back by default because they fire on ordinary "
+                         "Python - see bench/py_frontend/REPORT.md")
 
     sp = sub.add_parser("check", help="parse + emit (no execution)")
     sp.add_argument("file")

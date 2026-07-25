@@ -334,7 +334,9 @@ def _expr(node: Any, imp: "_Imports",
     returns a dict, never None."""
     if isinstance(node, _pyast.Constant):
         if isinstance(node.value, str):
-            return {"kind": "StringLit", "value": node.value}
+            # `pos` is load-bearing: E0723 anchors on the literal itself,
+            # and a finding with no line is useless to a fix-loop.
+            return {"kind": "StringLit", "value": node.value, "pos": _pos(node)}
         return {"kind": "PyExpr", "py": "Constant"}
     if isinstance(node, _pyast.Name):
         return {"kind": "Ident", "name": node.id}
@@ -574,6 +576,22 @@ class _FnVisitor:
         if isinstance(stmt, _pyast.Return) and stmt.value is not None:
             self.stmts.append({"kind": "Return", "value": _expr(stmt.value, self.imp, self.safe_xml),
                                "pos": _pos(stmt, self.fn_line)})
+            return
+        if isinstance(stmt, (_pyast.With, _pyast.AsyncWith)):
+            # `with open(path) as f:` is THE idiomatic Python file access.
+            # Measured: without this, `with open(base + name)` produced no
+            # E0711 at all while the bare `open(base + name)` did — the
+            # benign-corpus false-positive count looked good only because
+            # most file opens were invisible.
+            for item in stmt.items:
+                val = _expr(item.context_expr, self.imp, self.safe_xml)
+                tgt = item.optional_vars
+                if isinstance(tgt, _pyast.Name):
+                    self.stmts.append({"kind": "Let", "name": tgt.id,
+                                       "value": val,
+                                       "pos": _pos(stmt, self.fn_line)})
+                else:
+                    self.stmts.append(val)
 
     def visit_call(self, call: _pyast.Call):
         func = call.func
@@ -727,7 +745,7 @@ def py_to_ir(source: str) -> Tuple[Dict[str, Any], Dict[str, List[Dict[str, Any]
                 v.visit_call(sub)
         for sub in _pyast.walk(node):
             if isinstance(sub, (_pyast.Assign, _pyast.AnnAssign, _pyast.Expr,
-                                _pyast.Return)):
+                                _pyast.Return, _pyast.With, _pyast.AsyncWith)):
                 v.visit_stmt(sub)
         body_calls = [{"kind": "Call",
                        "func": {"kind": "Ident", "name": c},

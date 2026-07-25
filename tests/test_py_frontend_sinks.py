@@ -254,6 +254,31 @@ def test_single_arg_dynamic_query_still_fires():
     print("sinks: single-argument dynamic query still fires")
 
 
+def test_with_statement_open_is_seen():
+    """`with open(path) as f:` is THE idiomatic Python file access.
+    Missing it made the benign-corpus false-positive count look good for
+    the wrong reason: most file opens were simply invisible."""
+    src = ('def load(base, name):\n'
+           '    with open(base + "/" + name) as f:\n'
+           '        return f.read()\n')
+    assert "E0711" in _codes(src), \
+        "a with-statement open must reach the path rule"
+    print("sinks: with-statement open is translated")
+
+
+def test_string_literal_carries_a_position():
+    """E0723 anchors on the literal itself. A finding with no line is
+    useless to a fix-loop, so StringLit must carry `pos`."""
+    src = 'def f():\n\n\n    k = "AKIAIOSFODNN7EXAMPLE"\n'
+    ast_dict, _u, _m = py_to_ir(src)
+    diags = [d for d in analyze_flat(ast_dict, skip=PY_SKIP_STAGES)
+             if d.code == "E0723"]
+    assert diags, "a hardcoded AWS key literal must be reported"
+    assert diags[0].position.line == 4, \
+        f"E0723 must anchor on the literal's real line, got {diags[0].position.line}"
+    print("sinks: E0723 anchors on the literal's line")
+
+
 def test_xxe_safe_parser_disarms_the_sink():
     src = ("from lxml import etree\n"
            "def load(raw):\n"
@@ -278,7 +303,7 @@ def test_xxe_default_parser_still_fires():
 # `_emit_error` writes diagnostics to STDERR and the summary to STDOUT,
 # so these assert against the combined output.
 
-def _run_check_py(src: str):
+def _run_check_py(src: str, *flags):
     import subprocess as sp
     import tempfile
     with tempfile.TemporaryDirectory() as d:
@@ -286,8 +311,30 @@ def _run_check_py(src: str):
         with open(p, "w", encoding="utf-8") as f:
             f.write(src)
         r = sp.run([sys.executable, "-B", "-m", "transpiler.aether.cli",
-                    "check-py", p], cwd=ROOT, capture_output=True, text=True)
+                    "check-py", p, *flags], cwd=ROOT,
+                   capture_output=True, text=True)
     return r.returncode, r.stdout + r.stderr
+
+
+_OPEN_PARAM_SRC = 'def load(path):\n    with open(path) as f:\n        return f.read()\n'
+
+
+def test_e0711_is_held_back_by_default():
+    """Measured on 76 benign modules: E0711 fired 11 times, 8 of them
+    `open(path_param)`. Real, but at a ratio that buries the other rows."""
+    rc, out = _run_check_py(_OPEN_PARAM_SRC)
+    # "[E0711]" is the diagnostic form; the banner mentions the bare code
+    # when it explains what --strict adds, and that must not count.
+    assert "[E0711]" not in out, f"E0711 must not be reported by default: {out}"
+    assert rc == 0, f"default run on this shape must be clean: {out}"
+    print("cli: E0711 held back by default")
+
+
+def test_e0711_appears_under_strict():
+    rc, out = _run_check_py(_OPEN_PARAM_SRC, "--strict")
+    assert "[E0711]" in out, f"--strict must report E0711: {out}"
+    assert rc == 2, "a finding must exit 2"
+    print("cli: --strict reports E0711")
 
 
 def test_check_py_cli_reports_and_exits_2():
@@ -324,10 +371,14 @@ if __name__ == "__main__":
     test_sink_tables_are_auditable()
     test_parameterized_query_is_the_sanctioned_exit()
     test_single_arg_dynamic_query_still_fires()
+    test_with_statement_open_is_seen()
+    test_string_literal_carries_a_position()
     test_xxe_safe_parser_disarms_the_sink()
     test_xxe_default_parser_still_fires()
     test_repro_corpus_flags_the_bug()
     test_safe_functions_are_clean()
     test_check_py_cli_reports_and_exits_2()
     test_check_py_clean_exits_0()
+    test_e0711_is_held_back_by_default()
+    test_e0711_appears_under_strict()
     print("PY FRONTEND: ALL TESTS PASS")
