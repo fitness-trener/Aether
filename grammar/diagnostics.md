@@ -138,6 +138,8 @@ Bench-harness only. The CLI does not currently enforce timeouts;
 | **E0702** | module exports a name that isn't declared in this file (D.3) | `module`, `exported`, `declared_names` |
 | **E0703** | more than one `module ... end` in a single file (v0.3 is single-file; D.3) | `first_module`, `duplicate_module` |
 | **E0704** | module requires a capability outside the known vocabulary (D.3) | `module`, `capability`, `known` |
+| **E0705** | an `import` names a file that does not exist beside the importing file, or exists but cannot be read (H.E.3) | `resolved_to`, `path` (unreadable file: `resolved_to`, `os_error`) |
+| **E0706** | imports form a cycle — A imports B, B imports A (H.E.3). File-level: the cycle is detected during the DFS, past the `ImportDecl` position | `file`, `stack` |
 | **E0710** | a `net.fetch` effect leaves the host/authority unpinned (bare `*`, `scheme://*`, wildcard scheme, or leading `*` that is not a `*.subdomain` pin), admitting SSRF to internal hosts like `169.254.169.254` | `function`, `effect_arg`, `reason` |
 | **E0711** | `readFile`/`writeFile` is called with a path that is neither a fixed string literal nor routed through `safeJoin(...)`, i.e. a path steerable by untrusted input (path-traversal / Zip-Slip precondition) | `function`, `sink`, `reason` |
 | **E0712** | a `Secret<...>`-marked value reaches a log sink (`print`) or is persisted to disk (`writeFile` contents) without an explicit `reveal(...)` — the "secret accidentally logged/written" class (CWE-532) | `function`, `sink` |
@@ -164,6 +166,15 @@ E0701 comes from the B.3 default-on capability pass. E0702/E0703/E0704
 come from the D.3 module-validation pass — also default-on, opt out
 with `--no-module-check`. Programs without any module declaration
 retain an implicit all-grant; the module pass is a no-op for them.
+
+E0705/E0706 come from the H.E.3 import-resolution pass
+(`passes/imports.py`), which resolves each `import` to a sibling
+`.aeth` file and refuses a cycle instead of recursing. Both were live
+and tested from the day they shipped but documented nowhere until
+2026-07-25: they are constructed as `_diag("E07xx", …)`, passing the
+code POSITIONALLY, and the catalog scanner only recognised the keyword
+and dict forms. See `docs/adr/0002-diagnostics-md-stays-hand-written.md`
+and `tools/diagnostic_codes.py`.
 
 E0710 comes from the broad-scope pass — default-on, opt out with
 `--no-scope-check`. It refuses the *promise* itself when a fetch scope

@@ -1,5 +1,119 @@
 # Operation Log (append-only — newest on top)
 
+## [2026-07-25] sdk.py silent swallow closed | the last carry-over finding
+- `run()`'s diagnostic-dict-to-dataclass coercion sat inside
+  `except Exception: pass` — carried by all three candidate handoffs as
+  "the last silent swallow in the SDK". Removed by making the coercion
+  TOTAL rather than by catching harder: `position` is read field by
+  field instead of splatted, so nothing in `_rehydrate` can raise and
+  there is no longer anything to catch.
+- Probed before claiming: the old `Position(**...)` raises `TypeError`
+  on a non-mapping `position`, which the swallow turned into
+  `diagnostic=None` on a run that DID fail — `ok=False` with no code for
+  a fix-loop to dispatch on, which is the one thing the SDK exists to
+  hand over. On the five shapes `bench.harness.compile_and_run` actually
+  returns today, old and new produce identical positions, so this is a
+  latent-hazard fix, not a live-bug fix. Said plainly rather than dressed
+  up.
+- Three of those five shapes (E9001 emit, E9002 emit-compile, E9003
+  runtime) carry only code/category/message — the harness speaks partial
+  dicts because it must stay importable without the transpiler package.
+  All five are now pinned in `tests/test_sdk.py`, plus an end-to-end
+  assertion that a contract violation comes back WITH its code.
+- Repo-wide sweep after: no `except ...: pass` remains in `transpiler/`
+  or `bench/`. The seven in `tools/` are all narrow and deliberate
+  (`OSError` on socket teardown, `KeyboardInterrupt`, `TimeoutExpired`),
+  not bare swallows.
+
+## [2026-07-25] aether-scan workflow fixed | gate on the difference, not the findings
+- The carry-over finding both the 03 and 05 handoffs recorded as unclaimed.
+  The workflow ran `tools.scan .` over a repo that deliberately contains
+  vulnerable demos and exited 1 on any finding, so it was red by
+  construction from 2026-07-09 and a real regression was indistinguishable
+  from every other run.
+- Root cause was a single file serving two conflicting roles: a shipped
+  EXAMPLE for consumer repos ("any finding fails" — correct there) and
+  this repo's own CI ("this tree legitimately contains violations").
+  Fixed by making one flag correct in both roles rather than forking the
+  file: `tools.scan --expect` holds a header-less file to `clean`, so in a
+  repo that uses no `// expect:` headers the flag is a no-op.
+- Gains a direction the old gate never had. "Fail on any finding" could
+  only count upward; `--expect` also fails on DECLARED BUT NOT REPORTED —
+  a detector that went quiet. That is the regression class the ratchet
+  catches for detector COUNT and nothing caught for detector BEHAVIOUR.
+- `tools/expectations.py` is now the one home for the header grammar and
+  the corpus scope; `tests/test_corpus.py` and the CI gate judge files by
+  the same rules, so the suite and the workflow cannot drift apart. Same
+  shape as `tools/diagnostic_codes.py` in candidate 05.
+- Verified by planting drift, not by reading: a demo whose header was
+  rewritten to `clean` turns the gate red, and a header claiming a code
+  the file does not produce turns it red the other way. Both directions
+  are pinned in `tests/test_scan.py`, which the gate runs. No analysis
+  behaviour changed — corpus and full-tree dumps diff empty.
+
+## [2026-07-25] architecture review candidate 05 | diagnostics catalog scanner
+- Executes ADR-0002. The catalog test promised "every diagnostic code the
+  toolchain can emit is documented" while matching 2 of 3 construction
+  forms over 2 of 3 roots — false, and green. `tools/diagnostic_codes.py`
+  is now the ONE scanner; `test_diagnostic_catalog.py` and
+  `test_ratchet.py` both call it, which also makes the ratchet's
+  "same enumeration as the D.2 catalog test" docstring true (it walked a
+  different root).
+- Re-measured rather than trusting the handoff, which is off by one:
+  the narrow regex finds **44**, not 45, and the widened scanner finds
+  **54**, not 51. The 10 newly-visible codes are E0101–E0106, E0301,
+  E0304, E0705, E0706 — the handoff listed 9, omitting E0101. Confirmed
+  44 both before and after candidates 02/03, so the discrepancy is the
+  handoff's, not a regression.
+- The invisible form was the code passed POSITIONALLY to a constructing
+  helper (`lexer.py` `_err`, `passes/imports.py` `_diag`). E0705 and
+  E0706 were live, tested (`tests/test_multi_file.py`) and documented
+  nowhere; both now have rows. `grammar/diagnostics.md` is 54 rows = 54
+  constructed codes, exactly.
+- Ratchet gain locked in the same commit: `min_emitted_codes` 40 → 54.
+  The legitimacy guard now protects 33 detector codes, up from 31.
+- **Residual kept explicit, per ADR-0002:** a code built from an f-string,
+  a constant, or a lookup is invisible to the widened scanner too. The
+  test docstring states the exact promise and refuses the stronger one.
+  The CATALOG refactor stays deferred; reopen when diagnostic prose gets
+  reused (LSP quick-fixes, fix-loop hint templating, a second renderer).
+
+## [2026-07-25] architecture review candidate 03 | shared AST walker
+- Not a loop-1 iteration: no detector added, removed or weakened; ratchet
+  unchanged at 40 codes / 30 detectors. `passes/ast_walk.py` holds the
+  recursion once as `walk(node, *kinds)`; `callee_name` rides along
+  because it was the same clone in the same three files.
+- Re-measured after 02 landed rather than trusting the handoff's pre-02
+  numbers: 7 named `_walk_*` generators in `passes/` became 1 (a two-line
+  filter over `walk`), and open-coded `isinstance(node, dict)` recursions
+  went 39 (pre-02) → 30 (post-02) → 14, of which 1 is `walk` itself and 4
+  are `patch_target.py`'s path-carrying walks, left untouched by design.
+- Everything still hand-written PRUNES (`_expr_leaks_marked`,
+  `_escaped_gated_idents`, `_expr_is_authorized`, `_is_result_proof_expr`)
+  or dispatches on a single node (`_arg_reason`, `_id_key`,
+  `_proof_id_key`, `_clause_bound`) or yields statement LISTS
+  (`_stmt_lists`). A walk that stops early is not this walk — recorded in
+  the module docstring so the next pass does not force it.
+- Behaviour proven identical, not assumed: the same three dumps as 02
+  (83-file corpus, all 427 in-tree `.aeth`, 67-row prose probe) diff
+  empty. No `// expect:` header changed. Deleted the shadowed duplicate
+  `_walk_returns` and the 0-byte orphan `passes/effects_new.py`.
+
+## [2026-07-25] architecture review candidate 02 | detector spec tables
+- Not a loop-1 iteration: no detector added, removed or weakened; ratchet
+  unchanged at 40 codes / 30 detectors. `passes/detector_specs.py` now
+  holds the 13 repeated detectors as spec rows (6 marker-flow, 7
+  literal-or-wrapper) plus the two drivers; `effects.py` 2981 → 1643
+  lines and re-exports every generated `check_*` name, so ADR-0004's
+  frozen import surface never moved.
+- Behaviour proven identical, not assumed: `(code, line, message,
+  suggestion)` byte-identical across the 83-file corpus, all 427 in-tree
+  `.aeth`, and a 67-row synthetic probe covering every reason branch. No
+  `// expect:` header changed.
+- q1: two Evidence rows — the collapse moved the taint boundary nowhere,
+  and E0711's single-pass safe-name resolution is a latent precision knob
+  (probe found no live difference), recorded as a knob, not a residual.
+
 ## [2026-07-09] iter 42 | function-alias laundering closed (BUG-002); HOF residual re-framed; E0717 precision probe-confirmed
 - Three probes before code: gap E (`let f = logIt; f(password)` bypassed E0729, exit 0) and gap E2 (`let f = getToken; f()` defeated seeding, exit 0) — both real misses, both closed via `_fn_aliases` applied flag-more only (aliased unwrappers deliberately not honored). BUGS.md BUG-002 [FIXED f6b8bf3], gate prints 2 ratchet-locked fixed bugs.
 - Grammar finding: no function types exist in `grammar.ebnf` — iter-41's "HOF/function-typed callees" residual re-framed to the alias surface and closed; q1 updated.

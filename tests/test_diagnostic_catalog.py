@@ -1,8 +1,20 @@
 """D.2 regression tests for the diagnostic catalog.
 
-The promise: every diagnostic code the toolchain can emit is documented
-in `grammar/diagnostics.md`, every emitting site fills the required
-Diagnostic fields, and the codes split that D.2 introduces holds:
+The promise, stated exactly: every diagnostic code CONSTRUCTED in one of
+the three literal forms `tools/diagnostic_codes.py` recognises is
+documented in `grammar/diagnostics.md`. A code assembled at runtime — an
+f-string, a module constant, a lookup — is still invisible, and this
+suite does not claim otherwise; ADR-0002 records that residual and the
+condition for closing it properly.
+
+The looser promise this file used to make ("every diagnostic code the
+toolchain can emit is documented") was false and green: the scanner
+matched only two of the three forms and walked two of the three roots,
+so E0101-E0106, E0301, E0304, E0705 and E0706 were invisible — and
+E0705/E0706 were live, tested, and documented nowhere.
+
+Also checked: every emitting site fills the required Diagnostic fields,
+and the codes split that D.2 introduces holds:
 
   - E0301 = requires (precondition) violation
   - E0304 = ensures  (postcondition) violation       (D.2 split)
@@ -28,8 +40,6 @@ Tests:
 from __future__ import annotations
 import io
 import os
-import re
-import subprocess
 import sys
 from contextlib import redirect_stdout
 
@@ -41,6 +51,7 @@ from aether.parser import parse  # noqa: E402
 from aether.emitter import emit  # noqa: E402
 from aether.runtime import build_namespace  # noqa: E402
 from aether.diagnostics import AetherError  # noqa: E402
+from tools.diagnostic_codes import codes_in, constructed_codes  # noqa: E402
 
 
 CATALOG_PATH = os.path.join(ROOT, "grammar", "diagnostics.md")
@@ -62,34 +73,38 @@ def _run(src: str) -> str:
 # 1. Every emitted code is documented
 # ----------------------------------------------------------------------
 
-def _enumerate_emitted_codes():
-    """Walk the source tree, collect every `code="EXXXX"` and
-    `"code": "EXXXX"` reference."""
-    codes = set()
-    for sub in ("transpiler", "bench"):
-        root = os.path.join(ROOT, sub)
-        for dirpath, _, files in os.walk(root):
-            if "__pycache__" in dirpath:
-                continue
-            for fn in files:
-                if not fn.endswith(".py"):
-                    continue
-                with open(os.path.join(dirpath, fn)) as f:
-                    text = f.read()
-                for m in re.finditer(r'(?:code="|"code":\s*")(E\d+)"', text):
-                    codes.add(m.group(1))
-    return codes
+def test_construction_forms_recognised():
+    """Pin the scanner's form coverage. This lives here, not beside the
+    scanner, because `tools/` IS scanned — a real code written into
+    `tools/diagnostic_codes.py` to demonstrate a form would count itself.
+    `tests/` is not scanned, so these fixtures are inert."""
+    src = "\n".join([
+        'Diagnostic(code="E1001", category="x")',   # keyword argument
+        'code = "E1002"',                           # local, passed on later
+        '{"code": "E1003", "message": "m"}',        # dict-shaped diagnostic
+        'raise self._err("E1004", "m", pos)',       # positional, lexer form
+        'out.append(_diag(\n    "E1005",\n "m"))',  # positional over a newline
+        '# E1006 appears in prose only and must NOT be counted.',
+    ])
+    got = codes_in(src)
+    want = {"E1001", "E1002", "E1003", "E1004", "E1005"}
+    assert got == want, (
+        f"scanner form coverage drifted: found {sorted(got)}, want "
+        f"{sorted(want)}. A construction form the scanner cannot see is a "
+        f"code that can ship undocumented — that is the whole defect "
+        f"ADR-0002 closed.")
+    print("D.2 catalog: 5 construction forms recognised, prose ignored")
 
 
 def test_every_emitted_code_documented():
-    emitted = _enumerate_emitted_codes()
+    emitted = constructed_codes(ROOT)
     assert emitted, "no diagnostic codes found in source tree"
     if not os.path.isfile(CATALOG_PATH):
         raise AssertionError(f"catalog missing: {CATALOG_PATH}")
-    catalog = open(CATALOG_PATH).read()
+    catalog = open(CATALOG_PATH, encoding="utf-8").read()
     missing = [c for c in sorted(emitted) if c not in catalog]
     assert not missing, f"codes emitted but not in catalog: {missing}"
-    print(f"D.2 catalog: {len(emitted)} codes emitted, all documented")
+    print(f"D.2 catalog: {len(emitted)} codes constructed, all documented")
 
 
 # ----------------------------------------------------------------------
@@ -191,6 +206,7 @@ def test_sqrt_of_negative_E0305():
 
 
 if __name__ == "__main__":
+    test_construction_forms_recognised()
     test_every_emitted_code_documented()
     test_requires_violation_E0301()
     test_ensures_violation_E0304()

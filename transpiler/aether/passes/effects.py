@@ -38,6 +38,12 @@ import re
 from typing import Any, Dict, List, Set, Tuple, Iterable, Optional
 
 from ..diagnostics import Diagnostic, Position
+from .ast_walk import walk, callee_name
+from .detector_specs import (
+    build, boundary_markers, _is_marker_type,
+    _marker_source_fns, _marker_param_mask, _expr_leaks_marked,
+    _fn_aliases, _aliased_mask, _marked_tainted_names,
+)
 
 
 # (path_tuple, arg_or_None)
@@ -353,883 +359,87 @@ def check_metadata_fetch(ast: Dict[str, Any]) -> List[Diagnostic]:
 
 
 # ----------------------------------------------------------------------
-# E0711 — path traversal precondition (fs path built from dynamic input)
+# E0712 / E0715 / E0724 / E0725 / E0726 / E0728 — marker-flow detectors
 # ----------------------------------------------------------------------
-# Zip-Slip / arbitrary-file-write (the entire path-traversal class) has
-# one structural precondition: a filesystem path fed to a read/write
-# sink that is NOT a fixed literal — i.e. it can be steered by attacker
-# input (`writeFile(base + entryName, ...)` where entryName is
-# `../../etc/passwd`). A string literal cannot be steered; a value
-# routed through the `safeJoin` sanitizer cannot escape its base. Any
-# other path expression is the traversal precondition, and E0711 refuses
-# it — the same posture as E0710 for net hosts.
+# Six detectors of ONE shape: a value carrying a taint marker reaches a
+# sink without passing through that marker's sanctioned exit. The shape,
+# the six rows, and the taint machinery they share live in
+# `passes/detector_specs.py`; this module binds the generated passes to
+# the names every import site already uses.
+#
+#   E0712  Secret     print, writeFile contents  reveal()          CWE-532
+#   E0715  PII        print, writeFile contents  redact()          GDPR egress
+#   E0724  Untrusted  print                      sanitizeLog()     CWE-117
+#   E0725  Untrusted  htmlResponse               htmlEscape()      CWE-79
+#   E0726  Untrusted  setHeader                  sanitizeHeader()  CWE-113
+#   E0728  Untrusted  csvCell                    csvEscape()       CWE-1236
+#
+# `Secret<T>` / `PII<T>` are confidentiality markers erased at runtime;
+# `Untrusted<T>` is the taint-SOURCE marker applied where a value crosses
+# a trust boundary. Each row has its OWN sanctioned exit and they do not
+# substitute for one another — stripping CR/LF (sanitizeLog) does not
+# neutralize markup, so only htmlEscape clears taint for the HTML sink,
+# and only csvEscape for a spreadsheet cell. E0728 is the first sink in a
+# non-HTTP context, which is why the marker generalizes past web output.
+#
+# `net.fetch` egress is a declared effect rather than a call, so a
+# network body sink waits on a body-carrying stdlib sink (noted, not
+# shipped).
+#
+# Taint here is syntactic and intraprocedural: it over-flags rather than
+# misses within the modeled surface, and is not a soundness proof.
+# Residuals: vault/wiki/questions/q1-taint-marker-soundness-boundary.md.
 
-_FS_SINKS = ("writeFile", "readFile")
-_PATH_SANITIZER = "safeJoin"
-
-
-def _expr_is_safe_path(node: Dict[str, Any], safe_names: Set[str]) -> Optional[str]:
-    """Return None if this path expression is safe (fixed literal, a
-    safeJoin(...) call, or a name proven to hold one of those), else a
-    short reason it is a traversal risk."""
-    if not isinstance(node, dict):
-        return "path is not a fixed literal - can be steered by input"
-    kind = node.get("kind")
-    if kind == "StringLit":
-        if ".." in (node.get("value") or ""):
-            return "literal path contains '..' - escapes its directory"
-        return None
-    if kind == "Call":
-        if _callee_name(node) == _PATH_SANITIZER:
-            return None
-        return f"path is a computed call - route it through {_PATH_SANITIZER}()"
-    if kind == "Ident" and node.get("name") in safe_names:
-        return None
-    return f"path is a dynamic expression - route it through {_PATH_SANITIZER}()"
-
-
-def _safe_path_names(body: Any) -> Set[str]:
-    """Names that are bound ONLY to safe path expressions (a string
-    literal without '..' or a safeJoin call) across every Let/Assign to
-    them in this function body. A single unsafe binding disqualifies the
-    name (sound for straight-line path construction)."""
-    bindings: Dict[str, List[Dict[str, Any]]] = {}
-
-    def collect(node: Any):
-        if isinstance(node, dict):
-            if node.get("kind") in ("Let", "Assign") and "name" in node and "value" in node:
-                bindings.setdefault(node["name"], []).append(node["value"])
-            for v in node.values():
-                collect(v)
-        elif isinstance(node, list):
-            for x in node:
-                collect(x)
-
-    collect(body)
-    safe: Set[str] = set()
-    for name, values in bindings.items():
-        if all(_expr_is_safe_path(v, safe) is None for v in values):
-            safe.add(name)
-    return safe
-
-
-def check_fs_path_safety(ast: Dict[str, Any]) -> List[Diagnostic]:
-    """Return E0711 diagnostics for read/write sinks fed a non-literal,
-    unsanitized path (the path-traversal precondition)."""
-    diags: List[Diagnostic] = []
-    for d in ast.get("decls", []):
-        if d.get("kind") != "FunctionDecl":
-            continue
-        fn = d["name"]
-        fpos = d.get("pos") or {"line": 0, "column": 0}
-        body = d.get("body", [])
-        safe_names = _safe_path_names(body)
-        for call in _walk_calls(body):
-            if _callee_name(call) not in _FS_SINKS:
-                continue
-            args = call.get("args") or []
-            if not args:
-                continue
-            reason = _expr_is_safe_path(args[0], safe_names)
-            if reason is None:
-                continue
-            sink = _callee_name(call)
-            pos = call.get("pos") or fpos
-            diags.append(Diagnostic(
-                code="E0711",
-                category="capability",
-                severity="error",
-                message=(
-                    f"function {fn!r} calls {sink!r} with an unsafe path "
-                    f"({reason}); a path traversal here can read or "
-                    f"overwrite arbitrary files"
-                ),
-                position=Position(pos.get("line", 0), pos.get("column", 0)),
-                suggestion=(
-                    f"use a fixed string literal, or build the path with "
-                    f"{_PATH_SANITIZER}(baseDir, untrustedPart) which strips "
-                    f"'..' and absolute roots so it cannot escape baseDir"
-                ),
-                confidence=1.0,
-                extra={"function": fn, "sink": sink, "reason": reason},
-            ))
-    return diags
+check_secret_flow      = build("check_secret_flow")
+check_pii_flow         = build("check_pii_flow")
+check_log_injection    = build("check_log_injection")
+check_reflected_xss    = build("check_reflected_xss")
+check_header_injection = build("check_header_injection")
+check_csv_injection    = build("check_csv_injection")
 
 
 # ----------------------------------------------------------------------
-# E0712 — secret / PII exfiltration into a log sink (CWE-532)
+# E0711 / E0713 / E0714 / E0718 / E0719 / E0720 / E0727
+#   — literal-or-wrapper detectors
 # ----------------------------------------------------------------------
-# A value carrying a `Secret<T>` marker must not reach a logging sink
-# (`print`) unless explicitly unwrapped with `reveal(...)`. This is the
-# "we accidentally logged the password/token" incident class. `Secret<T>`
-# is a compile-time-only taint marker (erased at runtime); `reveal()` is
-# the sanctioned, auditable disclosure. Detection reuses the same
-# straight-line dataflow as E0711: taint originates at Secret-typed
-# params and propagates through let/assign bindings; a `reveal(...)`
-# subtree is pruned (intentional exposure).
-
-# sink name -> arg indices to inspect (None = all args). A Secret must
-# not reach a log sink (`print`) NOR be persisted to disk (the contents
-# argument of `writeFile`) — both exfiltrate the credential.
-_SECRET_SINKS: Dict[str, Any] = {"print": None, "writeFile": (1,)}
-_SECRET_MARKER = "Secret"
-_SECRET_REVEAL = "reveal"
-_SECRET_CLASSIFY = "classify"
-
-
-def _is_marker_type(ty: Any, marker: str) -> bool:
-    return isinstance(ty, dict) and ty.get("kind") == "GenericType" \
-        and ty.get("name") == marker
-
-
-# Stdlib constructors that produce a marker-carrying value. User functions
-# declared `returns <Marker><...>` are added per-module by
-# _marker_source_fns; a call to any of these is a taint source.
-_STDLIB_MARKER_CONSTRUCTORS: Dict[str, frozenset] = {
-    "Secret":    frozenset({"classify"}),
-    "PII":       frozenset({"classifyPII"}),
-    "Untrusted": frozenset({"classifyUntrusted"}),
-}
-
-
-def _marker_source_fns(ast: Dict[str, Any], marker: str) -> frozenset:
-    """Functions whose call results carry `marker`: the stdlib
-    constructors plus every user function declared with a marker-typed
-    return. Signature-level only — bodies are not analyzed."""
-    names = set(_STDLIB_MARKER_CONSTRUCTORS.get(marker, frozenset()))
-    for d in ast.get("decls", []):
-        if d.get("kind") == "FunctionDecl" \
-                and _is_marker_type(d.get("return_type"), marker):
-            names.add(d["name"])
-    return frozenset(names)
-
-
-def _marker_param_mask(ast: Dict[str, Any], marker: str) -> Dict[str, Tuple[bool, ...]]:
-    """fn name -> per-param mask, True where the declared param type
-    carries `marker`. Passing a marked value into such a slot is a
-    sanctioned crossing — the callee owns the value from there (its own
-    body is checked; what escapes is its return, covered by
-    _marker_source_fns)."""
-    out: Dict[str, Tuple[bool, ...]] = {}
-    for d in ast.get("decls", []):
-        if d.get("kind") == "FunctionDecl":
-            out[d["name"]] = tuple(_is_marker_type(p.get("type"), marker)
-                                   for p in d.get("params", []))
-    return out
-
-
-def _expr_leaks_marked(node: Any, tainted: Set[str], unwrap,
-                       source_fns: frozenset = frozenset(),
-                       param_mask: Optional[Dict[str, Tuple[bool, ...]]] = None) -> bool:
-    """True if `node` exposes a tainted name, or a call to a marker-
-    producing function, outside an `unwrap(...)` call (the sanctioned
-    exit for this marker). `unwrap` is a single name or a set of names.
-    An argument consumed by a marker-typed parameter of a user-declared
-    callee (per `param_mask`) is pruned — that crossing is sanctioned."""
-    unwraps = {unwrap} if isinstance(unwrap, str) else unwrap
-    if isinstance(node, dict):
-        kind = node.get("kind")
-        if kind == "Call":
-            callee = _callee_name(node)
-            if callee in unwraps:
-                return False  # sanctioned, audited exit — prune
-            if callee in source_fns:
-                return True   # call returns a marker-typed value
-            mask = (param_mask or {}).get(callee)
-            if mask:
-                args = node.get("args") or []
-                open_args = [a for i, a in enumerate(args)
-                             if i >= len(mask) or not mask[i]]
-                rest = [v for k, v in node.items() if k != "args"]
-                return _expr_leaks_marked(open_args + rest, tainted, unwrap,
-                                          source_fns, param_mask)
-        if kind == "Ident" and node.get("name") in tainted:
-            return True
-        return any(_expr_leaks_marked(v, tainted, unwrap, source_fns, param_mask)
-                   for v in node.values())
-    if isinstance(node, list):
-        return any(_expr_leaks_marked(x, tainted, unwrap, source_fns, param_mask)
-                   for x in node)
-    return False
-
-
-def _fn_aliases(fn_decl: Dict[str, Any], targets: frozenset) -> Dict[str, Set[str]]:
-    """alias name -> set of target function names it may refer to, from
-    straight-line `let f = fnName` / `f = g` bindings (bare Ident
-    values; chains followed by fixpoint; conservative UNION when a name
-    is rebound). Used flag-more only — an aliased unwrapper is never
-    honored."""
-    binds: List[Tuple[str, str]] = []
-
-    def collect(node: Any):
-        if isinstance(node, dict):
-            if node.get("kind") in ("Let", "Assign") and "name" in node:
-                v = node.get("value")
-                if isinstance(v, dict) and v.get("kind") == "Ident":
-                    binds.append((node["name"], v["name"]))
-            for x in node.values():
-                collect(x)
-        elif isinstance(node, list):
-            for x in node:
-                collect(x)
-
-    collect(fn_decl.get("body", []))
-    out: Dict[str, Set[str]] = {}
-    changed = True
-    while changed:
-        changed = False
-        for name, src in binds:
-            ts = ({src} if src in targets else set()) | out.get(src, set())
-            if ts - out.get(name, set()):
-                out.setdefault(name, set()).update(ts)
-                changed = True
-    return out
-
-
-def _aliased_mask(pmask: Dict[str, Tuple[bool, ...]],
-                  aliases: Dict[str, Set[str]]) -> Dict[str, Tuple[bool, ...]]:
-    """pmask extended with alias entries — ONLY single-target aliases
-    (pruning is the accept-more direction; ambiguity must over-flag)."""
-    out = dict(pmask)
-    for a, ts in aliases.items():
-        if len(ts) == 1:
-            t = next(iter(ts))
-            if t in pmask and a not in out:
-                out[a] = pmask[t]
-    return out
-
-
-def _pattern_bind_names(pat: Any) -> Set[str]:
-    """Names bound by a match pattern (BindPat leaves, recursively —
-    nested constructor patterns included)."""
-    out: Set[str] = set()
-    if isinstance(pat, dict):
-        if pat.get("kind") == "BindPat" and "name" in pat:
-            out.add(pat["name"])
-        for v in pat.values():
-            out |= _pattern_bind_names(v)
-    elif isinstance(pat, list):
-        for x in pat:
-            out |= _pattern_bind_names(x)
-    return out
-
-
-def _marked_tainted_names(fn_decl: Dict[str, Any], marker: str, unwrap,
-                          source_fns: frozenset = frozenset(),
-                          param_mask: Optional[Dict[str, Tuple[bool, ...]]] = None) -> Set[str]:
-    """Names holding a `marker`-typed value: marker-typed params, plus any
-    let/assign target bound to an expression carrying a tainted name
-    (fixpoint; an `unwrap(...)` call breaks the taint). A call to a
-    `source_fns` member seeds taint (signature-level interprocedural).
-    Match-arm pattern bindings over a tainted scrutinee are tainted
-    (every arm, every binding — conservative)."""
-    tainted: Set[str] = {
-        p["name"] for p in fn_decl.get("params", []) if _is_marker_type(p.get("type"), marker)
-    }
-    binds: List[Tuple[str, Any]] = []
-    destructures: List[Tuple[Set[str], Any]] = []  # (arm-bound names, scrutinee)
-
-    def collect(node: Any):
-        if isinstance(node, dict):
-            if node.get("kind") in ("Let", "Assign") and "name" in node and "value" in node:
-                binds.append((node["name"], node["value"]))
-            if node.get("kind") == "Match" and "scrutinee" in node:
-                names: Set[str] = set()
-                for arm in node.get("arms", []):
-                    names |= _pattern_bind_names(arm.get("pattern"))
-                if names:
-                    destructures.append((names, node["scrutinee"]))
-            for v in node.values():
-                collect(v)
-        elif isinstance(node, list):
-            for x in node:
-                collect(x)
-
-    collect(fn_decl.get("body", []))
-    changed = True
-    while changed:
-        changed = False
-        for name, value in binds:
-            if name not in tainted and _expr_leaks_marked(value, tainted, unwrap, source_fns, param_mask):
-                tainted.add(name)
-                changed = True
-        for names, scrut in destructures:
-            if not names <= tainted and _expr_leaks_marked(scrut, tainted, unwrap, source_fns, param_mask):
-                tainted |= names
-                changed = True
-    return tainted
-
-
-# Thin wrappers preserving the E0712 call sites.
-def _is_secret_type(ty: Any) -> bool:
-    return _is_marker_type(ty, _SECRET_MARKER)
-
-
-def _expr_leaks_secret(node: Any, tainted: Set[str],
-                       source_fns: frozenset = frozenset(),
-                       param_mask: Optional[Dict[str, Tuple[bool, ...]]] = None) -> bool:
-    return _expr_leaks_marked(node, tainted, _SECRET_REVEAL, source_fns,
-                              param_mask)
-
-
-def _secret_tainted_names(fn_decl: Dict[str, Any],
-                          source_fns: frozenset = frozenset(),
-                          param_mask: Optional[Dict[str, Tuple[bool, ...]]] = None) -> Set[str]:
-    return _marked_tainted_names(fn_decl, _SECRET_MARKER, _SECRET_REVEAL,
-                                 source_fns, param_mask)
-
-
-def check_secret_flow(ast: Dict[str, Any]) -> List[Diagnostic]:
-    """Return E0712 diagnostics for a Secret value reaching a log sink
-    (`print`) or being persisted to disk (`writeFile` contents)."""
-    diags: List[Diagnostic] = []
-    src_fns = _marker_source_fns(ast, _SECRET_MARKER)
-    pmask = _marker_param_mask(ast, _SECRET_MARKER)
-    for d in ast.get("decls", []):
-        if d.get("kind") != "FunctionDecl":
-            continue
-        al = _fn_aliases(d, src_fns | frozenset(pmask))
-        src_l = src_fns | frozenset(a for a, ts in al.items() if ts & src_fns)
-        pmask_l = _aliased_mask(pmask, al)
-        tainted = _secret_tainted_names(d, src_l, pmask_l)
-        if not tainted and not src_l:
-            continue
-        fn = d["name"]
-        fpos = d.get("pos") or {"line": 0, "column": 0}
-        for call in _walk_calls(d.get("body", [])):
-            sink = _callee_name(call)
-            if sink not in _SECRET_SINKS:
-                continue
-            args = call.get("args") or []
-            idxs = _SECRET_SINKS[sink]
-            checked = args if idxs is None else [args[i] for i in idxs if i < len(args)]
-            if not any(_expr_leaks_secret(a, tainted, src_l, pmask_l) for a in checked):
-                continue
-            where = "logs" if sink == "print" else "persists to disk"
-            pos = call.get("pos") or fpos
-            diags.append(Diagnostic(
-                code="E0712",
-                category="capability",
-                severity="error",
-                message=(
-                    f"function {fn!r} {where} a Secret value via "
-                    f"{sink!r}; a value marked Secret<...> must not reach a "
-                    f"log or persistence sink in the clear"
-                ),
-                position=Position(pos.get("line", 0), pos.get("column", 0)),
-                suggestion=(
-                    f"do not expose the secret; if disclosure is truly "
-                    f"intended, wrap it in {_SECRET_REVEAL}(...) at the "
-                    f"call site so the exposure is explicit and auditable"
-                ),
-                confidence=1.0,
-                extra={"function": fn, "sink": sink},
-            ))
-    return diags
-
-
-# ----------------------------------------------------------------------
-# E0713 — SQL injection (query built by raw concatenation) — CWE-89
-# ----------------------------------------------------------------------
-# Injection's precondition: a command/query string assembled by
-# concatenating untrusted input, instead of a parameterized form. The
-# `sqlQuery` sink must receive a fixed literal or a `sqlBind(...)`
-# parameterized query; a raw `BinOp +` concatenation (or any other
-# dynamic expression) is the injection precondition and is refused —
-# the same sink+sanitizer+literal shape as E0711/safeJoin.
-
-_SQL_SINKS = ("sqlQuery", "sqlExec", "sqlByOwner")
-_SQL_BIND = "sqlBind"
-
-
-def _query_expr_is_safe(node: Any, safe_names: Set[str]) -> Optional[str]:
-    if not isinstance(node, dict):
-        return "query is not a fixed literal"
-    kind = node.get("kind")
-    if kind == "StringLit":
-        return None
-    if kind == "Call":
-        if _callee_name(node) == _SQL_BIND:
-            return None
-        return f"query is a computed call - use {_SQL_BIND}(template, value)"
-    if kind == "Ident" and node.get("name") in safe_names:
-        return None
-    if kind == "BinOp" and node.get("op") == "+":
-        return "query is built by string concatenation - use sqlBind(...)"
-    return f"query is a dynamic expression - use {_SQL_BIND}(template, value)"
-
-
-def _safe_query_names(body: Any) -> Set[str]:
-    binds: Dict[str, List[Dict[str, Any]]] = {}
-
-    def collect(node: Any):
-        if isinstance(node, dict):
-            if node.get("kind") in ("Let", "Assign") and "name" in node and "value" in node:
-                binds.setdefault(node["name"], []).append(node["value"])
-            for v in node.values():
-                collect(v)
-        elif isinstance(node, list):
-            for x in node:
-                collect(x)
-
-    collect(body)
-    safe: Set[str] = set()
-    changed = True
-    while changed:
-        changed = False
-        for name, values in binds.items():
-            if name in safe:
-                continue
-            if all(_query_expr_is_safe(v, safe) is None for v in values):
-                safe.add(name)
-                changed = True
-    return safe
-
-
-def check_injection(ast: Dict[str, Any]) -> List[Diagnostic]:
-    """Return E0713 diagnostics for a sqlQuery fed a concatenated /
-    non-parameterized query string (the injection precondition)."""
-    diags: List[Diagnostic] = []
-    for d in ast.get("decls", []):
-        if d.get("kind") != "FunctionDecl":
-            continue
-        fn = d["name"]
-        fpos = d.get("pos") or {"line": 0, "column": 0}
-        body = d.get("body", [])
-        safe_names = _safe_query_names(body)
-        for call in _walk_calls(body):
-            if _callee_name(call) not in _SQL_SINKS:
-                continue
-            args = call.get("args") or []
-            if not args:
-                continue
-            reason = _query_expr_is_safe(args[0], safe_names)
-            if reason is None:
-                continue
-            pos = call.get("pos") or fpos
-            diags.append(Diagnostic(
-                code="E0713",
-                category="capability",
-                severity="error",
-                message=(
-                    f"function {fn!r} builds a SQL query for "
-                    f"{_callee_name(call)!r} unsafely ({reason}); untrusted "
-                    f"input concatenated into a query is an injection"
-                ),
-                position=Position(pos.get("line", 0), pos.get("column", 0)),
-                suggestion=(
-                    f"use a fixed literal, or parameterize with "
-                    f"{_SQL_BIND}(\"... ? ...\", value) which escapes the "
-                    f"value so it cannot break out of the query"
-                ),
-                confidence=1.0,
-                extra={"function": fn, "sink": _callee_name(call), "reason": reason},
-            ))
-    return diags
-
-
-# ----------------------------------------------------------------------
-# E0714 — command injection (shell command built by concatenation) — CWE-78
-# ----------------------------------------------------------------------
-# The command sibling of E0713 (OpenSSL c_rehash CVE-2022-1292 shape: a
-# filename concatenated into a shell command line). The `shellExec` sink
-# must receive a fixed literal or a `shellArg(...)`-quoted command; a raw
-# `BinOp +` concatenation (or any other dynamic expression) lets the
-# untrusted part inject `;`/`|`/`$( )` shell syntax and is refused —
-# the same sink+sanitizer+literal shape as E0713/sqlBind.
-
-_SHELL_SINKS = ("shellExec",)
-_SHELL_ARG = "shellArg"
-
-
-def _command_expr_is_safe(node: Any, safe_names: Set[str]) -> Optional[str]:
-    if not isinstance(node, dict):
-        return "command is not a fixed literal"
-    kind = node.get("kind")
-    if kind == "StringLit":
-        return None
-    if kind == "Call":
-        if _callee_name(node) == _SHELL_ARG:
-            return None
-        return f"command is a computed call - use {_SHELL_ARG}(template, value)"
-    if kind == "Ident" and node.get("name") in safe_names:
-        return None
-    if kind == "BinOp" and node.get("op") == "+":
-        return "command is built by string concatenation - use shellArg(...)"
-    return f"command is a dynamic expression - use {_SHELL_ARG}(template, value)"
-
-
-def _safe_command_names(body: Any) -> Set[str]:
-    binds: Dict[str, List[Dict[str, Any]]] = {}
-
-    def collect(node: Any):
-        if isinstance(node, dict):
-            if node.get("kind") in ("Let", "Assign") and "name" in node and "value" in node:
-                binds.setdefault(node["name"], []).append(node["value"])
-            for v in node.values():
-                collect(v)
-        elif isinstance(node, list):
-            for x in node:
-                collect(x)
-
-    collect(body)
-    safe: Set[str] = set()
-    changed = True
-    while changed:
-        changed = False
-        for name, values in binds.items():
-            if name in safe:
-                continue
-            if all(_command_expr_is_safe(v, safe) is None for v in values):
-                safe.add(name)
-                changed = True
-    return safe
-
-
-def check_command_injection(ast: Dict[str, Any]) -> List[Diagnostic]:
-    """Return E0714 diagnostics for a shellExec fed a concatenated /
-    unquoted command string (the command-injection precondition)."""
-    diags: List[Diagnostic] = []
-    for d in ast.get("decls", []):
-        if d.get("kind") != "FunctionDecl":
-            continue
-        fn = d["name"]
-        fpos = d.get("pos") or {"line": 0, "column": 0}
-        body = d.get("body", [])
-        safe_names = _safe_command_names(body)
-        for call in _walk_calls(body):
-            if _callee_name(call) not in _SHELL_SINKS:
-                continue
-            args = call.get("args") or []
-            if not args:
-                continue
-            reason = _command_expr_is_safe(args[0], safe_names)
-            if reason is None:
-                continue
-            pos = call.get("pos") or fpos
-            diags.append(Diagnostic(
-                code="E0714",
-                category="capability",
-                severity="error",
-                message=(
-                    f"function {fn!r} builds a shell command for "
-                    f"{_callee_name(call)!r} unsafely ({reason}); untrusted "
-                    f"input concatenated into a command line is a command "
-                    f"injection"
-                ),
-                position=Position(pos.get("line", 0), pos.get("column", 0)),
-                suggestion=(
-                    f"use a fixed literal, or place the untrusted value with "
-                    f"{_SHELL_ARG}(\"... ? ...\", value) which quotes it as a "
-                    f"single argument so it cannot inject shell syntax"
-                ),
-                confidence=1.0,
-                extra={"function": fn, "sink": _callee_name(call), "reason": reason},
-            ))
-    return diags
-
-
-# ----------------------------------------------------------------------
-# E0715 — PII egress: personal data persisted / logged unredacted
-# ----------------------------------------------------------------------
-# The data-residency / GDPR-leak class that dominates bigtech incident
-# reviews: a value carrying a `PII<T>` marker (email, name, address,
-# device id) is written to a log or to disk in the clear, from where it
-# flows to aggregators, backups, and analytics far outside the consent
-# boundary. Reuses the E0712 taint machinery with a distinct marker and
-# a distinct sanctioned exit — `redact(...)`, which masks the value.
-# Sinks: `print` (logs) and the CONTENTS argument of `writeFile` (disk).
-# `net.fetch` egress is a declared effect, not a call, so a network body
-# sink is deferred until a body-carrying stdlib sink exists (noted).
-
-_PII_MARKER = "PII"
-_PII_REDACT = "redact"
-# sink name -> arg indices to inspect (None = all args)
-_PII_SINKS: Dict[str, Any] = {"print": None, "writeFile": (1,)}
-
-
-def check_pii_flow(ast: Dict[str, Any]) -> List[Diagnostic]:
-    """Return E0715 diagnostics for a PII value reaching a persistence /
-    log sink without redact(...)."""
-    diags: List[Diagnostic] = []
-    src_fns = _marker_source_fns(ast, _PII_MARKER)
-    pmask = _marker_param_mask(ast, _PII_MARKER)
-    for d in ast.get("decls", []):
-        if d.get("kind") != "FunctionDecl":
-            continue
-        al = _fn_aliases(d, src_fns | frozenset(pmask))
-        src_l = src_fns | frozenset(a for a, ts in al.items() if ts & src_fns)
-        pmask_l = _aliased_mask(pmask, al)
-        tainted = _marked_tainted_names(d, _PII_MARKER, _PII_REDACT, src_l, pmask_l)
-        if not tainted and not src_l:
-            continue
-        fn = d["name"]
-        fpos = d.get("pos") or {"line": 0, "column": 0}
-        for call in _walk_calls(d.get("body", [])):
-            sink = _callee_name(call)
-            if sink not in _PII_SINKS:
-                continue
-            args = call.get("args") or []
-            idxs = _PII_SINKS[sink]
-            checked = args if idxs is None else [args[i] for i in idxs if i < len(args)]
-            if not any(_expr_leaks_marked(a, tainted, _PII_REDACT, src_l, pmask_l) for a in checked):
-                continue
-            where = "logs" if sink == "print" else "persists to disk"
-            pos = call.get("pos") or fpos
-            diags.append(Diagnostic(
-                code="E0715",
-                category="capability",
-                severity="error",
-                message=(
-                    f"function {fn!r} {where} a PII value via {sink!r}; "
-                    f"personal data marked PII<...> must not cross a "
-                    f"log/persistence sink in the clear"
-                ),
-                position=Position(pos.get("line", 0), pos.get("column", 0)),
-                suggestion=(
-                    f"mask it with {_PII_REDACT}(...) before the sink, or "
-                    f"keep PII out of logs/files entirely; redact(...) is "
-                    f"the auditable, consent-safe disclosure"
-                ),
-                confidence=1.0,
-                extra={"function": fn, "sink": sink},
-            ))
-    return diags
-
-
-# ----------------------------------------------------------------------
-# E0724 — log injection / forging (CWE-117)
-# ----------------------------------------------------------------------
-# `Untrusted<T>` is the taint-SOURCE marker — the sound, explicit dual of
-# provenance inference: a value crossing a trust boundary (a request field,
-# an uploaded filename) is marked Untrusted at that boundary. Logging it
-# raw lets embedded CR/LF forge fake log lines (audit-log poisoning, SIEM
-# spoofing). The sanctioned exit is `sanitizeLog(...)`, which strips the
-# control characters. Reuses the generalized taint machinery: taint
-# originates at Untrusted-typed params and propagates through straight-line
-# bindings; a sanitizeLog(...) subtree clears it.
-
-_UNTRUSTED_MARKER = "Untrusted"
-_UNTRUSTED_SANITIZE = "sanitizeLog"
-
-
-def check_log_injection(ast: Dict[str, Any]) -> List[Diagnostic]:
-    """Return E0724 diagnostics for an Untrusted value reaching a log sink
-    (`print`) without sanitizeLog(...)."""
-    diags: List[Diagnostic] = []
-    src_fns = _marker_source_fns(ast, _UNTRUSTED_MARKER)
-    pmask = _marker_param_mask(ast, _UNTRUSTED_MARKER)
-    for d in ast.get("decls", []):
-        if d.get("kind") != "FunctionDecl":
-            continue
-        al = _fn_aliases(d, src_fns | frozenset(pmask))
-        src_l = src_fns | frozenset(a for a, ts in al.items() if ts & src_fns)
-        pmask_l = _aliased_mask(pmask, al)
-        tainted = _marked_tainted_names(d, _UNTRUSTED_MARKER, _UNTRUSTED_SANITIZE, src_l, pmask_l)
-        if not tainted and not src_l:
-            continue
-        fn = d["name"]
-        fpos = d.get("pos") or {"line": 0, "column": 0}
-        for call in _walk_calls(d.get("body", [])):
-            if _callee_name(call) != "print":
-                continue
-            args = call.get("args") or []
-            if not any(_expr_leaks_marked(a, tainted, _UNTRUSTED_SANITIZE, src_l, pmask_l) for a in args):
-                continue
-            pos = call.get("pos") or fpos
-            diags.append(Diagnostic(
-                code="E0724",
-                category="capability",
-                severity="error",
-                message=(
-                    f"function {fn!r} logs an Untrusted value via 'print'; "
-                    f"embedded CR/LF can forge fake log entries (log "
-                    f"injection)"
-                ),
-                position=Position(pos.get("line", 0), pos.get("column", 0)),
-                suggestion=(
-                    f"wrap it in {_UNTRUSTED_SANITIZE}(...), which strips the "
-                    f"control characters an attacker uses to forge log lines"
-                ),
-                confidence=1.0,
-                extra={"function": fn, "sink": "print"},
-            ))
-    return diags
-
-
-# ----------------------------------------------------------------------
-# E0725 — reflected XSS: untrusted value in an HTML response (CWE-79)
-# ----------------------------------------------------------------------
-# The #2 OWASP risk. An Untrusted value written into an HTML response
-# without escaping lets `<script>` execute in the victim's browser. Same
-# taint marker as E0724, but the sanctioned exit is `htmlEscape(...)`, NOT
-# sanitizeLog — stripping CR/LF does not neutralize HTML, so only an
-# HTML-escaping exit clears the taint for this sink.
-
-_HTML_SINKS = ("htmlResponse",)
-_HTML_ESCAPE = "htmlEscape"
-
-
-def check_reflected_xss(ast: Dict[str, Any]) -> List[Diagnostic]:
-    """Return E0725 diagnostics for an Untrusted value reaching an HTML
-    response sink without htmlEscape(...)."""
-    diags: List[Diagnostic] = []
-    src_fns = _marker_source_fns(ast, _UNTRUSTED_MARKER)
-    pmask = _marker_param_mask(ast, _UNTRUSTED_MARKER)
-    for d in ast.get("decls", []):
-        if d.get("kind") != "FunctionDecl":
-            continue
-        al = _fn_aliases(d, src_fns | frozenset(pmask))
-        src_l = src_fns | frozenset(a for a, ts in al.items() if ts & src_fns)
-        pmask_l = _aliased_mask(pmask, al)
-        tainted = _marked_tainted_names(d, _UNTRUSTED_MARKER, _HTML_ESCAPE, src_l, pmask_l)
-        if not tainted and not src_l:
-            continue
-        fn = d["name"]
-        fpos = d.get("pos") or {"line": 0, "column": 0}
-        for call in _walk_calls(d.get("body", [])):
-            if _callee_name(call) not in _HTML_SINKS:
-                continue
-            args = call.get("args") or []
-            if not any(_expr_leaks_marked(a, tainted, _HTML_ESCAPE, src_l, pmask_l) for a in args):
-                continue
-            pos = call.get("pos") or fpos
-            diags.append(Diagnostic(
-                code="E0725",
-                category="capability",
-                severity="error",
-                message=(
-                    f"function {fn!r} writes an Untrusted value into an HTML "
-                    f"response via {_callee_name(call)!r}; unescaped markup "
-                    f"executes in the victim's browser (reflected XSS)"
-                ),
-                position=Position(pos.get("line", 0), pos.get("column", 0)),
-                suggestion=(
-                    f"wrap it in {_HTML_ESCAPE}(...), which escapes "
-                    f"<, >, &, \" and ' so the value renders as text, not "
-                    f"markup (sanitizeLog does NOT protect here)"
-                ),
-                confidence=1.0,
-                extra={"function": fn, "sink": _callee_name(call)},
-            ))
-    return diags
-
-
-# ----------------------------------------------------------------------
-# E0726 — HTTP response splitting / header injection (CWE-113)
-# ----------------------------------------------------------------------
-# The third sink for `Untrusted<T>`: an untrusted value in a response
-# header. Embedded CR/LF ends the header block and injects attacker
-# headers or a second response (cache poisoning, session fixation via a
-# forged Set-Cookie). The sanctioned exit is `sanitizeHeader(...)`, which
-# strips CR/LF — distinct from htmlEscape (E0725), which would leave a raw
-# newline intact, and named separately for per-sink clarity.
-
-_HEADER_SINKS = ("setHeader",)
-_HEADER_SANITIZE = "sanitizeHeader"
-
-
-def check_header_injection(ast: Dict[str, Any]) -> List[Diagnostic]:
-    """Return E0726 diagnostics for an Untrusted value reaching a response
-    header sink without sanitizeHeader(...)."""
-    diags: List[Diagnostic] = []
-    src_fns = _marker_source_fns(ast, _UNTRUSTED_MARKER)
-    pmask = _marker_param_mask(ast, _UNTRUSTED_MARKER)
-    for d in ast.get("decls", []):
-        if d.get("kind") != "FunctionDecl":
-            continue
-        al = _fn_aliases(d, src_fns | frozenset(pmask))
-        src_l = src_fns | frozenset(a for a, ts in al.items() if ts & src_fns)
-        pmask_l = _aliased_mask(pmask, al)
-        tainted = _marked_tainted_names(d, _UNTRUSTED_MARKER, _HEADER_SANITIZE, src_l, pmask_l)
-        if not tainted and not src_l:
-            continue
-        fn = d["name"]
-        fpos = d.get("pos") or {"line": 0, "column": 0}
-        for call in _walk_calls(d.get("body", [])):
-            if _callee_name(call) not in _HEADER_SINKS:
-                continue
-            args = call.get("args") or []
-            if not any(_expr_leaks_marked(a, tainted, _HEADER_SANITIZE, src_l, pmask_l) for a in args):
-                continue
-            pos = call.get("pos") or fpos
-            diags.append(Diagnostic(
-                code="E0726",
-                category="capability",
-                severity="error",
-                message=(
-                    f"function {fn!r} puts an Untrusted value in a response "
-                    f"header via {_callee_name(call)!r}; embedded CR/LF "
-                    f"injects headers or a second response (response "
-                    f"splitting)"
-                ),
-                position=Position(pos.get("line", 0), pos.get("column", 0)),
-                suggestion=(
-                    f"wrap it in {_HEADER_SANITIZE}(...), which strips the "
-                    f"CR/LF used to break out of the header value"
-                ),
-                confidence=1.0,
-                extra={"function": fn, "sink": _callee_name(call)},
-            ))
-    return diags
-
-
-# ----------------------------------------------------------------------
-# E0728 — CSV / formula injection (CWE-1236)
-# ----------------------------------------------------------------------
-# The fourth `Untrusted<T>` sink — and the first in a NON-HTTP context,
-# proving the marker generalizes past web output. A cell of exported data
-# that begins with =, +, -, @ (or tab/CR) is interpreted as a FORMULA when
-# the CSV is opened in Excel / Google Sheets: `=WEBSERVICE(...)` exfiltrates
-# other cells, `=cmd|...` can reach DDE → code execution. The sanctioned
-# exit is `csvEscape(...)`, which neutralizes a leading formula trigger.
-
-_CSV_SINKS = ("csvCell",)
-_CSV_ESCAPE = "csvEscape"
-
-
-def check_csv_injection(ast: Dict[str, Any]) -> List[Diagnostic]:
-    """Return E0728 diagnostics for an Untrusted value reaching a CSV cell
-    sink without csvEscape(...)."""
-    diags: List[Diagnostic] = []
-    src_fns = _marker_source_fns(ast, _UNTRUSTED_MARKER)
-    pmask = _marker_param_mask(ast, _UNTRUSTED_MARKER)
-    for d in ast.get("decls", []):
-        if d.get("kind") != "FunctionDecl":
-            continue
-        al = _fn_aliases(d, src_fns | frozenset(pmask))
-        src_l = src_fns | frozenset(a for a, ts in al.items() if ts & src_fns)
-        pmask_l = _aliased_mask(pmask, al)
-        tainted = _marked_tainted_names(d, _UNTRUSTED_MARKER, _CSV_ESCAPE, src_l, pmask_l)
-        if not tainted and not src_l:
-            continue
-        fn = d["name"]
-        fpos = d.get("pos") or {"line": 0, "column": 0}
-        for call in _walk_calls(d.get("body", [])):
-            if _callee_name(call) not in _CSV_SINKS:
-                continue
-            args = call.get("args") or []
-            if not any(_expr_leaks_marked(a, tainted, _CSV_ESCAPE, src_l, pmask_l) for a in args):
-                continue
-            pos = call.get("pos") or fpos
-            diags.append(Diagnostic(
-                code="E0728",
-                category="capability",
-                severity="error",
-                message=(
-                    f"function {fn!r} writes an Untrusted value into a CSV "
-                    f"cell via {_callee_name(call)!r}; a leading = + - @ makes "
-                    f"it a formula when opened in a spreadsheet (CSV injection)"
-                ),
-                position=Position(pos.get("line", 0), pos.get("column", 0)),
-                suggestion=(
-                    f"wrap it in {_CSV_ESCAPE}(...), which neutralizes a "
-                    f"leading formula trigger so the value stays inert text"
-                ),
-                confidence=1.0,
-                extra={"function": fn, "sink": _callee_name(call)},
-            ))
-    return diags
+# Seven detectors of ONE shape: the argument a sink is steered by must be
+# a fixed literal or the result of a sanctioned wrapper call; anything
+# else is refused with a short REASON that lands in the message. The
+# shape, the seven rows and their argument rules live in
+# `passes/detector_specs.py`; this module binds the generated passes to
+# the names every import site already uses.
+#
+#   E0711  writeFile/readFile  path      safeJoin()       CWE-22
+#   E0713  sqlQuery/Exec/ByOwner query   sqlBind()        CWE-89
+#   E0714  shellExec          command    shellArg()       CWE-78
+#   E0718  redirect           target     safeRedirect()   CWE-601
+#   E0719  renderTemplate     template   (none)           CWE-94
+#   E0720  deserialize        data       schemaDecode()   CWE-502
+#   E0727  parseXml           data       parseXmlSafe()   CWE-611
+#
+# The precondition each refuses is the same one: a command, query, path,
+# URL, template or document assembled from input the caller does not
+# control. A string literal cannot be steered; a value routed through the
+# row's wrapper cannot escape its base (safeJoin strips '..' and absolute
+# roots, sqlBind/shellArg escape or quote the value, safeRedirect pins
+# the host). E0711 additionally refuses a literal containing '..'.
+#
+# E0719 and E0720 have NO safer sanitizer by design — there is no way to
+# render an attacker-authored template or to run an unrestricted decoder
+# over attacker bytes safely. Their sanctioned form is the fixed literal;
+# `trusted(...)` is the explicit, auditable escape hatch, and E0727's is
+# the hardened parser `parseXmlSafe`, which is a different call rather
+# than a wrapper. E0720/E0727 judge their argument by the deserialize
+# rule but resolve literal-bound NAMES by the template rule — the spec
+# table carries that as `safe_rule`.
+
+check_fs_path_safety     = build("check_fs_path_safety")
+check_injection          = build("check_injection")
+check_command_injection  = build("check_command_injection")
+check_open_redirect      = build("check_open_redirect")
+check_template_injection = build("check_template_injection")
+check_deserialization    = build("check_deserialization")
+check_xxe                = build("check_xxe")
 
 
 # ----------------------------------------------------------------------
@@ -1247,17 +457,12 @@ def check_csv_injection(ast: Dict[str, Any]) -> List[Diagnostic]:
 # deliberately excluded — it is a proof marker, and dropping a proof only
 # over-restricts the callee.
 
-def _boundary_markers() -> Dict[str, frozenset]:
-    """Marker -> sanctioned call-site unwrappers. Built lazily because
-    _TRUSTED is defined further down the module (near its E0719/E0720
-    users)."""
-    return {
-        _SECRET_MARKER:    frozenset({_SECRET_REVEAL}),
-        _PII_MARKER:       frozenset({_PII_REDACT}),
-        _UNTRUSTED_MARKER: frozenset({_UNTRUSTED_SANITIZE, _HTML_ESCAPE,
-                                      _HEADER_SANITIZE, _CSV_ESCAPE,
-                                      _TRUSTED}),
-    }
+# Marker -> sanctioned call-site unwrappers. DERIVED from the marker-flow
+# spec table by `boundary_markers()`, so adding a marker-flow row extends
+# E0729/E0730 without editing them. It used to be restated here, and
+# built lazily to reach `_TRUSTED` 1,300 lines below its use; the table
+# removes both.
+_BOUNDARY_MARKERS = boundary_markers()
 
 
 def check_marker_boundary(ast: Dict[str, Any]) -> List[Diagnostic]:
@@ -1266,7 +471,7 @@ def check_marker_boundary(ast: Dict[str, Any]) -> List[Diagnostic]:
     decls = {d["name"]: d for d in ast.get("decls", [])
              if d.get("kind") == "FunctionDecl"}
     diags: List[Diagnostic] = []
-    for marker, unwraps in _boundary_markers().items():
+    for marker, unwraps in _BOUNDARY_MARKERS.items():
         src_fns = _marker_source_fns(ast, marker)
         pmask = _marker_param_mask(ast, marker)
         for d in decls.values():
@@ -1278,8 +483,8 @@ def check_marker_boundary(ast: Dict[str, Any]) -> List[Diagnostic]:
                 continue
             fn = d["name"]
             fpos = d.get("pos") or {"line": 0, "column": 0}
-            for call in _walk_calls(d.get("body", [])):
-                cname = _callee_name(call)
+            for call in walk(d.get("body", []), "Call"):
+                cname = callee_name(call)
                 direct = decls.get(cname)
                 cands = [direct] if direct is not None else \
                     [decls[t] for t in sorted(al.get(cname, set())) if t in decls]
@@ -1328,18 +533,6 @@ def check_marker_boundary(ast: Dict[str, Any]) -> List[Diagnostic]:
 # E0730 — return laundering: tainted value under a plain return type
 # ----------------------------------------------------------------------
 
-def _walk_returns(node: Any):
-    """Yield every Return node in a body (generic dict/list walk)."""
-    if isinstance(node, dict):
-        if node.get("kind") == "Return":
-            yield node
-        for v in node.values():
-            yield from _walk_returns(v)
-    elif isinstance(node, list):
-        for x in node:
-            yield from _walk_returns(x)
-
-
 def check_return_laundering(ast: Dict[str, Any]) -> List[Diagnostic]:
     """Return E0730 diagnostics for a function that RETURNS a
     marker-carrying value while its declared return type does not carry
@@ -1349,7 +542,7 @@ def check_return_laundering(ast: Dict[str, Any]) -> List[Diagnostic]:
     the marker-typed return (taint then travels via seeding), or unwrap
     at the return site. Authorized<T> excluded (proof marker)."""
     diags: List[Diagnostic] = []
-    for marker, unwraps in _boundary_markers().items():
+    for marker, unwraps in _BOUNDARY_MARKERS.items():
         src_fns = _marker_source_fns(ast, marker)
         pmask = _marker_param_mask(ast, marker)
         for d in ast.get("decls", []):
@@ -1366,7 +559,7 @@ def check_return_laundering(ast: Dict[str, Any]) -> List[Diagnostic]:
             fn = d["name"]
             fpos = d.get("pos") or {"line": 0, "column": 0}
             declared = (d.get("return_type") or {}).get("name", "Unit")
-            for ret in _walk_returns(d.get("body", [])):
+            for ret in walk(d.get("body", []), "Return"):
                 val = ret.get("value")
                 if val is None:
                     continue
@@ -1440,17 +633,6 @@ def _is_catch_all(pat: Any) -> bool:
     return isinstance(pat, dict) and pat.get("kind") in ("WildcardPat", "BindPat")
 
 
-def _walk_matches(node: Any) -> Iterable[Dict[str, Any]]:
-    if isinstance(node, dict):
-        if node.get("kind") in ("Match", "MatchExpr"):
-            yield node
-        for v in node.values():
-            yield from _walk_matches(v)
-    elif isinstance(node, list):
-        for x in node:
-            yield from _walk_matches(x)
-
-
 def check_exhaustiveness(ast: Dict[str, Any]) -> List[Diagnostic]:
     """Return E0202 diagnostics for a match that omits a union case with no
     catch-all, when the scrutinee's union type is statically resolvable."""
@@ -1469,20 +651,13 @@ def check_exhaustiveness(ast: Dict[str, Any]) -> List[Diagnostic]:
             if tn:
                 types[p["name"]] = tn
 
-        def collect_lets(node: Any):
-            if isinstance(node, dict):
-                if node.get("kind") == "Let" and "name" in node:
-                    tn = _type_name(node.get("type"))
-                    if tn:
-                        types[node["name"]] = tn
-                for v in node.values():
-                    collect_lets(v)
-            elif isinstance(node, list):
-                for x in node:
-                    collect_lets(x)
-        collect_lets(d.get("body", []))
+        for n in walk(d.get("body", []), "Let"):
+            if "name" in n:
+                tn = _type_name(n.get("type"))
+                if tn:
+                    types[n["name"]] = tn
 
-        for m in _walk_matches(d.get("body", [])):
+        for m in walk(d.get("body", []), "Match", "MatchExpr"):
             scrut = m.get("scrutinee") or {}
             if scrut.get("kind") != "Ident":
                 continue
@@ -1535,7 +710,7 @@ def check_unreachable_arms(ast: Dict[str, Any]) -> List[Diagnostic]:
         if d.get("kind") != "FunctionDecl":
             continue
         fn = d["name"]
-        for m in _walk_matches(d.get("body", [])):
+        for m in walk(d.get("body", []), "Match", "MatchExpr"):
             arms = m.get("arms") or []
             mpos = m.get("pos") or d.get("pos") or {"line": 0, "column": 0}
             seen: Set[str] = set()
@@ -1645,14 +820,8 @@ def check_dead_code(ast: Dict[str, Any]) -> List[Diagnostic]:
 # Ident nowhere in the function body is unused.
 
 def _ident_reads(node: Any, out: Set[str]) -> None:
-    if isinstance(node, dict):
-        if node.get("kind") == "Ident" and isinstance(node.get("name"), str):
-            out.add(node["name"])
-        for v in node.values():
-            _ident_reads(v, out)
-    elif isinstance(node, list):
-        for x in node:
-            _ident_reads(x, out)
+    out.update(n["name"] for n in walk(node, "Ident")
+               if isinstance(n.get("name"), str))
 
 
 def check_unused_binding(ast: Dict[str, Any]) -> List[Diagnostic]:
@@ -1669,16 +838,8 @@ def check_unused_binding(ast: Dict[str, Any]) -> List[Diagnostic]:
         # Collect let bindings in source order.
         lets: List[Dict[str, Any]] = []
 
-        def collect(node: Any):
-            if isinstance(node, dict):
-                if node.get("kind") == "Let" and isinstance(node.get("name"), str):
-                    lets.append(node)
-                for v in node.values():
-                    collect(v)
-            elif isinstance(node, list):
-                for x in node:
-                    collect(x)
-        collect(body)
+        lets.extend(n for n in walk(body, "Let")
+                    if isinstance(n.get("name"), str))
 
         for let in lets:
             name = let["name"]
@@ -1732,42 +893,35 @@ def check_ignored_result(ast: Dict[str, Any]) -> List[Diagnostic]:
     result_fns = _result_returning_fns(ast)
     diags: List[Diagnostic] = []
 
-    def walk_stmts(node: Any, fn: str, fpos: Dict[str, Any]):
-        if isinstance(node, dict):
-            if node.get("kind") == "ExprStmt":
-                expr = node.get("expr") or {}
-                if expr.get("kind") == "Call" and _callee_name(expr) in result_fns:
-                    callee = _callee_name(expr)
-                    pos = expr.get("pos") or node.get("pos") or fpos
-                    diags.append(Diagnostic(
-                        code="E0206",
-                        category="type",
-                        severity="error",
-                        message=(
-                            f"function {fn!r} discards the Result of "
-                            f"{callee!r}; an unchecked error (e.g. a failed "
-                            f"write) is silently ignored"
-                        ),
-                        position=Position(pos.get("line", 0), pos.get("column", 0)),
-                        suggestion=(
-                            f"bind and handle it (`let r = {callee}(...)` then "
-                            f"`match r`), or `let _r = ...` to discard the "
-                            f"error explicitly"
-                        ),
-                        confidence=1.0,
-                        extra={"function": fn, "callee": callee},
-                    ))
-            for v in node.values():
-                walk_stmts(v, fn, fpos)
-        elif isinstance(node, list):
-            for x in node:
-                walk_stmts(x, fn, fpos)
-
     for d in ast.get("decls", []):
         if d.get("kind") != "FunctionDecl":
             continue
-        walk_stmts(d.get("body", []), d["name"],
-                   d.get("pos") or {"line": 0, "column": 0})
+        fn = d["name"]
+        fpos = d.get("pos") or {"line": 0, "column": 0}
+        for stmt in walk(d.get("body", []), "ExprStmt"):
+            expr = stmt.get("expr") or {}
+            if expr.get("kind") != "Call" or callee_name(expr) not in result_fns:
+                continue
+            callee = callee_name(expr)
+            pos = expr.get("pos") or stmt.get("pos") or fpos
+            diags.append(Diagnostic(
+                code="E0206",
+                category="type",
+                severity="error",
+                message=(
+                    f"function {fn!r} discards the Result of "
+                    f"{callee!r}; an unchecked error (e.g. a failed "
+                    f"write) is silently ignored"
+                ),
+                position=Position(pos.get("line", 0), pos.get("column", 0)),
+                suggestion=(
+                    f"bind and handle it (`let r = {callee}(...)` then "
+                    f"`match r`), or `let _r = ...` to discard the "
+                    f"error explicitly"
+                ),
+                confidence=1.0,
+                extra={"function": fn, "callee": callee},
+            ))
     return diags
 
 
@@ -1928,7 +1082,7 @@ def _expr_is_authorized(node: Any, authorized: Set[str],
         return False
     kind = node.get("kind")
     if kind == "Call":
-        callee = _callee_name(node)
+        callee = callee_name(node)
         if callee in _AUTH_GUARDS or callee in minters:
             return True
         return False
@@ -1959,7 +1113,7 @@ def _is_result_proof_expr(node: Any, r_proven: Set[str],
     if not isinstance(node, dict):
         return False
     kind = node.get("kind")
-    if kind == "Call" and _callee_name(node) in result_minters:
+    if kind == "Call" and callee_name(node) in result_minters:
         return True
     if kind == "Ident" and node.get("name") in r_proven:
         return True
@@ -1999,27 +1153,20 @@ def _authorized_names(fn_decl: Dict[str, Any],
     binds: Dict[str, List[Any]] = {}
     grants: List[Tuple[Any, List[str]]] = []  # (scrutinee, Ok/Some-bound names)
 
-    def collect(node: Any):
-        if isinstance(node, dict):
-            # Let/Var carry "name"; Assign carries "target". All three are
-            # bindings — missing Assign here would let `tok = raw` keep a
-            # previously-proven name authorized (silent demotion miss).
-            if node.get("kind") in ("Let", "Var", "Assign") and "value" in node:
-                tgt = node.get("name") or node.get("target")
-                if isinstance(tgt, str):
-                    binds.setdefault(tgt, []).append(node["value"])
-            if node.get("kind") in ("Match", "MatchExpr"):
-                for arm in node.get("arms", []) or []:
-                    names = _ok_pattern_bindings(arm.get("pattern"))
-                    if names:
-                        grants.append((node.get("scrutinee"), names))
-            for v in node.values():
-                collect(v)
-        elif isinstance(node, list):
-            for x in node:
-                collect(x)
-
-    collect(fn_decl.get("body", []))
+    # Let/Var carry "name"; Assign carries "target". All three are
+    # bindings — missing Assign here would let `tok = raw` keep a
+    # previously-proven name authorized (silent demotion miss).
+    body = fn_decl.get("body", [])
+    for n in walk(body, "Let", "Var", "Assign"):
+        if "value" in n:
+            tgt = n.get("name") or n.get("target")
+            if isinstance(tgt, str):
+                binds.setdefault(tgt, []).append(n["value"])
+    for n in walk(body, "Match", "MatchExpr"):
+        for arm in n.get("arms", []) or []:
+            names = _ok_pattern_bindings(arm.get("pattern"))
+            if names:
+                grants.append((n.get("scrutinee"), names))
     r_proven: Set[str] = set()
     changed = True
     while changed:
@@ -2055,29 +1202,10 @@ def _authorized_param_indices(fn_decl: Dict[str, Any]) -> List[Tuple[int, str]]:
             if _is_marker_type(p.get("type"), _AUTH_MARKER)]
 
 
-def _walk_returns(node: Any) -> Iterable[Dict[str, Any]]:
-    """Yield every Return statement node reachable from `node`."""
-    if isinstance(node, dict):
-        if node.get("kind") == "Return":
-            yield node
-        for v in node.values():
-            yield from _walk_returns(v)
-    elif isinstance(node, list):
-        for x in node:
-            yield from _walk_returns(x)
-
-
 def _walk_marker_binds(node: Any) -> Iterable[Dict[str, Any]]:
     """Yield every Let/Var node annotated with the Authorized<...> marker."""
-    if isinstance(node, dict):
-        if node.get("kind") in ("Let", "Var") \
-                and _is_marker_type(node.get("type"), _AUTH_MARKER):
-            yield node
-        for v in node.values():
-            yield from _walk_marker_binds(v)
-    elif isinstance(node, list):
-        for x in node:
-            yield from _walk_marker_binds(x)
+    return (n for n in walk(node, "Let", "Var")
+            if _is_marker_type(n.get("type"), _AUTH_MARKER))
 
 
 def _escaped_gated_idents(node: Any, gated: Set[str]) -> Iterable[str]:
@@ -2158,8 +1286,8 @@ def check_authorization(ast: Dict[str, Any]) -> List[Diagnostic]:
         # Obligation 1 — call-site proof for Authorized<...> parameters.
         # This is what makes trusting those parameters (above) sound: a
         # raw value is rejected where it enters, so it can never arrive.
-        for call in _walk_calls(body):
-            callee = _callee_name(call)
+        for call in walk(body, "Call"):
+            callee = callee_name(call)
             idxs = gated.get(callee)
             if not idxs:
                 continue
@@ -2219,14 +1347,14 @@ def check_authorization(ast: Dict[str, Any]) -> List[Diagnostic]:
         # This is what lets _expr_is_authorized trust minter calls.
         mint = _minted_kind(d)
         if mint:
-            for ret in _walk_returns(body):
+            for ret in walk(body, "Return"):
                 val = ret.get("value")
                 ok = False
                 if mint == "direct":
                     ok = _expr_is_authorized(val, authorized, minters)
                 elif isinstance(val, dict):
                     if val.get("kind") == "Call":
-                        cn = _callee_name(val)
+                        cn = callee_name(val)
                         rargs = val.get("args") or []
                         if cn in ("Err", "None"):
                             ok = True
@@ -2251,8 +1379,8 @@ def check_authorization(ast: Dict[str, Any]) -> List[Diagnostic]:
                         f"declared return type",
                         {"reason": "return does not mint declared proof"},
                     ))
-        for call in _walk_calls(d.get("body", [])):
-            sink = _callee_name(call)
+        for call in walk(d.get("body", []), "Call"):
+            sink = callee_name(call)
             if sink not in _MUTATION_SINKS:
                 continue
             args = call.get("args") or []
@@ -2316,19 +1444,10 @@ def _stable_names(fn_decl: Dict[str, Any]) -> Set[str]:
     witness that the guard's id and the sink's id are the same value."""
     counts: Dict[str, int] = {}
 
-    def collect(node: Any):
-        if isinstance(node, dict):
-            if node.get("kind") in ("Let", "Assign"):
-                tgt = node.get("name") or node.get("target")
-                if isinstance(tgt, str):
-                    counts[tgt] = counts.get(tgt, 0) + 1
-            for v in node.values():
-                collect(v)
-        elif isinstance(node, list):
-            for x in node:
-                collect(x)
-
-    collect(fn_decl.get("body", []))
+    for n in walk(fn_decl.get("body", []), "Let", "Assign"):
+        tgt = n.get("name") or n.get("target")
+        if isinstance(tgt, str):
+            counts[tgt] = counts.get(tgt, 0) + 1
     params = {p["name"] for p in fn_decl.get("params", [])}
     stable = {p for p in params if counts.get(p, 0) == 0}
     stable |= {n for n, c in counts.items() if c == 1 and n not in params}
@@ -2355,24 +1474,17 @@ def _resource_proof_ids(fn_decl: Dict[str, Any],
     names qualify — a rebindable proof name proves nothing."""
     out: Dict[str, Tuple[str, Any]] = {}
 
-    def collect(node: Any):
-        if isinstance(node, dict):
-            if node.get("kind") in ("Let", "Assign") and "name" in node and "value" in node:
-                name, val = node["name"], node["value"]
-                if name in stable and isinstance(val, dict) \
-                        and val.get("kind") == "Call" \
-                        and _callee_name(val) == _RES_AUTH_GUARD:
-                    args = val.get("args") or []
-                    key = _id_key(args[2], stable) if len(args) > 2 else None
-                    if key is not None:
-                        out[name] = key
-            for v in node.values():
-                collect(v)
-        elif isinstance(node, list):
-            for x in node:
-                collect(x)
-
-    collect(fn_decl.get("body", []))
+    for n in walk(fn_decl.get("body", []), "Let", "Assign"):
+        if "name" not in n or "value" not in n:
+            continue
+        name, val = n["name"], n["value"]
+        if name in stable and isinstance(val, dict) \
+                and val.get("kind") == "Call" \
+                and callee_name(val) == _RES_AUTH_GUARD:
+            args = val.get("args") or []
+            key = _id_key(args[2], stable) if len(args) > 2 else None
+            if key is not None:
+                out[name] = key
     return out
 
 
@@ -2384,7 +1496,7 @@ def _proof_id_key(node: Any, proof_ids: Dict[str, Tuple[str, Any]],
     if not isinstance(node, dict):
         return None
     kind = node.get("kind")
-    if kind == "Call" and _callee_name(node) == _RES_AUTH_GUARD:
+    if kind == "Call" and callee_name(node) == _RES_AUTH_GUARD:
         args = node.get("args") or []
         return _id_key(args[2], stable) if len(args) > 2 else None
     if kind == "Ident":
@@ -2409,8 +1521,8 @@ def check_resource_authorization(ast: Dict[str, Any]) -> List[Diagnostic]:
         fpos = d.get("pos") or {"line": 0, "column": 0}
         stable = _stable_names(d)
         proof_ids = _resource_proof_ids(d, stable)
-        for call in _walk_calls(d.get("body", [])):
-            if _callee_name(call) != _RESOURCE_SINK:
+        for call in walk(d.get("body", []), "Call"):
+            if callee_name(call) != _RESOURCE_SINK:
                 continue
             args = call.get("args") or []
             rid = args[1] if len(args) > 1 else None
@@ -2459,346 +1571,6 @@ def check_resource_authorization(ast: Dict[str, Any]) -> List[Diagnostic]:
 
 
 # ----------------------------------------------------------------------
-# E0718 — open redirect: redirect target steerable by untrusted input
-# ----------------------------------------------------------------------
-# CWE-601. A redirect whose target URL is attacker-controlled sends the
-# user to a phishing / token-stealing site while looking like a link
-# from the trusted origin. Same sink+sanitizer+literal shape as E0711:
-# the `redirect` sink must receive a fixed literal target, or a
-# `safeRedirect(host, path)` result (which pins the host so the target
-# can only ever stay on `host`). A bare param or a concatenation is the
-# open-redirect precondition and is refused.
-
-_REDIRECT_SINK = "redirect"
-_REDIRECT_SANITIZER = "safeRedirect"
-
-
-def _redirect_arg_is_safe(node: Any, safe_names: Set[str]) -> Optional[str]:
-    if not isinstance(node, dict):
-        return "redirect target is not a fixed literal"
-    kind = node.get("kind")
-    if kind == "StringLit":
-        return None
-    if kind == "Call":
-        if _callee_name(node) == _REDIRECT_SANITIZER:
-            return None
-        return f"target is a computed call - use {_REDIRECT_SANITIZER}(host, path)"
-    if kind == "Ident" and node.get("name") in safe_names:
-        return None
-    if kind == "BinOp" and node.get("op") == "+":
-        return f"target is built by concatenation - use {_REDIRECT_SANITIZER}(host, path)"
-    return f"target is a dynamic expression - use {_REDIRECT_SANITIZER}(host, path)"
-
-
-def _safe_redirect_names(body: Any) -> Set[str]:
-    binds: Dict[str, List[Dict[str, Any]]] = {}
-
-    def collect(node: Any):
-        if isinstance(node, dict):
-            if node.get("kind") in ("Let", "Assign") and "name" in node and "value" in node:
-                binds.setdefault(node["name"], []).append(node["value"])
-            for v in node.values():
-                collect(v)
-        elif isinstance(node, list):
-            for x in node:
-                collect(x)
-
-    collect(body)
-    safe: Set[str] = set()
-    changed = True
-    while changed:
-        changed = False
-        for name, values in binds.items():
-            if name in safe:
-                continue
-            if all(_redirect_arg_is_safe(v, safe) is None for v in values):
-                safe.add(name)
-                changed = True
-    return safe
-
-
-def check_open_redirect(ast: Dict[str, Any]) -> List[Diagnostic]:
-    """Return E0718 diagnostics for a redirect fed an untrusted target."""
-    diags: List[Diagnostic] = []
-    for d in ast.get("decls", []):
-        if d.get("kind") != "FunctionDecl":
-            continue
-        fn = d["name"]
-        fpos = d.get("pos") or {"line": 0, "column": 0}
-        body = d.get("body", [])
-        safe_names = _safe_redirect_names(body)
-        for call in _walk_calls(body):
-            if _callee_name(call) != _REDIRECT_SINK:
-                continue
-            args = call.get("args") or []
-            if not args:
-                continue
-            reason = _redirect_arg_is_safe(args[0], safe_names)
-            if reason is None:
-                continue
-            pos = call.get("pos") or fpos
-            diags.append(Diagnostic(
-                code="E0718",
-                category="capability",
-                severity="error",
-                message=(
-                    f"function {fn!r} redirects to an untrusted target "
-                    f"({reason}); an open redirect sends users to an "
-                    f"attacker-controlled site from a trusted link"
-                ),
-                position=Position(pos.get("line", 0), pos.get("column", 0)),
-                suggestion=(
-                    f"redirect to a fixed literal path, or pin the host with "
-                    f"{_REDIRECT_SANITIZER}(\"your-host.example\", path) so the "
-                    f"target can only stay on your origin"
-                ),
-                confidence=1.0,
-                extra={"function": fn, "sink": _REDIRECT_SINK, "reason": reason},
-            ))
-    return diags
-
-
-# ----------------------------------------------------------------------
-# E0719 — server-side template injection (SSTI) — CWE-94
-# ----------------------------------------------------------------------
-# The Jinja2/Flask/Handlebars SSTI shape: the TEMPLATE itself is built
-# from untrusted input. When user data steers template *syntax* (not
-# just fills a slot), the engine evaluates it — arbitrary code execution.
-# The rule mirrors E0713 but with no sanitizer: `renderTemplate`'s first
-# argument (the template) must be a fixed string literal (or a name bound
-# only to literals). Untrusted data belongs in the SECOND argument (the
-# data model), which the engine escapes; a dynamic template is refused.
-
-_TEMPLATE_SINKS = ("renderTemplate",)
-
-
-# The explicit-trust boundary: `trusted(x)` asserts a dynamic value comes
-# from a vetted source. It is the auditable escape hatch for the two
-# sink+literal checks that have NO safer sanitizer (E0719 template, E0720
-# deserialize) — the dual of reveal()/redact(). Accepting it only relaxes
-# those checks (strictly non-breaking).
-_TRUSTED = "trusted"
-
-
-def _template_expr_is_safe(node: Any, safe_names: Set[str]) -> Optional[str]:
-    """None if `node` is a fixed template (literal, literal-bound name, or
-    an explicit trusted(...) assertion), else a short reason it is unsafe."""
-    if not isinstance(node, dict):
-        return "template is not a fixed literal"
-    kind = node.get("kind")
-    if kind == "StringLit":
-        return None
-    if kind == "Call" and _callee_name(node) == _TRUSTED:
-        return None  # explicit, auditable trust assertion
-    if kind == "Ident" and node.get("name") in safe_names:
-        return None
-    if kind == "BinOp" and node.get("op") == "+":
-        return "template is built by string concatenation"
-    return "template is a dynamic expression, not a fixed literal"
-
-
-def _safe_template_names(body: Any) -> Set[str]:
-    """Names bound only to fixed templates (literal or literal-bound),
-    via the same straight-line fixpoint as the SQL/path passes."""
-    binds: Dict[str, List[Dict[str, Any]]] = {}
-
-    def collect(node: Any):
-        if isinstance(node, dict):
-            if node.get("kind") in ("Let", "Assign") and "name" in node and "value" in node:
-                binds.setdefault(node["name"], []).append(node["value"])
-            for v in node.values():
-                collect(v)
-        elif isinstance(node, list):
-            for x in node:
-                collect(x)
-
-    collect(body)
-    safe: Set[str] = set()
-    changed = True
-    while changed:
-        changed = False
-        for name, values in binds.items():
-            if name in safe:
-                continue
-            if all(_template_expr_is_safe(v, safe) is None for v in values):
-                safe.add(name)
-                changed = True
-    return safe
-
-
-def check_template_injection(ast: Dict[str, Any]) -> List[Diagnostic]:
-    """Return E0719 diagnostics for a renderTemplate call whose template
-    argument is dynamic (built from untrusted input) — SSTI (CWE-94)."""
-    diags: List[Diagnostic] = []
-    for d in ast.get("decls", []):
-        if d.get("kind") != "FunctionDecl":
-            continue
-        fn = d["name"]
-        fpos = d.get("pos") or {"line": 0, "column": 0}
-        body = d.get("body", [])
-        safe_names = _safe_template_names(body)
-        for call in _walk_calls(body):
-            if _callee_name(call) not in _TEMPLATE_SINKS:
-                continue
-            args = call.get("args") or []
-            if not args:
-                continue
-            reason = _template_expr_is_safe(args[0], safe_names)
-            if reason is None:
-                continue
-            pos = call.get("pos") or fpos
-            diags.append(Diagnostic(
-                code="E0719",
-                category="capability",
-                severity="error",
-                message=(
-                    f"function {fn!r} renders a dynamic template via "
-                    f"{_callee_name(call)!r} ({reason}); untrusted input in "
-                    f"the template is server-side template injection (RCE)"
-                ),
-                position=Position(pos.get("line", 0), pos.get("column", 0)),
-                suggestion=(
-                    "keep the template a fixed string literal; pass "
-                    "untrusted values as the second (data) argument, which "
-                    "the engine escapes instead of evaluating"
-                ),
-                confidence=1.0,
-                extra={"function": fn, "sink": _callee_name(call), "reason": reason},
-            ))
-    return diags
-
-
-# ----------------------------------------------------------------------
-# E0720 — insecure deserialization of untrusted data — CWE-502
-# ----------------------------------------------------------------------
-# The pickle / Java readObject / unsafe-YAML gadget class: feeding
-# untrusted bytes to a decoder that can instantiate arbitrary types is
-# remote code execution. Like SSTI, there is no safe way to `deserialize`
-# untrusted input with an unrestricted decoder — the sanctioned form is
-# `schemaDecode(schema, data)`, a decoder pinned to a fixed schema that
-# can only ever produce the declared shape. E0720 refuses `deserialize`
-# on any non-literal (i.e. untrusted) argument.
-
-_DESERIALIZE_SINKS = ("deserialize",)
-_SCHEMA_DECODE = "schemaDecode"
-
-
-def _deser_arg_is_safe(node: Any, safe_names: Set[str]) -> Optional[str]:
-    """None if `node` is a trusted-constant argument to deserialize (a
-    literal or literal-bound name), else a short reason it is unsafe."""
-    if not isinstance(node, dict):
-        return "argument is not a fixed literal"
-    kind = node.get("kind")
-    if kind == "StringLit":
-        return None
-    if kind == "Call" and _callee_name(node) == _TRUSTED:
-        return None  # explicit, auditable trust assertion
-    if kind == "Ident" and node.get("name") in safe_names:
-        return None
-    return "argument is untrusted / dynamic data"
-
-
-def check_deserialization(ast: Dict[str, Any]) -> List[Diagnostic]:
-    """Return E0720 diagnostics for `deserialize` fed untrusted (non-
-    literal) data — insecure deserialization (CWE-502)."""
-    diags: List[Diagnostic] = []
-    for d in ast.get("decls", []):
-        if d.get("kind") != "FunctionDecl":
-            continue
-        fn = d["name"]
-        fpos = d.get("pos") or {"line": 0, "column": 0}
-        body = d.get("body", [])
-        # A name bound only to literals is a trusted constant.
-        safe_names = _safe_template_names(body)
-        for call in _walk_calls(body):
-            if _callee_name(call) not in _DESERIALIZE_SINKS:
-                continue
-            args = call.get("args") or []
-            if not args:
-                continue
-            reason = _deser_arg_is_safe(args[0], safe_names)
-            if reason is None:
-                continue
-            pos = call.get("pos") or fpos
-            diags.append(Diagnostic(
-                code="E0720",
-                category="capability",
-                severity="error",
-                message=(
-                    f"function {fn!r} deserializes untrusted data via "
-                    f"{_callee_name(call)!r} ({reason}); an unrestricted "
-                    f"decoder on attacker-controlled bytes is remote code "
-                    f"execution"
-                ),
-                position=Position(pos.get("line", 0), pos.get("column", 0)),
-                suggestion=(
-                    f"decode with {_SCHEMA_DECODE}(schema, data), which pins "
-                    f"the output to a fixed schema and cannot instantiate "
-                    f"arbitrary types"
-                ),
-                confidence=1.0,
-                extra={"function": fn, "sink": _callee_name(call), "reason": reason},
-            ))
-    return diags
-
-
-# ----------------------------------------------------------------------
-# E0727 — XML external entity (XXE) — CWE-611
-# ----------------------------------------------------------------------
-# Parsing untrusted XML with an entity-resolving parser lets a document
-# pull in <!ENTITY xxe SYSTEM "file:///etc/passwd"> (local file read) or a
-# URL (SSRF / billion-laughs DoS). Like insecure deserialization, this is a
-# parser-CONFIG class, not a content-escaping one: `parseXml` is the
-# entity-resolving sink and is refused on untrusted (non-literal) input;
-# `parseXmlSafe` is the hardened parser (external entities disabled) and is
-# the sanctioned alternative.
-
-_XXE_SINKS = ("parseXml",)
-
-
-def check_xxe(ast: Dict[str, Any]) -> List[Diagnostic]:
-    """Return E0727 diagnostics for `parseXml` fed untrusted (non-literal)
-    input — XML external entity injection (CWE-611)."""
-    diags: List[Diagnostic] = []
-    for d in ast.get("decls", []):
-        if d.get("kind") != "FunctionDecl":
-            continue
-        fn = d["name"]
-        fpos = d.get("pos") or {"line": 0, "column": 0}
-        body = d.get("body", [])
-        safe_names = _safe_template_names(body)
-        for call in _walk_calls(body):
-            if _callee_name(call) not in _XXE_SINKS:
-                continue
-            args = call.get("args") or []
-            if not args:
-                continue
-            reason = _deser_arg_is_safe(args[0], safe_names)
-            if reason is None:
-                continue
-            pos = call.get("pos") or fpos
-            diags.append(Diagnostic(
-                code="E0727",
-                category="capability",
-                severity="error",
-                message=(
-                    f"function {fn!r} parses untrusted XML via "
-                    f"{_callee_name(call)!r} ({reason}); an entity-resolving "
-                    f"parser reads local files and reaches internal URLs (XXE)"
-                ),
-                position=Position(pos.get("line", 0), pos.get("column", 0)),
-                suggestion=(
-                    "parse with parseXmlSafe(data), which disables external "
-                    "entity resolution (no file read, no SSRF, no billion-"
-                    "laughs)"
-                ),
-                confidence=1.0,
-                extra={"function": fn, "sink": _callee_name(call), "reason": reason},
-            ))
-    return diags
-
-
-# ----------------------------------------------------------------------
 # E0723 — hardcoded credential in source (CWE-798)
 # ----------------------------------------------------------------------
 # The single most common real-world security finding (millions of keys
@@ -2820,23 +1592,11 @@ _CREDENTIAL_PATTERNS = [
 ]
 
 
-def _walk_string_lits(node: Any) -> Iterable[Dict[str, Any]]:
-    """Yield every StringLit node reachable from `node`."""
-    if isinstance(node, dict):
-        if node.get("kind") == "StringLit":
-            yield node
-        for v in node.values():
-            yield from _walk_string_lits(v)
-    elif isinstance(node, list):
-        for x in node:
-            yield from _walk_string_lits(x)
-
-
 def check_hardcoded_secret(ast: Dict[str, Any]) -> List[Diagnostic]:
     """Return E0723 diagnostics for string literals that match a known
     provider-credential shape (a hardcoded secret, CWE-798)."""
     diags: List[Diagnostic] = []
-    for lit in _walk_string_lits(ast):
+    for lit in walk(ast, "StringLit"):
         val = lit.get("value")
         if not isinstance(val, str):
             continue
@@ -2868,31 +1628,6 @@ def check_hardcoded_secret(ast: Dict[str, Any]) -> List[Diagnostic]:
 # ----------------------------------------------------------------------
 # AST walking
 # ----------------------------------------------------------------------
-
-def _walk_calls(node: Any) -> Iterable[Dict[str, Any]]:
-    """Yield every Call expression node reachable from `node`."""
-    if isinstance(node, dict):
-        if node.get("kind") == "Call":
-            yield node
-        for v in node.values():
-            yield from _walk_calls(v)
-    elif isinstance(node, list):
-        for x in node:
-            yield from _walk_calls(x)
-
-
-def _callee_name(call_node: Dict[str, Any]) -> Optional[str]:
-    """Extract a simple name from a Call's `func` if direct/named."""
-    func = call_node.get("func") or {}
-    kind = func.get("kind")
-    if kind == "Ident":
-        return func.get("name")
-    if kind == "Field":
-        inner = func.get("value") or {}
-        if inner.get("kind") == "Ident":
-            return func.get("name")
-    return None
-
 
 def _format_effect(eff: EffectEntry) -> str:
     path, arg = eff
@@ -2936,8 +1671,8 @@ def check_effects(ast: Dict[str, Any]) -> List[Diagnostic]:
         caller_effects = _declared_effects(d)
         pos = d.get("pos") or {"line": 0, "column": 0}
 
-        for call in _walk_calls(d.get("body", [])):
-            callee = _callee_name(call)
+        for call in walk(d.get("body", []), "Call"):
+            callee = callee_name(call)
             if callee is None or callee in union_cases:
                 continue
             if callee in user_effects:

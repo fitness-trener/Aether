@@ -1,5 +1,11 @@
 # Candidate 05 — handoff
 
+> **LANDED 2026-07-25** in `e49ceb3`. This is the record of what was
+> measured and decided, not work to pick up — and its measurement table
+> was wrong; see the correction under "The defect". Both carry-over
+> findings below are also closed: the `aether-scan` workflow in `ea449d6`
+> and `sdk.py`'s silent swallow in `bfde706`.
+
 Written 2026-07-25 by the session that shipped candidates 01 and 04.
 Read this plus the sources it points at; no prior conversation needed.
 
@@ -54,13 +60,39 @@ Re-measured this session — reproduces ADR-0002 exactly:
 
 | | count |
 |---|---|
-| codes the narrow regex finds | 45 |
-| distinct `E0xxx` mentioned anywhere in `transpiler/`, `tools/`, `bench/` | 51 |
-| rows in `grammar/diagnostics.md` | 52 |
+| codes the narrow regex finds | ~~45~~ **44** |
+| distinct `E0xxx` mentioned anywhere in `transpiler/`, `tools/`, `bench/` | ~~51~~ **54** |
+| rows in `grammar/diagnostics.md` | 52 (**54** after the two missing rows) |
 
-**9 codes the regex misses:** `E0102 E0103 E0104 E0105 E0106` (lexer
-`_err("E0102", …)` positional form), `E0301 E0304` (`runtime.py`,
-`patch_target.py`), `E0705 E0706` (`imports.py` `_diag("E0705", …)`).
+**~~9~~ 10 codes the regex misses:** **`E0101`** `E0102 E0103 E0104 E0105
+E0106` (lexer `_err("E0101", …)` positional form), `E0301 E0304`
+(`runtime.py` assigns to a local `code` first, so the space around `=`
+defeats the regex), `E0705 E0706` (`imports.py` `_diag("E0705", …)`).
+
+> **Corrected 2026-07-25 during implementation.** The figures above were
+> wrong in two ways that cancelled in the prose but not in the table.
+>
+> **45 → 44.** 45 is the narrow regex over `transpiler/` + `tools/` +
+> `bench/`. The scanner as written walks only `transpiler/` and `bench/`
+> (`tests/test_diagnostic_catalog.py:69`), and finds **44**. The extra
+> code is `E0101` from `tools/py_surface.py` — a root the scanner does not
+> walk.
+>
+> **9 → 10.** Because that stray `E0101` looked already-covered, it fell
+> off the misses list. Against the real scanner the miss set is
+> `E0101`–`E0106`, `E0301`, `E0304`, `E0705`, `E0706` — ten codes.
+> 44 + 10 = 54, which is internally consistent; 45 + 9 = 54 is not
+> consistent with the 51 below it.
+>
+> **51 → 54.** 51 could not be reproduced by any measure of the tree at
+> the commit this file was written against (`3b0b587`): narrow over two
+> roots is 44, narrow over three is 45, every `E\d{4}` mention over three
+> roots is 54, and the three-form scanner over three roots is also 54.
+> Recorded as unexplained rather than rationalised.
+>
+> Verified at `3b0b587` (pre-candidate-02) and at the branch head: the
+> narrow count is 44 in both, so none of this is drift introduced by
+> candidates 02 or 03.
 
 **Of those, 2 are live, tested, and documented nowhere:** `E0705` and
 `E0706`, both constructed in `transpiler/aether/passes/imports.py`.
@@ -101,9 +133,9 @@ residual; do not claim the catalog is now provably complete.
 
 ## Done when
 
-`python -B scripts/run_all.py` exits 0, the catalog test finds all 51
-codes rather than 45, E0705 and E0706 have `grammar/diagnostics.md`
-rows, and the ratchet baseline reflects any gain.
+`python -B scripts/run_all.py` exits 0, the catalog test finds all ~~51~~
+**54** codes rather than ~~45~~ **44**, E0705 and E0706 have
+`grammar/diagnostics.md` rows, and the ratchet baseline reflects any gain.
 
 ## Carry-over findings
 

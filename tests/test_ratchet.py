@@ -30,24 +30,17 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASELINE_REL = "tests/ratchet_baseline.json"
+sys.path.insert(0, ROOT)
+
+from tools.diagnostic_codes import constructed_codes  # noqa: E402
 
 
 def _emitted_codes() -> set:
-    """Distinct Exxxx codes the transpiler emits (same enumeration as the
-    D.2 catalog test)."""
-    codes = set()
-    tdir = os.path.join(ROOT, "transpiler")
-    for dp, _, files in os.walk(tdir):
-        if "__pycache__" in dp:
-            continue
-        for fn in files:
-            if not fn.endswith(".py"):
-                continue
-            with open(os.path.join(dp, fn), encoding="utf-8") as f:
-                text = f.read()
-            for m in re.finditer(r'(?:code="|"code":\s*")(E\d+)"', text):
-                codes.add(m.group(1))
-    return codes
+    """Distinct Exxxx codes the toolchain constructs — now genuinely the
+    same enumeration as the D.2 catalog test, because both call the one
+    scanner in `tools/diagnostic_codes.py`. This docstring used to claim
+    that while walking a different root with a narrower regex."""
+    return constructed_codes(ROOT)
 
 
 def _gated_detectors() -> set:

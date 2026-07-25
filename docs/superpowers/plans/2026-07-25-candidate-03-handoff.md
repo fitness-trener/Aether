@@ -1,5 +1,13 @@
 # Candidate 03 — handoff
 
+> **LANDED 2026-07-25** in `bfdf0b3`, after candidate 02 as this file
+> instructs. This is the record of what was measured and decided, not work
+> to pick up. The clone table below counts the tree BEFORE 02: re-measured
+> after it, the six named `_walk_*` generators were still six and the
+> open-coded `isinstance(node, dict)` sites had already fallen 39 → 30.
+> They are now **1** and **14**; the recursion lives in
+> `transpiler/aether/passes/ast_walk.py`.
+
 Written 2026-07-25 by the session that shipped candidates 01 and 04,
 after recovering the review's own candidate numbering from its
 transcript. Read this plus the sources it points at; no prior
