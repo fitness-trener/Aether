@@ -1,3 +1,4 @@
+// expect: clean
 // Return laundering — the fixed shape. The return type is declared
 // Secret<String>, so the marker travels with the value to every caller;
 // the only disclosure is an explicit, auditable reveal().

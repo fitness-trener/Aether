@@ -1,3 +1,4 @@
+// expect: E0701x3
 // A logging service was designed to require ONLY the `log` capability —
 // it writes to stdout, that's it. A refactor introduces a new helper
 // `persistAudit` that also writes the audit line to disk, honestly

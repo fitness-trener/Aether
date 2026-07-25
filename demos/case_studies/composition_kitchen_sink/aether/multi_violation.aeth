@@ -1,3 +1,4 @@
+// expect: E0712, E0713, E0719, E0720, E0721, E0722, E0723
 // Composition demo — one module, seven independent architectural
 // violations, all caught in a SINGLE `aether check`. Each function is
 // locally plausible and passes the effect/capability passes; each trips

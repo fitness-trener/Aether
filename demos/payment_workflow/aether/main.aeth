@@ -1,3 +1,4 @@
+// expect: clean
 // Payment Workflow Service — architecturally-correct Aether reference.
 //
 // What this exercises end-to-end:

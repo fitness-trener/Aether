@@ -1,3 +1,4 @@
+// expect: clean
 // Insecure deserialization — the fixed form. `schemaDecode` pins the
 // decoder to a fixed schema ("SessionV1"), so attacker bytes can only
 // ever populate the declared shape — no arbitrary-type instantiation,

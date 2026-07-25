@@ -1,3 +1,4 @@
+// expect: clean
 // The fix. Never log or persist the personal field in the clear. Log
 // non-personal metadata (the action), and where a value must appear in
 // a log/event for debugging, mask it with redact(...) — the exposure is

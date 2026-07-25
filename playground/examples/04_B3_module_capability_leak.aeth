@@ -1,3 +1,4 @@
+// expect: E0701x3
 // Example 04 — B.3 module-capability leak.
 // `AuditLogger` declares only `log` capability, but the helper
 // performs `fs.write`. Aether refuses with [E0701]: capability `fs`

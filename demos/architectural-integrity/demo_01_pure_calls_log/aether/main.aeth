@@ -1,3 +1,4 @@
+// expect: E0801
 // A "pure" data-transformation function that, in a refactor, started
 // calling `print` for debugging. The architectural intent (this is a
 // pure validator, no side effects) is no longer matched by the body.

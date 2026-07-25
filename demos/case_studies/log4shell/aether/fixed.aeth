@@ -1,3 +1,4 @@
+// expect: clean
 // The fix. Log4j 2.16.0 disabled message-lookup substitution by
 // default (the JndiLookup path was removed / gated off). Modeled here
 // as: substitution is a PURE string operation with no network reach.

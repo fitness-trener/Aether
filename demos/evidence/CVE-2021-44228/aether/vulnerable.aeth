@@ -1,3 +1,4 @@
+// expect: E0701x4, E0710x2, E0801
 // Case study — Log4Shell (CVE-2021-44228), the log-call boundary in Aether.
 //
 // Real vuln: Apache Log4j 2's "message lookup substitution" let a

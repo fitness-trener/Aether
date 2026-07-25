@@ -1,3 +1,4 @@
+// expect: E0715x2
 // Example 16 — PII egress into logs / disk (GDPR / data-residency).
 // A user's email is written to a debug log and to an on-disk event
 // file. Each print/write reads as innocent telemetry, but the value is

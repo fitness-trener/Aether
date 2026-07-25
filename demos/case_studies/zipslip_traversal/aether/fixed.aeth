@@ -1,3 +1,4 @@
+// expect: clean
 // The fix. Route the untrusted entry name through `safeJoin`, which
 // strips `..`, absolute roots, and drive prefixes so the result is
 // guaranteed to stay under baseDir. This is the same containment the

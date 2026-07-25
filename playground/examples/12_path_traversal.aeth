@@ -1,3 +1,4 @@
+// expect: E0711
 // Example 12 — Path traversal / Zip-Slip (Snyk 2018 class; thousands of
 // downstream CVEs in archive extractors and file-upload handlers).
 // An extractor writes each archive entry to baseDir + entryName. A

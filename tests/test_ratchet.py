@@ -4,8 +4,8 @@ The self-teaching loop edits the compiler autonomously. This gate makes the
 improvement one-directional:
 
   1. Detector count never drops. The number of distinct diagnostic codes
-     the transpiler emits, and the number of detector passes folded into
-     the CLI gate, must meet or exceed a committed FLOOR
+     the transpiler emits, and the number of detector passes registered in
+     `aether.passes.STAGES`, must meet or exceed a committed FLOOR
      (`ratchet_baseline.json`). Removing a detector — even if its code,
      doc, and test are all deleted together so the rest of the suite stays
      green — drops the count below the floor and turns THIS gate red.
@@ -51,11 +51,42 @@ def _emitted_codes() -> set:
 
 
 def _gated_detectors() -> set:
-    """Detector check_* functions folded into the CLI check pipeline."""
-    with open(os.path.join(ROOT, "transpiler", "aether", "cli.py"),
-              encoding="utf-8") as f:
-        text = f.read()
-    return set(re.findall(r'(check_[a-z_]+)\(ast\)', text))
+    """Detector check_* functions registered in the analysis registry.
+
+    Counts what actually EXECUTES, by import — not what a regex finds in
+    cli.py source text. A detector that is defined but never registered
+    no longer counts toward the ratchet."""
+    sys.path.insert(0, os.path.join(ROOT, "transpiler"))
+    from aether.passes import STAGES
+    return {fn.__name__ for _stage, fns in STAGES for fn in fns}
+
+
+# Every caller that runs static analysis must cross the registry. The
+# absence of this check is what let tools/scan.py ship blind to
+# E0207/E0729/E0730 and sdk.py (so the editor) run 2 detectors of 30.
+_ANALYZE_CALLERS = [
+    os.path.join("transpiler", "aether", "cli.py"),
+    os.path.join("transpiler", "aether", "sdk.py"),
+    os.path.join("tools", "scan.py"),
+]
+
+
+def test_analysis_routes_through_registry():
+    """No caller may re-assemble a private detector list. Each must call
+    `analyze` / `analyze_flat` from `aether.passes`."""
+    offenders = []
+    for rel in _ANALYZE_CALLERS:
+        with open(os.path.join(ROOT, rel), encoding="utf-8") as f:
+            text = f.read()
+        if "analyze" not in text:
+            offenders.append(rel)
+    assert not offenders, (
+        "RATCHET: these callers no longer route through the analysis "
+        "registry (`aether.passes.analyze`) — a hand-maintained detector "
+        "list is exactly the drift this check exists to stop:\n  "
+        + "\n  ".join(offenders))
+    print(f"registry: all {len(_ANALYZE_CALLERS)} analysis callers route "
+          f"through analyze()")
 
 
 def _baseline() -> dict:
@@ -203,6 +234,7 @@ def test_fixed_bugs_stay_fixed():
 
 if __name__ == "__main__":
     test_detector_count_ratchet()
+    test_analysis_routes_through_registry()
     test_detectors_legitimately_checked()
     test_baseline_never_lowered()
     test_fixed_bugs_stay_fixed()

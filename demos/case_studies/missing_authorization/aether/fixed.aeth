@@ -1,3 +1,4 @@
+// expect: clean
 // The fix. The mutation now requires an authorization proof in its
 // dataflow: authorize(user, "orders:cancel") produces an
 // Authorized<String> token, and sqlExec will not type past E0716

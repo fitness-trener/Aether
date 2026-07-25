@@ -2,9 +2,10 @@
 
 A security checker that over-flags is worse than useless: developers turn
 it off. This suite is the counterweight to the positive (violation-caught)
-tests. It runs EVERY reach-scope detector (E0710-E0726) over a corpus of
-programs that use the guarded sinks CORRECTLY — every `fixed.aeth` across
-the repo plus the clean playground examples — and asserts ZERO diagnostics.
+tests. It runs EVERY registered detector (`aether.passes.STAGES`, via
+`analyze_flat`) over a corpus of programs that use the guarded sinks
+CORRECTLY — every `fixed.aeth` across the repo plus the clean playground
+examples — and asserts ZERO diagnostics.
 
 Together the three suites form the credibility triangle:
   - test_effect_scope        : bad code is caught          (catch rate)
@@ -22,23 +23,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "transpiler"))
 
 from aether.parser import parse                       # noqa: E402
-from aether.passes.effects import (                   # noqa: E402
-    check_effect_scope, check_fs_path_safety, check_secret_flow,
-    check_injection, check_command_injection, check_pii_flow,
-    check_authorization, check_resource_authorization, check_open_redirect,
-    check_template_injection, check_deserialization, check_cleartext_transmission,
-    check_metadata_fetch, check_hardcoded_secret, check_log_injection,
-    check_reflected_xss, check_header_injection,
-)
-
-_ALL_CHECKS = [
-    check_effect_scope, check_fs_path_safety, check_secret_flow,
-    check_injection, check_command_injection, check_pii_flow,
-    check_authorization, check_resource_authorization, check_open_redirect,
-    check_template_injection, check_deserialization, check_cleartext_transmission,
-    check_metadata_fetch, check_hardcoded_secret, check_log_injection,
-    check_reflected_xss, check_header_injection,
-]
+from aether.passes import analyze_flat                # noqa: E402
 
 # Clean playground examples (the non-violation ones — the violation demos
 # 02/03/04/05/10/13.. are SUPPOSED to be flagged and are excluded).
@@ -69,9 +54,7 @@ def test_no_false_positives():
     for path in corpus:
         with open(path, encoding="utf-8") as f:
             ast = parse(f.read(), path)
-        codes = []
-        for chk in _ALL_CHECKS:
-            codes += [d.code for d in chk(ast)]
+        codes = [d.code for d in analyze_flat(ast)]
         if codes:
             offenders.append((os.path.relpath(path, ROOT), sorted(set(codes))))
     assert not offenders, "legitimate code flagged (false positives):\n" + \

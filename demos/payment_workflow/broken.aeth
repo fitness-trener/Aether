@@ -1,3 +1,4 @@
+// expect: E0701x2, E0801
 // A deliberately-broken candidate for the F.2 fix-loop demo.
 //
 // Two architectural promises are violated:

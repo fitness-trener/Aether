@@ -1,3 +1,4 @@
+// expect: E0713
 // Example 14 — SQL injection (CWE-89). A request parameter is
 // concatenated straight into a query, so input like
 // "1 OR 1=1; DROP TABLE users" changes what the query does.

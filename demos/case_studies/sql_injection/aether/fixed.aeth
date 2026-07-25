@@ -1,3 +1,4 @@
+// expect: clean
 // The fix. Parameterize with sqlBind: the untrusted value is escaped
 // and bound into a `?` placeholder, so it can never break out of the
 // string literal and change the query's structure. This is the

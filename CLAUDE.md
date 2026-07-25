@@ -27,14 +27,20 @@ coverage: `vault/wiki/clusters/violation-taxonomy.md`.
 4. **Eliminate the TYPE, not one instance.** Over-flag rather than miss;
    provide a sanctioned exit/sanitizer where one exists (none for SSTI).
 5. **Ship the full slice:** detector in `transpiler/aether/passes/effects.py`
-   folded into `_run_effect_scope_check` in `cli.py`; any new stdlib
+   registered in the `security` stage of `STAGES` in
+   `transpiler/aether/passes/__init__.py` — the ONE place detector
+   membership is spelled out; every caller (CLI, SDK, LSP, `tools/scan.py`,
+   the tests) crosses `analyze()` and picks it up automatically; any new stdlib
    sink/guard in `runtime.py` (+ register effects in `passes/effects.py`
    `_STDLIB_EFFECTS` and `passes/capability.py` `_STDLIB_EFFECT_PATHS`,
    + `_KNOWN_CAPABILITIES` in `passes/modules.py` if a new capability);
    **doc row in `grammar/diagnostics.md`** (REQUIRED — the D.2 catalog test
    greps every `code="Exxxx"`); stdlib doc; tests in
    `tests/test_effect_scope.py`; `demos/case_studies/<class>/` +
-   `playground/examples/NN_*.aeth`.
+   `playground/examples/NN_*.aeth` — **each new `.aeth` opens with a
+   `// expect:` header** stating the codes it claims (sorted multiset,
+   `E0713x2` for multiplicity, `clean` for none). `tests/test_corpus.py`
+   fails on any in-scope file without one.
 6. **Verify:** `python -B scripts/run_all.py` must exit 0. Red = it did
    not happen; fix or revert. The gate includes a **monotonic ratchet**
    (`tests/test_ratchet.py`): Aether may only improve — you may never

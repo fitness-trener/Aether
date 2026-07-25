@@ -1,3 +1,4 @@
+// expect: E0717
 // Example 18 — cross-tenant data access / IDOR (CWE-639, OWASP API1).
 // The caller is authenticated and authorized for "docs:edit" — but the
 // id they were authorized for (requestedId) is NOT the id the UPDATE

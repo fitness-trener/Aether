@@ -1,3 +1,4 @@
+// expect: E0715x2
 // Case study — PII egress into logs / disk (data-residency, GDPR/CCPA
 // class). The bigtech incident that dominates privacy post-mortems: a
 // personal field (email, name, device id) is written into a debug log

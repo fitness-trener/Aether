@@ -1,3 +1,4 @@
+// expect: E0701x3, E0801x2
 // Example 10 — PII telemetry service (bigtech-shaped, BROKEN on purpose).
 // A data-governance nightmare in one file. Every function passes
 // review in isolation; the composition violates four architectural

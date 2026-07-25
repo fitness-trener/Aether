@@ -1,3 +1,4 @@
+// expect: clean
 // The fix. One resource id flows through the whole handler: the same
 // docId is authorized AND mutated. sqlByOwner will not type past E0717
 // unless its proof is an authorizeResource(...) bound to the identical

@@ -1,3 +1,4 @@
+// expect: E0714
 // Case study — command injection (CWE-78). The OpenSSL c_rehash shape
 // (CVE-2022-1292, CVSS 9.8): a script concatenated certificate file
 // names into a shell command line, so a crafted filename like

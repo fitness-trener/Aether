@@ -1,3 +1,4 @@
+// expect: clean
 // Example 06 — Payment pipeline (Stripe-shaped, clean).
 // A realistic multi-stage service: refinement-typed money, a risk
 // engine, fee tables, URL-disciplined gateway, retry coordination,

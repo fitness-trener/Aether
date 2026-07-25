@@ -38,8 +38,7 @@ from .parser import parse as _parse_strict, parse_collect
 from .emitter import emit as _emit
 from .pretty import pretty as _pretty
 from .runtime import build_namespace, set_deterministic
-from .passes.effects import check_effects
-from .passes.capability import check_capabilities
+from .passes import analyze_flat
 from .diagnostics import Diagnostic, AetherError
 
 
@@ -141,9 +140,11 @@ def check(source_or_ast, filename: str = "<sdk>") -> CheckResult:
     """Parse + run every default-on static pass.
 
     Accepts either a source string or an already-parsed AST dict.
-    Returns every diagnostic gathered across parse (C.6 recovery),
-    static effect checking (B.1/B.2), and capability composition
-    (B.3) — all in one shot, ordered by stage.
+    Returns every diagnostic gathered across parse (C.6 recovery) and
+    every stage of the analysis registry — effects, security, semantic,
+    capability, modules — all in one shot, ordered by stage. Same
+    membership the CLI runs, which is what makes the LSP's claim to show
+    "the same diagnostics a CLI run would produce" true.
     """
     if isinstance(source_or_ast, str):
         ast, diags = parse_collect(source_or_ast, filename)
@@ -152,16 +153,7 @@ def check(source_or_ast, filename: str = "<sdk>") -> CheckResult:
         ast = source_or_ast
         all_diags = []
     if ast is not None and ast.get("decls"):
-        try:
-            all_diags.extend(check_effects(ast))
-        except Exception:
-            # Pass-internal crash on a malformed partial AST is non-fatal
-            # for the SDK — the parse diagnostics already explain why.
-            pass
-        try:
-            all_diags.extend(check_capabilities(ast))
-        except Exception:
-            pass
+        all_diags.extend(analyze_flat(ast))
     return CheckResult(ast=ast, diagnostics=all_diags)
 
 

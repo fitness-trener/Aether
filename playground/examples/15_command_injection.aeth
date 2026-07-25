@@ -1,3 +1,4 @@
+// expect: E0714
 // Example 15 — command injection (CWE-78). An uploaded file's name is
 // concatenated straight into a shell command, so a name like
 // "x.jpg; rm -rf /" executes attacker commands (the OpenSSL c_rehash

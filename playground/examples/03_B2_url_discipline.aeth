@@ -1,3 +1,4 @@
+// expect: E0801
 // Example 03 — B.2 URL-discipline (glob) violation.
 // The gateway declares it only reaches /charge/*, but the body
 // routes through /admin/refund. Aether catches the glob mismatch

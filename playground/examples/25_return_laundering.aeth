@@ -1,3 +1,4 @@
+// expect: E0730
 // Example 25 — Return laundering (iter 40). getSession properly receives
 // a Secret<String>, but its declared return type is plain String: the
 // marker is washed off at the signature, and every caller - including

@@ -1,3 +1,4 @@
+// expect: clean
 // SSTI — the fixed form. The template is a FIXED literal; the untrusted
 // value goes in the DATA argument, where the engine escapes it instead
 // of evaluating it. `aether check` passes; `aether run` shows the

@@ -1,3 +1,4 @@
+// expect: E0729
 // Example 27 — Function-alias laundering (iter 42). logIt takes a plain
 // String, and the call goes through the alias f - before iteration 42
 // the boundary check only knew callees by their declared names, so this
