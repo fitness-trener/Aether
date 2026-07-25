@@ -1,3 +1,4 @@
+// expect: clean
 // `Percentage = Int where self >= 0 and self <= 100`. A pricing
 // function takes a `Percentage` and applies it to a price. A caller
 // computes the discount from a coupon and passes the raw int through.

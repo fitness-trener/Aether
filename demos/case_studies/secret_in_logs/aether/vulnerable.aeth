@@ -1,3 +1,4 @@
+// expect: E0712x2
 // Case study — secret/PII exfiltration into logs (CWE-532). One of the
 // most common real incidents: an access token, password, session
 // cookie, or PII field ends up in a debug log line, a stack trace, or

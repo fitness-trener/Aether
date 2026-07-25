@@ -1,3 +1,4 @@
+// expect: E0716
 // Example 17 — missing authorization before a mutation (CWE-862).
 // The handler is injection-safe (sqlBind) and effect-declared, yet any
 // caller who can name an orderId can cancel it: nothing on the path

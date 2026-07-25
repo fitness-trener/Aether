@@ -1,3 +1,4 @@
+// expect: E0701x3, E0801
 // capability-firewall demo, Aether side.
 //
 // The module LogFormatter declares ONE capability: log. Nothing more.

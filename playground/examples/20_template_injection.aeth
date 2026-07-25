@@ -1,3 +1,4 @@
+// expect: E0719
 // SSTI — server-side template injection (CWE-94). BROKEN on purpose.
 //
 // The Jinja2/Flask/Handlebars incident shape: a greeting page builds

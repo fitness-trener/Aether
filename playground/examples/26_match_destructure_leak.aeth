@@ -1,3 +1,4 @@
+// expect: E0712
 // Example 26 — Match-destructure leak (iter 41). The Secret is wrapped
 // in an Option and unwrapped via match: the arm binding `v` is a fresh
 // name, and before iteration 41 it silently dropped the marker - this

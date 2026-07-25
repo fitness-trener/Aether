@@ -1,3 +1,4 @@
+// expect: E0716
 // Case study — missing authorization before a data mutation
 // (CWE-862/863; the Ivanti EPMM CVE-2023-35078 shape: a mutating API
 // path reachable with no authorization check on it). The bigtech

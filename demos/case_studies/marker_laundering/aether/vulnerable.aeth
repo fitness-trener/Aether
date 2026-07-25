@@ -1,3 +1,4 @@
+// expect: E0729
 // Marker laundering — the vulnerable shape (iteration 39, gaps A + B).
 // getToken() returns a properly marked Secret<String>, and logIt takes a
 // plain String. Two innocent-looking lines compose into a credential in

@@ -1,3 +1,4 @@
+// expect: E0718
 // Case study — open redirect (CWE-601). The classic login/OAuth
 // "returnTo" (a.k.a. next / redirect_uri) parameter: after auth the
 // server redirects the user to a URL taken from the request. If that

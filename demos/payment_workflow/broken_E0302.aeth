@@ -1,3 +1,5 @@
+// expect: clean
+// expect-run: E0302
 // Refinement-boundary candidate for the LLM positive-control demo
 // (Layer 2 live-only). The architectural promise is encoded in the
 // `Percentage` type: any value used as a Percentage must satisfy

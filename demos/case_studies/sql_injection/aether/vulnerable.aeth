@@ -1,3 +1,4 @@
+// expect: E0713
 // Case study — SQL injection (CWE-89), still the most exploited web
 // vuln class two decades on. A request parameter is concatenated
 // straight into a query string, so input like `1 OR 1=1; DROP TABLE

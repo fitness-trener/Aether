@@ -1,3 +1,4 @@
+// expect: clean
 // Example 01 — Clean: a pure function that really is pure.
 // `aether check` agrees; `aether run` prints the result.
 

@@ -1,3 +1,4 @@
+// expect: E0711
 // Case study — Zip-Slip / path traversal (Snyk's 2018 disclosure class;
 // thousands of downstream CVEs across archive extractors and upload
 // handlers). The shape: an extractor writes each archive entry to

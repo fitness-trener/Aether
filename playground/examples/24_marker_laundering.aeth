@@ -1,3 +1,4 @@
+// expect: E0729
 // Example 24 — Marker laundering (iter 39). The password is properly
 // marked Secret<String> in main, but logIt takes a plain String: inside
 // logIt the marker is gone and print() looks innocent in review. Aether

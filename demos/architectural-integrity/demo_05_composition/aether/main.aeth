@@ -1,3 +1,4 @@
+// expect: E0701x3, E0801x2
 // The cross-cutting wedge: a realistic-shaped payment workflow that
 // composes ALL FOUR Aether checks. Each piece on its own looks fine,
 // each unit test would pass, and yet the composition lies. Aether

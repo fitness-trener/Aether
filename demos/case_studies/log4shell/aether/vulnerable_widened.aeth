@@ -1,3 +1,4 @@
+// expect: E0701x4, E0710x4
 // Second gate. Suppose an agent "fixes" the E0801 effect leak the
 // lazy way: it widens every effects clause up the call chain to
 // include net.fetch, silencing the effect checker. The architecture

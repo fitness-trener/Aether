@@ -1,3 +1,5 @@
+// expect: clean
+// expect-run: E0304
 // Logic-error candidate for the LLM fix-loop demo (Layer 1 replay
 // target). The architectural promise is encoded in the `ensures`
 // clause of `double`: the result must equal x * 2.

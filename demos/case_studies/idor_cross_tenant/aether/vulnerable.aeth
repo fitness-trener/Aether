@@ -1,3 +1,4 @@
+// expect: E0717
 // Case study — cross-tenant data access / broken object-level
 // authorization (IDOR; CWE-639, OWASP API1). The bigtech shape behind
 // the Facebook "delete any photo" and Peloton account-data bugs: the

@@ -1,3 +1,4 @@
+// expect: E0801
 // A "users-only" gateway declares it will only fetch URLs under
 // https://api.x/users/*. A refactor wires it up to call an admin-token
 // helper that fetches https://api.x/admin/*. The architectural promise

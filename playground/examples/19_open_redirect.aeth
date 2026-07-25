@@ -1,3 +1,4 @@
+// expect: E0718
 // Example 19 — Open redirect (CWE-601). The login "returnTo" parameter
 // is used as the post-auth redirect target with no constraint, so an
 // attacker's link to the trusted site bounces the victim to a phishing

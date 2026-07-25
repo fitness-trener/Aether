@@ -91,6 +91,16 @@ def main() -> int:
             "stderr": r.stderr.strip(),
         }
 
+    corpus_t = os.path.join(ROOT, "tests", "test_corpus.py")
+    if os.path.isfile(corpus_t):
+        cmd = [sys.executable, "-B", corpus_t]
+        r = subprocess.run(cmd, cwd=ROOT, env=env, capture_output=True, text=True)
+        results["corpus"] = {
+            "ok": r.returncode == 0,
+            "stdout": r.stdout.strip(),
+            "stderr": r.stderr.strip(),
+        }
+
     ex_t = os.path.join(ROOT, "tests", "test_exhaustiveness.py")
     if os.path.isfile(ex_t):
         cmd = [sys.executable, "-B", ex_t]
@@ -380,6 +390,7 @@ def main() -> int:
     scope_ok = bool(results.get("effect_scope") and results["effect_scope"]["ok"])
     rte_ok = bool(results.get("runtime_enforcement") and results["runtime_enforcement"]["ok"])
     fp_ok = bool(results.get("false_positive") and results["false_positive"]["ok"])
+    corpus_ok = bool(results.get("corpus") and results["corpus"]["ok"])
     ex_ok = bool(results.get("exhaustiveness") and results["exhaustiveness"]["ok"])
     scan_ok = bool(results.get("scan_tool") and results["scan_tool"]["ok"])
     ratchet_ok = bool(results.get("ratchet") and results["ratchet"]["ok"])
@@ -415,6 +426,7 @@ def main() -> int:
     print(f"# effect_scope:   {'PASS' if scope_ok else 'FAIL'} (E0710: SSRF host-pin)", file=sys.stderr)
     print(f"# runtime_enforce:{'PASS' if rte_ok else 'FAIL'} (8 defenses defang real payloads)", file=sys.stderr)
     print(f"# false_positive: {'PASS' if fp_ok else 'FAIL'} (every fixed.aeth + clean examples, 0 diagnostics)", file=sys.stderr)
+    print(f"# corpus:         {'PASS' if corpus_ok else 'FAIL'} (83 programs state + meet their own expectation)", file=sys.stderr)
     print(f"# static_semantic: {'PASS' if ex_ok else 'FAIL'} (E0202-E0207: match/reachability/dead-store/error/impossible-type)", file=sys.stderr)
     print(f"# scan_tool:      {'PASS' if scan_ok else 'FAIL'} (tools/scan.py corpus scanner)", file=sys.stderr)
     print(f"# ratchet:        {'PASS' if ratchet_ok else 'FAIL'} (monotonic: detector count never drops)", file=sys.stderr)
@@ -448,7 +460,7 @@ def main() -> int:
                   and smt_ok and bb_ok and pack_ok and rel_ok
                   and arch_ok and f_ok and llm_ok and pkg_ok and pg_ok
                   and demos_ok and fuzz_ok and scope_ok and rte_ok and fp_ok
-                  and ex_ok and scan_ok and ratchet_ok
+                  and ex_ok and scan_ok and ratchet_ok and corpus_ok
                   and alsp_ok and flc_ok and capfw_ok)
     return 0 if everything else 1
 

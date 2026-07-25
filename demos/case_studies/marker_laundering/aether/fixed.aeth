@@ -1,3 +1,4 @@
+// expect: clean
 // Marker laundering — the fixed shape. The helper parameter is typed
 // Secret<String>, so the marker travels with the value; the only
 // disclosure is an explicit, auditable reveal() of a masked prefix.

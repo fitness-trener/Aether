@@ -1,3 +1,4 @@
+// expect: clean
 // Example 08 — Order-fulfillment saga (Amazon-shaped, clean).
 // A distributed-transaction state machine: reserve inventory,
 // charge payment, ship — with compensation (release + refund) when

@@ -1,3 +1,4 @@
+// expect: clean
 // Example 09 — Feature-flag rollout engine (Google/Meta-shaped, clean).
 // Deterministic percentage rollouts: a user hashes into a stable
 // bucket 0..99 and a flag ships to `pct` of traffic. The refinement

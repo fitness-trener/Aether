@@ -1,3 +1,4 @@
+// expect: E0710x3
 // Example 11 — SSRF via unpinned fetch scope (crawl4ai CVE-2026-53754
 // shape). A crawler fetches a user-supplied URL. The fetch effect is
 // scoped with a bare wildcard, so the crawler can be steered to an

@@ -37,7 +37,10 @@ coverage: `vault/wiki/clusters/violation-taxonomy.md`.
    **doc row in `grammar/diagnostics.md`** (REQUIRED — the D.2 catalog test
    greps every `code="Exxxx"`); stdlib doc; tests in
    `tests/test_effect_scope.py`; `demos/case_studies/<class>/` +
-   `playground/examples/NN_*.aeth`.
+   `playground/examples/NN_*.aeth` — **each new `.aeth` opens with a
+   `// expect:` header** stating the codes it claims (sorted multiset,
+   `E0713x2` for multiplicity, `clean` for none). `tests/test_corpus.py`
+   fails on any in-scope file without one.
 6. **Verify:** `python -B scripts/run_all.py` must exit 0. Red = it did
    not happen; fix or revert. The gate includes a **monotonic ratchet**
    (`tests/test_ratchet.py`): Aether may only improve — you may never

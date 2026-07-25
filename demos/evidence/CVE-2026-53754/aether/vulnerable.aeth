@@ -1,3 +1,4 @@
+// expect: E0710x3
 // Case study — SSRF via unpinned fetch scope (crawl4ai CVE-2026-53754
 // shape). The real bug: webhook/URL validation used an INCOMPLETE CIDR
 // blocklist, so a crafted URL bypassed the filter and reached internal

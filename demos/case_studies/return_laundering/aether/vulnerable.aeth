@@ -1,3 +1,4 @@
+// expect: E0730
 // Return laundering — the vulnerable shape (iteration 40). getSession
 // takes a properly marked Secret<String> and returns it as a plain
 // String: the signature lies, the marker is washed off, and the caller

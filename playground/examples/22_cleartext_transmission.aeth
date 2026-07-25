@@ -1,3 +1,4 @@
+// expect: E0721x2
 // Example 22 — Cleartext transmission (CWE-319). BROKEN on purpose.
 // The gateway is host-PINNED (so E0710 is satisfied), but it ships the
 // payment payload over plain http:// — a passive network attacker on any

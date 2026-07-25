@@ -1,3 +1,4 @@
+// expect: clean
 // The fix. Never log the secret itself. Log non-secret metadata (the
 // username, a boolean outcome, a redacted marker). Where a value truly
 // must be exposed — e.g. writing the token into the outbound request —

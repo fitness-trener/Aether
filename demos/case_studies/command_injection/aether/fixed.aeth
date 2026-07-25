@@ -1,3 +1,4 @@
+// expect: clean
 // The fix. Quote with shellArg: the untrusted value is bound into a `?`
 // placeholder as a single shell argument, so it can never inject
 // `;`/`|`/`$( )` syntax and change what the command does. This is the

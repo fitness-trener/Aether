@@ -1,3 +1,4 @@
+// expect: clean
 // The fix. Pin the redirect to your own host with safeRedirect: the
 // untrusted `returnTo` is treated as a PATH under app.example.com, with
 // any scheme/authority and leading slashes stripped. An attacker's

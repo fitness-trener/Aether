@@ -1,3 +1,4 @@
+// expect: E0720
 // Insecure deserialization (CWE-502). BROKEN on purpose.
 //
 // The pickle / Java readObject / unsafe-YAML gadget class: a session

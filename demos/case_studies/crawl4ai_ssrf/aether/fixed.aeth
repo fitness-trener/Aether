@@ -1,3 +1,4 @@
+// expect: clean
 // The fix, Aether-style. crawl4ai 0.8.8 moved to host allowlisting.
 // In Aether that is the DEFAULT posture: the fetch effect pins the
 // host it is permitted to reach. A user-supplied URL can still be
