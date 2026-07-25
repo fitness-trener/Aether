@@ -1,0 +1,35 @@
+{
+  "_meta": {
+    "purpose": "Ground truth for the Python sink-detector bench. Keyed <file>::<function>, valued with the sink-family code the function should produce, or \"clean\".",
+    "scope": "Sink family ONLY: E0711 path, E0713 SQLi, E0714 command, E0718 open redirect, E0719 SSTI, E0720 deserialization, E0723 hardcoded credential, E0727 XXE. Capability findings (E0701) are NOT ground truth here - on Python the module policy is empty by construction, so every I/O call produces one; they are an inventory, not a verdict.",
+    "out_of_scope": "The effect-string family (E0710/E0721/E0722 SSRF, cleartext) reads a DECLARED net.fetch annotation Python does not have, and the marker family (E0712/E0715/E0716/E0717/E0724) needs marker types Python has no annotation-free equivalent for. The requests/capitalone/pyjwt repros are therefore labelled clean for the sink family - that is correct, not a miss, and the report says so.",
+    "method": "Hand-labeled by reading each function against its own header comment, which states the CWE and names the documented fix. The bench/realworld_* repros were written before this bench existed, for the Aether ports, so their labels were not chosen to flatter the frontend.",
+    "independence_caveat": "Author-established ground truth (the repo's author wrote both the repros and the detectors). Same caveat as tools/py_corpus2/LABELS.json."
+  },
+
+  "bench/py_frontend/corpus/sqli_repro.py::find_user": "E0713",
+  "bench/py_frontend/corpus/sqli_repro.py::find_user_fstring": "E0713",
+  "bench/py_frontend/corpus/sqli_repro.py::find_user_safe": "clean",
+
+  "bench/py_frontend/corpus/path_traversal_repro.py::read_upload": "E0711",
+  "bench/py_frontend/corpus/path_traversal_repro.py::read_upload_joined": "E0711",
+  "bench/py_frontend/corpus/path_traversal_repro.py::read_upload_safe": "clean",
+
+  "bench/py_frontend/corpus/open_redirect_repro.py::login_done": "E0718",
+  "bench/py_frontend/corpus/open_redirect_repro.py::login_done_safe": "clean",
+
+  "bench/py_frontend/corpus/hardcoded_secret_repro.py::make_client": "E0723",
+  "bench/py_frontend/corpus/hardcoded_secret_repro.py::make_client_safe": "clean",
+
+  "bench/realworld_subprocess_cmdi/subprocess_repro.py::make_thumbnail": "E0714",
+  "bench/realworld_subprocess_cmdi/subprocess_repro.py::make_thumbnail_safe": "clean",
+
+  "bench/realworld_pyyaml/pyyaml_repro.py::load_config": "E0720",
+  "bench/realworld_pyyaml/pyyaml_repro.py::load_config_safe": "clean",
+
+  "bench/realworld_flask_ssti/flask_repro.py::greeting": "E0719",
+  "bench/realworld_flask_ssti/flask_repro.py::greeting_safe": "clean",
+
+  "bench/realworld_xxe/lxml_repro.py::load_config": "E0727",
+  "bench/realworld_xxe/lxml_repro.py::load_config_safe": "clean"
+}

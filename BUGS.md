@@ -52,3 +52,42 @@ sanctioned-crossing mask, E0729 checks every alias target; an aliased
 unwrapper (`let r = reveal`) is deliberately NOT honored (documented
 over-flag). Regression tests: `test_fn_alias_launder_rejected` and 5
 siblings in tests/test_effect_scope.py.
+
+### BUG-003  mixed-arg effect list crashed the effect check (compiler crash)  [FIXED 27abede]
+test: tests/test_effect_scope.py
+
+Found 2026-07-26 (Python-frontend work, this repo). Repro — 16 lines of
+legal Aether, `python -B -m transpiler.aether.cli check`:
+
+    function helper() returns Unit
+      effects fs.write
+    do
+      let _r: Result<Unit, String> = writeFile("/tmp/x", "y")
+    end
+
+    function go() returns Unit
+      effects net.fetch, net.fetch("https://api.example.com/x")
+    do
+      helper()
+    end
+
+-> `TypeError: '<' not supported between instances of 'str' and
+'NoneType'`, uncaught, from `_format_effect_list`. The compiler DIES
+instead of emitting the E0801 it had already decided to emit.
+
+Root cause: `EffectEntry = Tuple[Tuple[str, ...], Optional[str]]` and
+the formatter called `sorted(effs)` on the entries themselves. Two
+effects that share a path but differ in arg presence — `net.fetch` and
+`net.fetch("https://...")`, a legal and meaningful pair — make tuple
+comparison fall through to the arg slot and compare `None` with `str`.
+Only reachable on the DIAGNOSTIC path (the caller list is formatted
+solely when a violation is being reported), which is why the corpus
+never hit it: every corpus program with mixed args is otherwise clean.
+
+Surfaced by `tools/py_frontend.py`, which synthesizes exactly this shape
+(`_add_effect` records the first constant string argument, or None), but
+the bug is in the Aether pass and reproduces with no Python involved.
+
+Fix: sort on an explicit ordering key, `(path, arg or "")`, so the arg
+slot is always str-vs-str. Regression test:
+`test_mixed_arg_effect_list_does_not_crash` in tests/test_effect_scope.py.

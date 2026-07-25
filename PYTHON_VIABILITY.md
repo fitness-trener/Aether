@@ -1,5 +1,18 @@
 # Python Viability Experiment — Results
 
+> **Follow-up (2026-07-26): the SECURITY detectors now run on Python too.**
+> This document measures the **capability/effect** model only, which was the
+> original question. A later experiment gave the same frontend an expression
+> translator and a Python→Aether sink mapping, so the annotation-free
+> security rows (E0713 SQLi, E0714 command injection, E0718 open redirect,
+> E0719 SSTI, E0720 deserialization, E0723 hardcoded credential, E0727 XXE,
+> and E0711 path traversal behind `--strict`) fire on unmodified Python via
+> `aether check-py`. Before that work the function body was discarded
+> (`body=[]`), so a file with five textbook vulnerabilities produced zero
+> security findings. Measurements, the benign-corpus false-positive counts,
+> and a differential against bandit: **`bench/py_frontend/REPORT.md`**. The
+> capability numbers below are unaffected — they measured a different thing.
+
 **Date:** 2026-06-06
 **Question:** Does Aether's capability/effect model port to Python, and on what
 fraction of realistic AI-generated Python does it produce a *sound verdict*

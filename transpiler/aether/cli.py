@@ -224,6 +224,81 @@ def _run_smt_check(ast, as_json, timeout_ms):
     return rc, summary
 
 
+# Stages that do not apply to Python source.
+#   effects  — E0801 compares a call site against a DECLARED effects
+#              clause; Python has none, so there is nothing to compare.
+#   semantic — E0202-E0207 check Aether language constructs (match
+#              exhaustiveness, dead `let` stores, ignored Results). On
+#              translated Python they describe the translation rather
+#              than the program.
+_PY_SKIP_STAGES = ("effects", "semantic")
+
+# Rows held back from the DEFAULT Python output, by measurement, not by
+# taste. `bench/py_frontend/run_bench.py` over 76 benign modules
+# (tools/py_corpus{,2}) counted:
+#   E0711  11 findings — 1 clearly real (fa_04_upload writes to
+#          "/data/uploads/" + file.filename, a textbook upload
+#          traversal) and 8 of the form `open(path_param)`, where the
+#          path is the function's own parameter and nothing in the
+#          module constrains it. Those are provenance-UNKNOWN, not
+#          proven safe; Aether's rule (a path must be a literal or
+#          safeJoin'd) flags them because Python has no safeJoin
+#          convention. Real, but at a ratio that would bury the other
+#          rows, so it is opt-in rather than deleted.
+#   E0713   1 finding, E0720  1 finding — both on genuinely suspicious
+#          code (a migration runner executing SQL read from a file;
+#          trap_05_pickle's `pickle.load(fh)`). Those rows stay default-on.
+# The capability stage is opt-in for a different reason: on Python the
+# module policy is empty by construction, so every I/O call yields
+# E0701. That is an inventory, which `tools/py_surface.py` already
+# reports properly — not a security verdict.
+_PY_STRICT_ONLY_CODES = ("E0711",)
+
+
+def cmd_check_py(args) -> int:
+    """Run the language-independent detectors over a Python file.
+
+    Python has no declared `effects` clause and no marker types, so the
+    guarantee set is genuinely smaller than `check` on a .aeth file. That
+    is printed, not implied: a tool that quietly offers less than it looks
+    like it offers is worse than one that offers less out loud."""
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))))
+    from tools.py_frontend import py_to_ir
+    from .passes import analyze_flat
+
+    strict = getattr(args, "strict", False)
+    skip = _PY_SKIP_STAGES if strict else _PY_SKIP_STAGES + ("capability",)
+
+    src = _read(args.file)
+    ast, unprovable, meta = py_to_ir(src)
+    diags = analyze_flat(ast, skip=skip)
+    if not strict:
+        diags = [d for d in diags if d.code not in _PY_STRICT_ONLY_CODES]
+
+    if args.json:
+        json.dump({"ok": not diags, "lang": "python",
+                   "diagnostics": [d.to_dict() for d in diags],
+                   "unprovable": unprovable, "meta": meta}, sys.stdout)
+        sys.stdout.write("\n")
+        return 2 if diags else 0
+
+    for d in diags:
+        _emit_error(d, False)
+    n_unp = sum(len(v) for v in unprovable.values())
+    print(f"\n{len(diags)} finding(s) in {meta['n_functions']} function(s); "
+          f"{n_unp} unprovable region(s) in {len(unprovable)} function(s).")
+    print("NOT checked on Python (no declared effects clause, no marker "
+          "types): E0801 effect composition, and the taint-marker family "
+          "(E0712/E0715/E0716/E0717/E0724).")
+    if not strict:
+        print("NOT checked by default (--strict adds both): E0711 dynamic "
+              "filesystem paths, and the capability inventory (E0701). "
+              "Held back by measurement, not taste - see "
+              "bench/py_frontend/REPORT.md.")
+    return 2 if diags else 0
+
+
 def cmd_check(args) -> int:
     src = _read(args.file)
     if getattr(args, "collect_errors", False):
@@ -477,6 +552,17 @@ def main(argv=None) -> int:
     sp.add_argument("--no-import-resolution", action="store_true",
                     help="opt out of default-on multi-file import resolution")
 
+    sp = sub.add_parser("check-py",
+                        help="run the language-independent detectors over a "
+                             "Python file (sinks + capability; no effect "
+                             "composition, no marker taint)")
+    sp.add_argument("file")
+    sp.add_argument("--strict", action="store_true",
+                    help="also report E0711 (dynamic filesystem paths) and "
+                         "the capability inventory (E0701); both are held "
+                         "back by default because they fire on ordinary "
+                         "Python - see bench/py_frontend/REPORT.md")
+
     sp = sub.add_parser("check", help="parse + emit (no execution)")
     sp.add_argument("file")
     sp.add_argument("--no-static-effects", action="store_true",
@@ -580,6 +666,7 @@ def main(argv=None) -> int:
         if args.cmd == "emit":     return cmd_emit(args)
         if args.cmd == "pack":     return cmd_pack(args)
         if args.cmd == "check":    return cmd_check(args)
+        if args.cmd == "check-py": return cmd_check_py(args)
         if args.cmd == "run":      return cmd_run(args)
         if args.cmd == "test":     return cmd_test(args)
         if args.cmd == "fmt":      return cmd_fmt(args)

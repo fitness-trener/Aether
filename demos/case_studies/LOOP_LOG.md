@@ -1404,6 +1404,60 @@ State carried forward: the full gate suite must stay green
 
 ---
 
+## Iteration 43 — the detectors run on unmodified Python
+
+- **Target:** the adoption objection, not an analysis-depth one. Aether's
+  detectors only ever ran on `.aeth`, so using them meant rewriting your
+  code in a language with no ecosystem. `tools/py_frontend.py` already
+  translated Python into the same IR for the CAPABILITY experiment.
+- **Gap confirmed empirically:** `py_to_ir` emitted `body=[]` — the
+  function body was discarded, and the local-call stubs it did emit
+  carried `args: []`. Driven through the full 30-detector registry on
+  `f98fdce`, a file with five textbook vulnerabilities (SQLi via concat,
+  `shell=True` concat, `open(base+entry)`, `pickle.loads`, `os.system`
+  concat) produced **3 diagnostics, all E0701 capability facts, and zero
+  security findings** — what `grep -r "import subprocess"` also gives you.
+- **Improvement:** no new detector, no new code. An expression translator
+  (`_expr`) producing exactly the node kinds `_arg_reason` judges, and an
+  auditable Python→Aether sink mapping. f-strings — the dominant modern
+  injection shape, which Aether has no construct for — become `BinOp "+"`
+  trees, so the existing `rule.concat` reason reports them unchanged.
+  Unmodeled expressions become `PyExpr`, a kind no rule knows: refused,
+  never cleared. Two mappings gate on an argument rather than a name
+  (`shell=True`, `Loader=`), and XXE is resolved specially because the
+  vulnerable and safe call sites are byte-identical.
+- **Wiring:** `tools/py_frontend.py`; `aether check-py` (+ `--strict`) in
+  `cli.py`; 24 tests in `tests/test_py_frontend_sinks.py`;
+  `bench/py_frontend/` (4 new repros, LABELS.json, run_bench.py, REPORT.md);
+  `vault/wiki/questions/q5-sink-matching-vs-purity-matching.md`.
+- **Measured, not asserted** (`bench/py_frontend/REPORT.md`): 0 false
+  negatives and 0 false positives over 19 labelled functions; on 76 benign
+  modules E0713 and E0720 fired once each (both genuinely suspicious) and
+  E0711 fired 11 times, so **E0711 ships opt-in behind `--strict` with its
+  number published** rather than deleted or quietly downgraded. Against
+  bandit 1.9.4 the two agree on SQLi/YAML/`shell=True`; bandit flags
+  `make_thumbnail_safe` — the documented FIX — with B603/B607, Aether does
+  not. No general "better than bandit" claim is made or supported.
+- **Two bugs found on the way, both fixed here.** BUGS.md **BUG-003**: a
+  compiler CRASH (uncaught `TypeError`) on 16 lines of legal Aether — two
+  effects sharing a path where only one has an arg made `sorted(effs)`
+  compare `None` with `str` while formatting an E0801 message. And
+  `tests/test_py_soundness.py`, cited as "4/4 green" by four result
+  documents, was **not in the gate** — it only ran by hand. Both suites
+  are gated now.
+- **Ratchet:** unchanged (54 codes / 30 detectors) — this gives existing
+  detectors a new input language rather than adding one.
+- **Report:** `bench/py_frontend/REPORT.md`.
+- **TYPE gap surfaced for next iter:** **guard bound elsewhere.** Where a
+  call's safety lives in a different STATEMENT than its arguments, no
+  argument-shape rule can see it — `etree.fromstring(raw, parser)` is
+  byte-identical vulnerable and safe. Handled by hand for lxml; a session
+  configured at import time or a flag set in a constructor is not. Probe
+  for a live instance before building the general version (iter-41 lesson).
+- **Suite:** exit 0.
+
+---
+
 ## Next-iteration checklist (for the loop)
 
 1. Read the previous report's "TYPE gap for next iter".
