@@ -1475,6 +1475,84 @@ end
     print("E0712/E0724: plain String return stays clean")
 
 
+# --- container-carried markers: nested in generic arguments -------------
+# `List<PII<String>>` carries the marker one level down. Matching only at
+# the top of the type node made every such param untainted, so a sink read
+# it in the clear. `_type_carries_marker` searches the whole type tree for
+# the three TAINT markers; `Authorized<T>` deliberately keeps the
+# top-level-only rule (widening a PROOF marker relaxes acceptance).
+
+def test_list_of_pii_param_tainted():
+    src = """
+function leak(xs: List<PII<String>>) returns Unit
+  effects log
+do
+  print("all=" + toString(xs))
+end
+"""
+    assert "E0715" in _pii_codes(src), \
+        "a PII marker nested in List<...> must still taint the param"
+    print("E0715: List<PII<String>> param tainted")
+
+
+def test_option_of_secret_param_tainted():
+    src = """
+function leak(o: Option<Secret<String>>) returns Unit
+  effects log
+do
+  print("tok=" + toString(o))
+end
+"""
+    assert "E0712" in _sec_codes(src), \
+        "a Secret marker nested in Option<...> must still taint the param"
+    print("E0712: Option<Secret<String>> param tainted")
+
+
+def test_nested_marker_param_crossing_sanctioned():
+    src = """
+function sink(ys: List<PII<String>>) returns Unit
+  effects log
+do
+  print("n=" + toString(ys))
+end
+
+function main(xs: List<PII<String>>) returns Unit
+  effects log
+do
+  sink(xs)
+end
+"""
+    assert _mb_codes(src) == [], \
+        "a callee param carrying the marker nested is the sanctioned crossing"
+    print("E0729: nested-marker param crossing passes clean")
+
+
+def test_nested_marker_return_type_clean():
+    src = """
+function collect(x: PII<String>) returns List<PII<String>>
+  effects pure
+do
+  return [x]
+end
+"""
+    assert _rl_codes(src) == [], \
+        "a return type carrying the marker nested is an honest signature"
+    print("E0730: nested-marker return type passes clean")
+
+
+def test_nested_authorized_still_unproven():
+    src = """
+function cancelOrder(auths: List<Authorized<String>>) returns Unit
+  effects db.exec
+do
+  let _r: String = sqlExec("UPDATE orders SET s='c' WHERE id = 1", auths)
+end
+"""
+    assert _authz_codes(src) == ["E0716"], \
+        "Authorized<T> is a PROOF marker - nesting must NOT count as proof"
+    print("E0716: nested Authorized<T> is not a proof (top-level rule kept)")
+
+
 # --- E0729 marker laundering across a user-function boundary ------------
 # A Secret/PII/Untrusted value passed to a user-declared callee parameter
 # NOT typed with that marker erases the marker inside the callee — every
@@ -2036,6 +2114,11 @@ if __name__ == "__main__":
     test_pii_return_taint_rejected()
     test_untrusted_return_taint_rejected()
     test_plain_return_still_clean()
+    test_list_of_pii_param_tainted()
+    test_option_of_secret_param_tainted()
+    test_nested_marker_param_crossing_sanctioned()
+    test_nested_marker_return_type_clean()
+    test_nested_authorized_still_unproven()
     test_secret_laundered_rejected()
     test_marked_param_clean()
     test_revealed_arg_clean()

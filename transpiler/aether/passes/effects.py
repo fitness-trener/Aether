@@ -40,7 +40,7 @@ from typing import Any, Dict, List, Set, Tuple, Iterable, Optional
 from ..diagnostics import Diagnostic, Position
 from .ast_walk import walk, callee_name
 from .detector_specs import (
-    build, boundary_markers, _is_marker_type,
+    build, boundary_markers, _is_marker_type, _type_carries_marker,
     _marker_source_fns, _marker_param_mask, _expr_leaks_marked,
     _fn_aliases, _aliased_mask, _marked_tainted_names,
 )
@@ -495,7 +495,7 @@ def check_marker_boundary(ast: Dict[str, Any]) -> List[Diagnostic]:
                     for i, arg in enumerate(call.get("args") or []):
                         if i >= len(params):
                             break
-                        if _is_marker_type(params[i].get("type"), marker):
+                        if _type_carries_marker(params[i].get("type"), marker):
                             continue  # marker declared — taint travels
                         if not _expr_leaks_marked(arg, tainted, unwraps,
                                                   src_l, pmask_l):
@@ -548,7 +548,7 @@ def check_return_laundering(ast: Dict[str, Any]) -> List[Diagnostic]:
         for d in ast.get("decls", []):
             if d.get("kind") != "FunctionDecl":
                 continue
-            if _is_marker_type(d.get("return_type"), marker):
+            if _type_carries_marker(d.get("return_type"), marker):
                 continue  # honest signature — callers taint via seeding
             al = _fn_aliases(d, src_fns | frozenset(pmask))
             src_l = src_fns | frozenset(a for a, ts in al.items() if ts & src_fns)

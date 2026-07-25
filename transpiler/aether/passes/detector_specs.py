@@ -64,6 +64,25 @@ def _is_marker_type(ty: Any, marker: str) -> bool:
         and ty.get("name") == marker
 
 
+def _type_carries_marker(ty: Any, marker: str) -> bool:
+    """True if `marker` appears ANYWHERE in the type tree: at the top
+    (`PII<String>`) or nested inside a container's type arguments
+    (`List<PII<String>>`, `Option<Secret<T>>`, `Map<String, PII<T>>`).
+
+    Deliberately separate from `_is_marker_type`, which stays
+    top-level-only because it also serves `Authorized<T>` — a PROOF
+    marker, where widening what counts as a proof RELAXES acceptance
+    (the wrong direction). For the three TAINT markers widening flags
+    more at sinks and prunes more at the sanctioned crossings, both
+    consistent with over-flag-never-miss."""
+    if _is_marker_type(ty, marker):
+        return True
+    if isinstance(ty, dict) and ty.get("kind") == "GenericType":
+        return any(_type_carries_marker(a, marker)
+                   for a in ty.get("args") or [])
+    return False
+
+
 # Stdlib constructors that produce a marker-carrying value. User functions
 # declared `returns <Marker><...>` are added per-module by
 # _marker_source_fns; a call to any of these is a taint source.
@@ -81,7 +100,7 @@ def _marker_source_fns(ast: Dict[str, Any], marker: str) -> frozenset:
     names = set(_STDLIB_MARKER_CONSTRUCTORS.get(marker, frozenset()))
     for d in ast.get("decls", []):
         if d.get("kind") == "FunctionDecl" \
-                and _is_marker_type(d.get("return_type"), marker):
+                and _type_carries_marker(d.get("return_type"), marker):
             names.add(d["name"])
     return frozenset(names)
 
@@ -95,7 +114,7 @@ def _marker_param_mask(ast: Dict[str, Any], marker: str) -> Dict[str, Tuple[bool
     out: Dict[str, Tuple[bool, ...]] = {}
     for d in ast.get("decls", []):
         if d.get("kind") == "FunctionDecl":
-            out[d["name"]] = tuple(_is_marker_type(p.get("type"), marker)
+            out[d["name"]] = tuple(_type_carries_marker(p.get("type"), marker)
                                    for p in d.get("params", []))
     return out
 
@@ -188,7 +207,8 @@ def _marked_tainted_names(fn_decl: Dict[str, Any], marker: str, unwrap,
     Match-arm pattern bindings over a tainted scrutinee are tainted
     (every arm, every binding — conservative)."""
     tainted: Set[str] = {
-        p["name"] for p in fn_decl.get("params", []) if _is_marker_type(p.get("type"), marker)
+        p["name"] for p in fn_decl.get("params", [])
+        if _type_carries_marker(p.get("type"), marker)
     }
     binds: List[Tuple[str, Any]] = []
     destructures: List[Tuple[Set[str], Any]] = []  # (arm-bound names, scrutinee)
