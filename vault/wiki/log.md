@@ -1,8 +1,32 @@
 # Operation Log (append-only — newest on top)
 
+## [2026-07-26] Q5 extended | the rule covers VALUES, and three false accepts
+- **The residual turned out to be a soundness bug.** Q5 filed
+  "guard bound elsewhere" as a precision item. Probing it found **three
+  false accepts** — the contract-breach class — and the worst needed no
+  "elsewhere" at all: `yaml.load(raw, Loader=yaml.Loader)` was silent
+  because the gate read *any* `Loader=` as safe, and `yaml.Loader` is the
+  RCE (verified by execution, PyYAML 6.0.3).
+- **Q5's answer was half a rule.** It said a NAME may not clear a call;
+  the page now says a VALUE may not either, and that unrecognized,
+  computed, unresolvable and absent all mean SINK. The three gates that
+  got this backwards are one declarative table now (BUGS.md BUG-004).
+- **The corollary is the durable part**, and it is not Python-specific:
+  a direction argument tells you which way to err, it does not make you
+  err that way. Every place the analysis concludes needs its default for
+  "could not tell" written down, because that is the case that occurs.
+- **Cost measured, not predicted:** benign-corpus counts identical before
+  and after (E0711 11 · E0713 1 · E0720 1). Soundness was free here; the
+  page says plainly it could have gone the other way.
+- **Residual narrowed, and one non-gap distinguished:** what remains is
+  object state mutated after construction and import-time config.
+  `session.verify = False` is silent for a *different* reason — no
+  detector models TLS verification — so it is a missing-detector item for
+  [[questions/q3-what-makes-a-good-backlog-target|q3]], not a guard bug.
+
 ## [2026-07-26] container-carried markers | q1 + violation-taxonomy
 - **q1 gained three Evidence rows and an amended Recommended Action.**
-  Iter-43 closed a genuine FALSE ACCEPT inside the modeled surface:
+  Iter-44 closed a genuine FALSE ACCEPT inside the modeled surface:
   `_is_marker_type` matched a taint marker only at the TOP of a type
   node, so a `List<PII<String>>` param and a `record User do email:
   PII<String> end` field read were both exit 0. Probe-confirmed on

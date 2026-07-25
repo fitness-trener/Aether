@@ -358,6 +358,18 @@ def test_concatenated_sql_with_params_is_still_a_sink():
     print("guard: concatenated SQL with params still flagged")
 
 
+def test_attribute_read_of_a_call_result_is_not_lost():
+    """`subprocess.run(...).returncode` is an attribute READ of a call
+    result — not a call, so the call inside it used to vanish. Found by
+    the bench, not by a hand-written test: the same shape without
+    `.returncode` was flagged, so the unit tests all passed."""
+    src = ("import subprocess\ndef f(cmd):\n"
+           "    return subprocess.run('x ' + cmd, shell=True).returncode\n")
+    assert "E0714" in _codes(src), \
+        "a sink call under an attribute read must still be seen"
+    print("guard: attribute read of a call result is translated")
+
+
 def test_safe_loader_bound_elsewhere_is_clean():
     src = ("import yaml\ndef f(raw):\n"
            "    loader = yaml.SafeLoader\n"
@@ -470,6 +482,7 @@ if __name__ == "__main__":
     test_yaml_full_loader_is_not_sanctioned()
     test_shell_true_bound_elsewhere_is_still_a_sink()
     test_concatenated_sql_with_params_is_still_a_sink()
+    test_attribute_read_of_a_call_result_is_not_lost()
     test_safe_loader_bound_elsewhere_is_clean()
     test_rebound_loader_is_still_a_sink()
     test_shell_false_bound_elsewhere_is_clean()

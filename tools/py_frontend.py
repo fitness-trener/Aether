@@ -424,6 +424,15 @@ def _expr(node: Any, imp: "_Imports",
         return _concat(parts)
     if isinstance(node, _pyast.Call):
         return _call_expr(node, imp, safe_xml, resolver)
+    if isinstance(node, _pyast.Attribute):
+        # `subprocess.run(...).returncode`, `requests.get(u).text` — an
+        # attribute READ of a call result. Not a call itself, so it used
+        # to translate to a bare PyExpr and the call inside it vanished:
+        # the bench's `run_shell_bound_elsewhere` went silent while the
+        # same shape without `.returncode` was flagged. `walk` descends
+        # dict values, so carrying the base is enough to find it again.
+        return {"kind": "PyExpr", "py": "Attribute",
+                "base": _expr(node.value, imp, safe_xml, resolver)}
     return {"kind": "PyExpr", "py": type(node).__name__}
 
 

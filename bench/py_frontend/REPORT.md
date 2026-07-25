@@ -157,6 +157,52 @@ Nothing here supports a general "better than bandit".
 
 ---
 
+## 3b. Re-measured after BUG-004 (2026-07-26, same day)
+
+**The §1 and §2 numbers above were produced by a build containing three
+false accepts.** Probing this report's own "guard bound elsewhere"
+residual found them. They are not listed as false negatives above because
+**the labelled corpus did not contain these shapes** — the measurement was
+honest about what it measured and blind to what it did not.
+
+Silent before the fix, all four:
+
+| Shape | Expected |
+|---|---|
+| `yaml.load(raw, Loader=yaml.Loader)` | E0720 |
+| `loader = yaml.Loader` … `yaml.load(raw, Loader=loader)` | E0720 |
+| `sh = True` … `subprocess.run('x ' + cmd, shell=sh)` | E0714 |
+| `cur.execute('SELECT ... ' + name, extra)` | E0713 |
+
+The first needed no "elsewhere" at all — the unsafe value is at the call
+site, and the gate read *any* `Loader=` as safe. Root cause of all three:
+the unknown case defaulted to "not a sink". See BUGS.md BUG-004.
+
+`bench/py_frontend/corpus/guard_bound_repro.py` now carries all four plus
+their fixes, so the corpus can no longer be blind to this class.
+
+**Re-measured after the fix:**
+
+| | before (§1) | after |
+|---|---|---|
+| false negatives | 0 *(of 19 labelled)* | **0** *(of 28 labelled)* |
+| false positives | 0 | **0** |
+| true positives | 10 | **15** |
+| benign-corpus findings | E0711 11 · E0713 1 · E0720 1 | **E0711 11 · E0713 1 · E0720 1** |
+
+**The benign counts did not move.** Making every unresolvable guard a sink
+cost **zero** measured precision on 76 real modules — the guarded shapes
+in benign code use `yaml.safe_load` or a literal `shell=`, both of which
+still resolve. Soundness here was free; that is a measurement, not a
+prediction, and it could have gone the other way.
+
+One further translation hole surfaced, and it was the **bench** that found
+it, not a hand-written test: `subprocess.run(...).returncode` is an
+attribute READ of a call result, so the call inside it vanished. The same
+shape without `.returncode` was flagged, which is why every unit test
+passed. Fixed by carrying the base expression; pinned by
+`test_attribute_read_of_a_call_result_is_not_lost`.
+
 ## 4. Limits
 
 - **Intraprocedural and syntactic.** Over-flag, never miss *within the
@@ -165,14 +211,18 @@ Nothing here supports a general "better than bandit".
   `cursor.execute(...)` is a SQL sink whatever `cursor` is. Over-flag, not
   inference. Why that is legitimate here when it was unsound for purity:
   `vault/wiki/questions/q5-sink-matching-vs-purity-matching.md`.
-- **Guard-bound-elsewhere is mostly unhandled.** When a call's safety lives
-  in a *different statement* rather than in its argument shape, no
-  argument-shape rule can see it. XXE is handled specially
-  (`resolve_entities=False` disarms the sink, because the vulnerable and
-  safe `etree.fromstring(raw, parser)` call sites are byte-identical).
-  Every other member of that class — a session configured elsewhere, a
-  flag set at import time — is **not** handled. This is a residual, not a
-  solved problem.
+- **Guard-bound-elsewhere: keyword and local-binding forms are handled;
+  object state and import-time config are not.** A guard clears a call only
+  when its value is positively identified as sanctioned — unrecognized,
+  computed, unresolvable, or absent all mean sink (BUG-004). A local name is
+  resolved only when every binding in the function agrees. What remains
+  unhandled: state **mutated after construction** (`s = requests.Session()`
+  then `s.verify = False`), and configuration set at import time. Both need
+  a different traversal and their own probe.
+- **`from yaml import SafeLoader` then `Loader=SafeLoader` over-flags.** A
+  from-imported name has no local binding for `_local_constants` to
+  resolve, so it stays unresolved and therefore a sink. Correct direction,
+  known imprecision.
 - **Single file.** No cross-module resolution, matching `py_frontend` today.
 - **No control flow.** Neither these passes nor the frontend model branches
   or loops.
