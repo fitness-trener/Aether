@@ -1,0 +1,26 @@
+// expect: E0715x2
+// Case study — a taint marker carried in a record field.
+// Every service that handles personal data passes it around inside a
+// struct, not as a bare parameter. Declaring the field PII<String> is
+// the whole point: the marker is supposed to survive the container.
+// It did not — the field read was invisible to every sink pass, so the
+// log line and the audit file below shipped the address in the clear.
+
+module Directory
+  requires capability log
+  requires capability fs
+  exports report
+end
+
+record User do
+  email: PII<String>
+  name: String
+end
+
+function report(u: User) returns Unit
+  effects log, fs.write
+do
+  print("user=" + u.email)
+  let line: String = "user=" + u.email
+  let _r: Result<Unit, String> = writeFile("/var/log/dir.log", line)
+end

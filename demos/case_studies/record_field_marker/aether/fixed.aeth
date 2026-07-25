@@ -1,0 +1,32 @@
+// expect: clean
+// The fix. The marker is not removed from the field — the record is
+// supposed to carry it. What changes is the disclosure: redact(...) at
+// each sink, the auditable, consent-safe exit. The non-personal field
+// (name) needs no treatment, and construction stays a plain call: a
+// marker-typed FIELD is a sanctioned crossing, so no E0729/E0730.
+
+module Directory
+  requires capability log
+  requires capability fs
+  exports report
+end
+
+record User do
+  email: PII<String>
+  name: String
+end
+
+function build(e: PII<String>) returns User
+  effects pure
+do
+  return User(e, "jane")
+end
+
+function report(u: User) returns Unit
+  effects log, fs.write
+do
+  print("user=" + u.name)
+  print("user=" + redact(u.email))
+  let line: String = "user=" + redact(u.email)
+  let _r: Result<Unit, String> = writeFile("/var/log/dir.log", line)
+end

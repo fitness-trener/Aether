@@ -1,0 +1,43 @@
+// expect: E0715x2
+// Example 28 — PII carried in a record FIELD.
+// The record is the shape every real service passes around: a User with
+// an email. The email is declared PII<String>, so the record CARRIES the
+// marker — construction and hand-off are sanctioned crossings, and the
+// marker survives them. What is refused is the field READ landing in a
+// log or on disk in the clear: [E0715], twice.
+//
+// Before this iteration the whole file compiled clean: markers were
+// matched only at the top of a type, so a marker one level down — inside
+// a record field or a List<...> — was erased on sight. Click "check".
+
+module Directory
+  requires capability log
+  requires capability fs
+  exports report
+end
+
+record User do
+  email: PII<String>
+  name: String
+end
+
+function build(e: PII<String>) returns User
+  effects pure
+do
+  return User(e, "jane")          // sanctioned: the FIELD carries the marker
+end
+
+function report(u: User) returns Unit
+  effects log, fs.write
+do
+  print("user=" + u.name)                        // safe: not personal data
+  print("user=" + u.email)                        // E0715: PII into the log
+  let line: String = "user=" + u.email
+  let _r: Result<Unit, String> = writeFile("/var/log/dir.log", line)  // E0715: PII to disk
+end
+
+function main() returns Unit
+  effects log, fs.write
+do
+  report(build(classifyPII("jane.doe@corp.example")))
+end
