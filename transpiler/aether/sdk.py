@@ -39,7 +39,7 @@ from .emitter import emit as _emit
 from .pretty import pretty as _pretty
 from .runtime import build_namespace, set_deterministic
 from .passes import analyze_flat
-from .diagnostics import Diagnostic, AetherError
+from .diagnostics import Diagnostic, Position, AetherError
 
 
 # ----------------------------------------------------------------------
@@ -157,6 +157,40 @@ def check(source_or_ast, filename: str = "<sdk>") -> CheckResult:
     return CheckResult(ast=ast, diagnostics=all_diags)
 
 
+def _rehydrate(d: Dict[str, Any]) -> Diagnostic:
+    """Coerce one of `bench.harness`'s plain-dict diagnostics into the
+    dataclass the rest of the SDK returns.
+
+    The harness deliberately speaks dicts — it must stay importable
+    without the transpiler package — and its dicts are partial: of the
+    five `compile_and_run` can return, three (E9001 emit, E9002
+    emit-compile, E9003 runtime) carry only code/category/message. The
+    defaults below are `Diagnostic`'s own.
+
+    Total by construction, which is why there is no `try` here. `position`
+    is read field by field rather than splatted, so an unexpected key
+    cannot raise, and every other field is a `.get` into a dataclass that
+    does no validation. This coercion used to sit inside
+    `except Exception: pass`: a shape change in the harness would have
+    produced `diagnostic=None` on a run that DID fail, leaving `run()`
+    reporting `ok=False` with no code for a fix-loop to dispatch on — the
+    one thing the SDK exists to hand over.
+    """
+    pos = d.get("position")
+    if not isinstance(pos, dict):
+        pos = {}
+    return Diagnostic(
+        code=d.get("code", ""),
+        category=d.get("category", ""),
+        severity=d.get("severity", "error"),
+        message=d.get("message", ""),
+        position=Position(pos.get("line", 0), pos.get("column", 0)),
+        suggestion=d.get("suggestion"),
+        confidence=d.get("confidence", 0.0),
+        extra=d.get("extra", {}),
+    )
+
+
 def run(source: str, stdin: str = "", timeout_ms: int = 5000,
         deterministic: bool = False, filename: str = "<sdk>") -> RunResult:
     """Compile + execute the program. Captures stdout, surfaces any
@@ -176,24 +210,7 @@ def run(source: str, stdin: str = "", timeout_ms: int = 5000,
         if deterministic:
             set_deterministic(0)
         res = _car(source, filename, stdin_text=stdin, timeout_ms=timeout_ms)
-        diag = None
-        if res.get("diagnostic"):
-            d = res["diagnostic"]
-            # Re-hydrate into a Diagnostic when possible.
-            try:
-                from .diagnostics import Position
-                diag = Diagnostic(
-                    code=d.get("code", ""),
-                    category=d.get("category", ""),
-                    severity=d.get("severity", "error"),
-                    message=d.get("message", ""),
-                    position=Position(**(d.get("position") or {"line": 0, "column": 0})),
-                    suggestion=d.get("suggestion"),
-                    confidence=d.get("confidence", 0.0),
-                    extra=d.get("extra", {}),
-                )
-            except Exception:
-                pass
+        diag = _rehydrate(res["diagnostic"]) if res.get("diagnostic") else None
         return RunResult(
             ok=bool(res.get("ok")),
             stdout=res.get("actual", ""),

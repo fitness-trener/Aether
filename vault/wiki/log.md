@@ -1,5 +1,30 @@
 # Operation Log (append-only — newest on top)
 
+## [2026-07-25] sdk.py silent swallow closed | the last carry-over finding
+- `run()`'s diagnostic-dict-to-dataclass coercion sat inside
+  `except Exception: pass` — carried by all three candidate handoffs as
+  "the last silent swallow in the SDK". Removed by making the coercion
+  TOTAL rather than by catching harder: `position` is read field by
+  field instead of splatted, so nothing in `_rehydrate` can raise and
+  there is no longer anything to catch.
+- Probed before claiming: the old `Position(**...)` raises `TypeError`
+  on a non-mapping `position`, which the swallow turned into
+  `diagnostic=None` on a run that DID fail — `ok=False` with no code for
+  a fix-loop to dispatch on, which is the one thing the SDK exists to
+  hand over. On the five shapes `bench.harness.compile_and_run` actually
+  returns today, old and new produce identical positions, so this is a
+  latent-hazard fix, not a live-bug fix. Said plainly rather than dressed
+  up.
+- Three of those five shapes (E9001 emit, E9002 emit-compile, E9003
+  runtime) carry only code/category/message — the harness speaks partial
+  dicts because it must stay importable without the transpiler package.
+  All five are now pinned in `tests/test_sdk.py`, plus an end-to-end
+  assertion that a contract violation comes back WITH its code.
+- Repo-wide sweep after: no `except ...: pass` remains in `transpiler/`
+  or `bench/`. The seven in `tools/` are all narrow and deliberate
+  (`OSError` on socket teardown, `KeyboardInterrupt`, `TimeoutExpired`),
+  not bare swallows.
+
 ## [2026-07-25] aether-scan workflow fixed | gate on the difference, not the findings
 - The carry-over finding both the 03 and 05 handoffs recorded as unclaimed.
   The workflow ran `tools.scan .` over a repo that deliberately contains
