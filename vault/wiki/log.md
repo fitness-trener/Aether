@@ -1,5 +1,20 @@
 # Operation Log (append-only — newest on top)
 
+## [2026-07-25] architecture review candidate 02 | detector spec tables
+- Not a loop-1 iteration: no detector added, removed or weakened; ratchet
+  unchanged at 40 codes / 30 detectors. `passes/detector_specs.py` now
+  holds the 13 repeated detectors as spec rows (6 marker-flow, 7
+  literal-or-wrapper) plus the two drivers; `effects.py` 2981 → 1643
+  lines and re-exports every generated `check_*` name, so ADR-0004's
+  frozen import surface never moved.
+- Behaviour proven identical, not assumed: `(code, line, message,
+  suggestion)` byte-identical across the 83-file corpus, all 427 in-tree
+  `.aeth`, and a 67-row synthetic probe covering every reason branch. No
+  `// expect:` header changed.
+- q1: two Evidence rows — the collapse moved the taint boundary nowhere,
+  and E0711's single-pass safe-name resolution is a latent precision knob
+  (probe found no live difference), recorded as a knob, not a residual.
+
 ## [2026-07-09] iter 42 | function-alias laundering closed (BUG-002); HOF residual re-framed; E0717 precision probe-confirmed
 - Three probes before code: gap E (`let f = logIt; f(password)` bypassed E0729, exit 0) and gap E2 (`let f = getToken; f()` defeated seeding, exit 0) — both real misses, both closed via `_fn_aliases` applied flag-more only (aliased unwrappers deliberately not honored). BUGS.md BUG-002 [FIXED f6b8bf3], gate prints 2 ratchet-locked fixed bugs.
 - Grammar finding: no function types exist in `grammar.ebnf` — iter-41's "HOF/function-typed callees" residual re-framed to the alias surface and closed; q1 updated.
