@@ -1,5 +1,28 @@
 # Operation Log (append-only — newest on top)
 
+## [2026-07-26] Q5 added | sink-vs-purity name matching, with its measured cost
+- **New question_page `q5-sink-matching-vs-purity-matching`**, linked from
+  `index.md` (q4 was already taken by the formal-methods filter). Answers
+  why the Python frontend may match SINKS by method name when matching
+  PURITY by method name was deleted as unsound: the operation is identical
+  and the direction of the error inverts. Clearing from a name hides a real
+  bug; suspecting from a name costs precision only.
+- **Generalizes the UNPROVABLE discipline.** The frontend's stated rule was
+  always a constraint on *clearing*. Q5 records the implied other half —
+  nothing stops the analysis from suspecting on weak evidence — which is
+  also what licenses the `PyExpr` fallback for unmodeled expressions.
+- **The over-flag was measured, not asserted.** 76 benign modules from
+  `tools/py_corpus{,2}`: E0713 and E0720 fired once each, both on genuinely
+  suspicious code; E0711 fired 11 times, one a real upload write-traversal
+  and eight `open(path_param)`. Recorded as the rule that follows: an
+  over-flag is sound but not automatically shippable, so E0711 ships
+  opt-in behind `--strict` with its number published rather than being
+  deleted or quietly downgraded.
+- **Residual filed, not hidden:** guard-bound-elsewhere. Where a call's
+  safety lives in a different statement than its arguments, no
+  argument-shape rule can see it. XXE handled by hand; the rest unhandled,
+  with the probe-before-building condition attached.
+
 ## [2026-07-25] sdk.py silent swallow closed | the last carry-over finding
 - `run()`'s diagnostic-dict-to-dataclass coercion sat inside
   `except Exception: pass` — carried by all three candidate handoffs as

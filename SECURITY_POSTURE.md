@@ -43,6 +43,29 @@ diagnostics an agent fix-loop acts on; the full catalog is in
 4. **literal-content** — a scan of string literals for credential shapes
    (E0723) — a secret scanner built into the compiler.
 
+## Which rows run on unmodified Python (`aether check-py`)
+
+`tools/py_frontend.py` translates Python into the same IR, so the
+**sink+literal** and **literal-content** families run on ordinary Python
+with no rewrite and no annotations: E0713, E0714, E0718, E0719, E0720,
+E0723, E0727 default-on, plus **E0711 behind `--strict`** (measured: 11
+findings across 76 benign modules, one a real upload write-traversal and
+eight `open(path_param)` — correct by the rule, too noisy to lead with on
+a language that has no `safeJoin` convention).
+
+The other families **cannot** run there, and the CLI says so on every run
+rather than implying parity:
+
+| Family | Why not on Python |
+|---|---|
+| effect composition (E0801) | compares against a **declared** `effects` clause; Python has none |
+| **taint** (E0712/E0715/E0716/E0717/E0724/E0725) | needs marker types on a signature; Python has no annotation-free equivalent |
+| **effect-string** (E0710/E0721/E0722) | reads the **declared** `net.fetch` annotation |
+
+Measurements, the benign-corpus false-positive counts, and a differential
+against bandit: `bench/py_frontend/REPORT.md`. The name-matching doctrine
+that licenses it: `vault/wiki/questions/q5-sink-matching-vs-purity-matching.md`.
+
 ## The credibility triangle (three gated suites)
 
 A security checker is only trustworthy if it catches bad code, leaves good
