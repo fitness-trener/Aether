@@ -121,6 +121,23 @@ def main() -> int:
             "stderr": r.stderr.strip(),
         }
 
+    # The Python frontend's two contracts. `test_py_soundness.py` guards
+    # the capability tables (nothing UNPROVABLE may become clean) and is
+    # cited as "4/4 green" by four result documents, but it was never in
+    # the gate — it only ran when someone ran it by hand. A test file not
+    # in the gate does not exist.
+    for _name, _rel in (("py_soundness", "test_py_soundness.py"),
+                        ("py_frontend_sinks", "test_py_frontend_sinks.py")):
+        _t = os.path.join(ROOT, "tests", _rel)
+        if os.path.isfile(_t):
+            r = subprocess.run([sys.executable, "-B", _t], cwd=ROOT, env=env,
+                               capture_output=True, text=True)
+            results[_name] = {
+                "ok": r.returncode == 0,
+                "stdout": r.stdout.strip(),
+                "stderr": r.stderr.strip(),
+            }
+
     ratchet_t = os.path.join(ROOT, "tests", "test_ratchet.py")
     if os.path.isfile(ratchet_t):
         cmd = [sys.executable, "-B", ratchet_t]
@@ -394,6 +411,9 @@ def main() -> int:
     ex_ok = bool(results.get("exhaustiveness") and results["exhaustiveness"]["ok"])
     scan_ok = bool(results.get("scan_tool") and results["scan_tool"]["ok"])
     ratchet_ok = bool(results.get("ratchet") and results["ratchet"]["ok"])
+    pysound_ok = bool(results.get("py_soundness") and results["py_soundness"]["ok"])
+    pysink_ok = bool(results.get("py_frontend_sinks")
+                     and results["py_frontend_sinks"]["ok"])
     recovery_ok = bool(results.get("parser_recovery") and results["parser_recovery"]["ok"])
     det_ok = bool(results.get("deterministic") and results["deterministic"]["ok"])
     rt_ok = bool(results.get("pretty_roundtrip") and results["pretty_roundtrip"]["ok"])
@@ -454,6 +474,8 @@ def main() -> int:
     print(f"# playground:    {'PASS' if pg_ok else 'FAIL'} (H.B.2: sandbox)", file=sys.stderr)
     print(f"# demos:          {'PASS' if demos_ok else 'FAIL'} (5 pairs, B.6)", file=sys.stderr)
     print(f"# fuzz:           {'PASS' if fuzz_ok else 'FAIL'} (200 rounds x 3 modes)", file=sys.stderr)
+    print(f"# py_soundness:  {'PASS' if pysound_ok else 'FAIL'} (nothing UNPROVABLE becomes clean)", file=sys.stderr)
+    print(f"# py_sinks:      {'PASS' if pysink_ok else 'FAIL'} (sinks fire on unmodified Python)", file=sys.stderr)
     everything = ((n_ref_ok == n_ref) and (n_bench_ok == n_bench) and reg_ok
                   and static_ok and recovery_ok and det_ok and rt_ok and fmt_ok
                   and sdk_ok and lsp_ok and d1_ok and d2_ok and d3_ok and mf_ok
@@ -461,7 +483,8 @@ def main() -> int:
                   and arch_ok and f_ok and llm_ok and pkg_ok and pg_ok
                   and demos_ok and fuzz_ok and scope_ok and rte_ok and fp_ok
                   and ex_ok and scan_ok and ratchet_ok and corpus_ok
-                  and alsp_ok and flc_ok and capfw_ok)
+                  and alsp_ok and flc_ok and capfw_ok
+                  and pysound_ok and pysink_ok)
     return 0 if everything else 1
 
 

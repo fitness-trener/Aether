@@ -274,6 +274,39 @@ def test_xxe_default_parser_still_fires():
     print("sinks: XML parser with entities on still fires")
 
 
+# --- CLI ----------------------------------------------------------------
+# `_emit_error` writes diagnostics to STDERR and the summary to STDOUT,
+# so these assert against the combined output.
+
+def _run_check_py(src: str):
+    import subprocess as sp
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "m.py")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(src)
+        r = sp.run([sys.executable, "-B", "-m", "transpiler.aether.cli",
+                    "check-py", p], cwd=ROOT, capture_output=True, text=True)
+    return r.returncode, r.stdout + r.stderr
+
+
+def test_check_py_cli_reports_and_exits_2():
+    rc, out = _run_check_py("import subprocess\n"
+                            "def r(host):\n"
+                            "    subprocess.run('ping ' + host, shell=True)\n")
+    assert rc == 2, f"a finding must exit 2, got {rc}: {out}"
+    assert "E0714" in out, out
+    assert "not checked" in out.lower(), \
+        "the reduced guarantee set must be stated on the output, not implied"
+    print("cli: check-py reports E0714 and states its limits")
+
+
+def test_check_py_clean_exits_0():
+    rc, out = _run_check_py("def add(a, b):\n    return a + b\n")
+    assert rc == 0, f"clean file must exit 0: {out}"
+    print("cli: check-py on a clean file exits 0")
+
+
 if __name__ == "__main__":
     test_body_is_no_longer_discarded()
     test_assign_becomes_let()
@@ -295,4 +328,6 @@ if __name__ == "__main__":
     test_xxe_default_parser_still_fires()
     test_repro_corpus_flags_the_bug()
     test_safe_functions_are_clean()
+    test_check_py_cli_reports_and_exits_2()
+    test_check_py_clean_exits_0()
     print("PY FRONTEND: ALL TESTS PASS")

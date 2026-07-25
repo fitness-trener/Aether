@@ -224,6 +224,51 @@ def _run_smt_check(ast, as_json, timeout_ms):
     return rc, summary
 
 
+# Stages that do not apply to Python source.
+#   effects  — E0801 compares a call site against a DECLARED effects
+#              clause; Python has none, so there is nothing to compare.
+#   semantic — E0202-E0207 check Aether language constructs (match
+#              exhaustiveness, dead `let` stores, ignored Results). On
+#              translated Python they describe the translation rather
+#              than the program.
+_PY_SKIP_STAGES = ("effects", "semantic")
+
+
+def cmd_check_py(args) -> int:
+    """Run the language-independent detectors over a Python file.
+
+    Python has no declared `effects` clause and no marker types, so the
+    guarantee set is genuinely smaller than `check` on a .aeth file. That
+    is printed, not implied: a tool that quietly offers less than it looks
+    like it offers is worse than one that offers less out loud."""
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))))
+    from tools.py_frontend import py_to_ir
+    from .passes import analyze_flat
+
+    src = _read(args.file)
+    ast, unprovable, meta = py_to_ir(src)
+    diags = analyze_flat(ast, skip=_PY_SKIP_STAGES)
+
+    if args.json:
+        json.dump({"ok": not diags, "lang": "python",
+                   "diagnostics": [d.to_dict() for d in diags],
+                   "unprovable": unprovable, "meta": meta}, sys.stdout)
+        sys.stdout.write("\n")
+        return 2 if diags else 0
+
+    for d in diags:
+        _emit_error(d, False)
+    n_unp = sum(len(v) for v in unprovable.values())
+    print(f"\n{len(diags)} finding(s) in {meta['n_functions']} function(s); "
+          f"{n_unp} unprovable region(s) in {len(unprovable)} function(s).")
+    print("NOT checked on Python (no declared effects clause, no marker "
+          "types): E0801 effect composition, and the taint-marker family "
+          "(E0712/E0715/E0716/E0717/E0724). Sink and capability checks "
+          "only. See PYTHON_VIABILITY.md for measured coverage.")
+    return 2 if diags else 0
+
+
 def cmd_check(args) -> int:
     src = _read(args.file)
     if getattr(args, "collect_errors", False):
@@ -477,6 +522,12 @@ def main(argv=None) -> int:
     sp.add_argument("--no-import-resolution", action="store_true",
                     help="opt out of default-on multi-file import resolution")
 
+    sp = sub.add_parser("check-py",
+                        help="run the language-independent detectors over a "
+                             "Python file (sinks + capability; no effect "
+                             "composition, no marker taint)")
+    sp.add_argument("file")
+
     sp = sub.add_parser("check", help="parse + emit (no execution)")
     sp.add_argument("file")
     sp.add_argument("--no-static-effects", action="store_true",
@@ -580,6 +631,7 @@ def main(argv=None) -> int:
         if args.cmd == "emit":     return cmd_emit(args)
         if args.cmd == "pack":     return cmd_pack(args)
         if args.cmd == "check":    return cmd_check(args)
+        if args.cmd == "check-py": return cmd_check_py(args)
         if args.cmd == "run":      return cmd_run(args)
         if args.cmd == "test":     return cmd_test(args)
         if args.cmd == "fmt":      return cmd_fmt(args)
