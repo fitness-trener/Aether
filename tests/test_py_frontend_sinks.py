@@ -28,9 +28,19 @@ def _fn(src: str, name: str):
     raise AssertionError(f"no FunctionDecl named {name!r}")
 
 
+# Stages that do not apply to Python, skipped here and by `check-py`:
+#   effects  — E0801 compares a call site against a DECLARED effects
+#              clause. Python has none, so there is nothing to compare.
+#   semantic — E0202-E0207 are checks about Aether language constructs
+#              (match exhaustiveness, dead `let` stores, ignored Results).
+#              On translated Python they describe the translation, not
+#              the program: `cur = conn.cursor()` read as a dead store.
+PY_SKIP_STAGES = ("effects", "semantic")
+
+
 def _codes(src: str):
     ast_dict, _unp, _meta = py_to_ir(src)
-    return sorted(d.code for d in analyze_flat(ast_dict))
+    return sorted(d.code for d in analyze_flat(ast_dict, skip=PY_SKIP_STAGES))
 
 
 # --- expression translation ---------------------------------------------
@@ -175,6 +185,95 @@ def test_sink_tables_are_auditable():
     print("sinks: mapping tables exposed via mapping_table()")
 
 
+# --- the fix must be silent ---------------------------------------------
+# Each bench repro carries the vulnerable shape AND the documented fix.
+# A checker that flags both is noise, not a checker.
+
+import glob                                                      # noqa: E402
+
+SINK_CODES = {"E0711", "E0713", "E0714", "E0718", "E0719", "E0720", "E0727"}
+
+
+def _repro_files():
+    return sorted(glob.glob(os.path.join(ROOT, "bench", "realworld_*", "*_repro.py")))
+
+
+def test_repro_corpus_flags_the_bug():
+    files = _repro_files()
+    assert files, "bench repro corpus is empty - glob found nothing"
+    hits = {}
+    for path in files:
+        with open(path, encoding="utf-8") as f:
+            codes = set(_codes(f.read())) & SINK_CODES
+        hits[os.path.basename(path)] = sorted(codes)
+    # The four sink-family repros must each produce their code.
+    assert "E0714" in hits.get("subprocess_repro.py", []), hits
+    assert "E0720" in hits.get("pyyaml_repro.py", []), hits
+    print("repro corpus: sink-family bugs found ->", hits)
+
+
+def test_safe_functions_are_clean():
+    """Per-function: the documented fix must produce no sink-family code."""
+    import ast as pyast
+    offenders = []
+    for path in _repro_files():
+        with open(path, encoding="utf-8") as f:
+            src = f.read()
+        for node in pyast.parse(src).body:
+            if not isinstance(node, (pyast.FunctionDef, pyast.AsyncFunctionDef)):
+                continue
+            if not node.name.endswith("_safe"):
+                continue
+            fn_src = pyast.get_source_segment(src, node) or ""
+            header = "\n".join(l for l in src.splitlines()
+                               if l.startswith("import ") or l.startswith("from "))
+            codes = set(_codes(header + "\n\n" + fn_src)) & SINK_CODES
+            if codes:
+                offenders.append((os.path.basename(path), node.name, sorted(codes)))
+    assert not offenders, \
+        "the documented FIX must not be flagged - that is noise: " + repr(offenders)
+    print("repro corpus: every *_safe function is clean")
+
+
+def test_parameterized_query_is_the_sanctioned_exit():
+    """DB-API parameter binding is Python's `sqlBind`: the driver binds
+    the values, so the string is not the injection vector. It is a call
+    SHAPE (a second argument), not a wrapper function."""
+    src = ("def q(cur, uid):\n"
+           "    cur.execute('SELECT * FROM t WHERE id = ?', (uid,))\n")
+    assert "E0713" not in _codes(src), \
+        "a parameterized query is the documented safe form"
+    print("sinks: parameterized query passes clean")
+
+
+def test_single_arg_dynamic_query_still_fires():
+    src = ("def q(cur, uid):\n"
+           "    cur.execute('SELECT * FROM t WHERE id = ' + uid)\n")
+    assert "E0713" in _codes(src), \
+        "one argument built by concatenation is the injection"
+    print("sinks: single-argument dynamic query still fires")
+
+
+def test_xxe_safe_parser_disarms_the_sink():
+    src = ("from lxml import etree\n"
+           "def load(raw):\n"
+           "    parser = etree.XMLParser(resolve_entities=False)\n"
+           "    etree.fromstring(raw, parser)\n")
+    assert "E0727" not in _codes(src), \
+        "resolve_entities=False is lxml's documented XXE fix"
+    print("sinks: XML parser with entities off is not an XXE sink")
+
+
+def test_xxe_default_parser_still_fires():
+    src = ("from lxml import etree\n"
+           "def load(raw):\n"
+           "    parser = etree.XMLParser(resolve_entities=True)\n"
+           "    etree.fromstring(raw, parser)\n")
+    assert "E0727" in _codes(src), \
+        "entity resolution left ON is the vulnerability"
+    print("sinks: XML parser with entities on still fires")
+
+
 if __name__ == "__main__":
     test_body_is_no_longer_discarded()
     test_assign_becomes_let()
@@ -190,4 +289,10 @@ if __name__ == "__main__":
     test_yaml_load_with_safe_loader_is_not_a_sink()
     test_chained_receiver_call_is_not_lost()
     test_sink_tables_are_auditable()
+    test_parameterized_query_is_the_sanctioned_exit()
+    test_single_arg_dynamic_query_still_fires()
+    test_xxe_safe_parser_disarms_the_sink()
+    test_xxe_default_parser_still_fires()
+    test_repro_corpus_flags_the_bug()
+    test_safe_functions_are_clean()
     print("PY FRONTEND: ALL TESTS PASS")

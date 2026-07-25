@@ -53,7 +53,7 @@ unwrapper (`let r = reveal`) is deliberately NOT honored (documented
 over-flag). Regression tests: `test_fn_alias_launder_rejected` and 5
 siblings in tests/test_effect_scope.py.
 
-### BUG-003  mixed-arg effect list crashed the effect check (compiler crash)  [FIXED PENDING]
+### BUG-003  mixed-arg effect list crashed the effect check (compiler crash)  [FIXED 27abede]
 test: tests/test_effect_scope.py
 
 Found 2026-07-26 (Python-frontend work, this repo). Repro — 16 lines of

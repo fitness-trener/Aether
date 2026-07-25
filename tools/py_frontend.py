@@ -328,7 +328,8 @@ def _concat(parts: List[Dict[str, Any]]) -> Dict[str, Any]:
     return out
 
 
-def _expr(node: Any, imp: "_Imports") -> Dict[str, Any]:
+def _expr(node: Any, imp: "_Imports",
+          safe_xml: Optional[Set[str]] = None) -> Dict[str, Any]:
     """One Python expression -> one Aether expression node. Total: always
     returns a dict, never None."""
     if isinstance(node, _pyast.Constant):
@@ -342,9 +343,9 @@ def _expr(node: Any, imp: "_Imports") -> Dict[str, Any]:
         # is the same hazard, so it gets the same shape.
         if isinstance(node.op, _pyast.Add):
             return {"kind": "BinOp", "op": "+",
-                    "left": _expr(node.left, imp), "right": _expr(node.right, imp)}
+                    "left": _expr(node.left, imp, safe_xml), "right": _expr(node.right, imp, safe_xml)}
         if isinstance(node.op, _pyast.Mod) and _const_str(node.left) is not None:
-            return _concat([_expr(node.left, imp), _expr(node.right, imp)])
+            return _concat([_expr(node.left, imp, safe_xml), _expr(node.right, imp, safe_xml)])
         return {"kind": "PyExpr", "py": "BinOp"}
     if isinstance(node, _pyast.JoinedStr):
         # f-string. With >=1 FormattedValue it is a dynamic string — the
@@ -355,7 +356,7 @@ def _expr(node: Any, imp: "_Imports") -> Dict[str, Any]:
         for v in node.values:
             if isinstance(v, _pyast.FormattedValue):
                 dynamic = True
-                parts.append(_expr(v.value, imp))
+                parts.append(_expr(v.value, imp, safe_xml))
             elif isinstance(v, _pyast.Constant) and isinstance(v.value, str):
                 parts.append({"kind": "StringLit", "value": v.value})
             else:
@@ -368,7 +369,7 @@ def _expr(node: Any, imp: "_Imports") -> Dict[str, Any]:
                     "value": "".join(p.get("value", "") for p in parts)}
         return _concat(parts)
     if isinstance(node, _pyast.Call):
-        return _call_expr(node, imp)
+        return _call_expr(node, imp, safe_xml)
     return {"kind": "PyExpr", "py": type(node).__name__}
 
 
@@ -384,7 +385,53 @@ def _has_kw(call: _pyast.Call, name: str) -> bool:
     return any(kw.arg == name for kw in call.keywords or [])
 
 
-def _sink_name(call: _pyast.Call, imp: "_Imports") -> Optional[str]:
+# XML parser constructors whose keyword arguments carry the XXE guard.
+_XML_PARSER_CTORS = {"lxml.etree.XMLParser", "xml.sax.make_parser"}
+
+
+def _safe_xml_parser_names(fn_node: Any, imp: "_Imports") -> Set[str]:
+    """Names bound to an XML parser constructed with entity resolution
+    OFF. Passing one of these disarms the XXE sink.
+
+    This is the GUARD-BOUND-ELSEWHERE class: in `lxml_repro.py` the
+    vulnerable and safe call sites are byte-identical
+    (`etree.fromstring(raw, parser)`) and the safety lives in a DIFFERENT
+    statement, in a keyword of the parser. E0727 inspects argument 0, so
+    no argument-shape rule can ever see it — resolving it is the
+    frontend's job, because the frontend is where the Python-specific
+    knowledge belongs.
+
+    Conservative: a name is safe only when EVERY binding to it in this
+    function is an explicit `resolve_entities=False`. Rebound, computed,
+    keyword absent, or constructor unknown — not safe."""
+    bound: Dict[str, List[bool]] = {}
+    for stmt in _pyast.walk(fn_node):
+        if not isinstance(stmt, _pyast.Assign) or len(stmt.targets) != 1:
+            continue
+        tgt = stmt.targets[0]
+        if not isinstance(tgt, _pyast.Name) or not isinstance(stmt.value, _pyast.Call):
+            continue
+        dotted = _callee_spelling(stmt.value.func, imp)
+        if dotted not in _XML_PARSER_CTORS:
+            continue
+        off = any(kw.arg == "resolve_entities"
+                  and isinstance(kw.value, _pyast.Constant)
+                  and kw.value.value is False
+                  for kw in stmt.value.keywords or [])
+        bound.setdefault(tgt.id, []).append(off)
+    return {n for n, flags in bound.items() if flags and all(flags)}
+
+
+def _is_parameterized_query(call: _pyast.Call) -> bool:
+    """`cursor.execute(sql, params)` with a second argument is the DB-API
+    parameterized form — the driver binds the values, so the string is not
+    the injection vector. This is Python's `sqlBind`, expressed as a call
+    SHAPE rather than as a wrapper function."""
+    return len(call.args) >= 2
+
+
+def _sink_name(call: _pyast.Call, imp: "_Imports",
+               safe_xml: Optional[Set[str]] = None) -> Optional[str]:
     """The Aether sink name for this Python call, or None."""
     dotted = _callee_spelling(call.func, imp)
     if dotted is None:
@@ -395,29 +442,39 @@ def _sink_name(call: _pyast.Call, imp: "_Imports") -> Optional[str]:
     if dotted in SINK_GATED_YAML:
         # An explicit Loader= is PyYAML's own documented fix.
         return None if _has_kw(call, "Loader") else "deserialize"
-    if dotted in SINK_BY_QUALIFIED:
-        return SINK_BY_QUALIFIED[dotted]
+    sink = SINK_BY_QUALIFIED.get(dotted)
+    if sink == "parseXml":
+        for a in call.args[1:]:
+            if isinstance(a, _pyast.Name) and a.id in (safe_xml or set()):
+                return None      # entity resolution explicitly disabled
+        return sink
+    if sink is not None:
+        return sink
     if dotted in SINK_BY_BUILTIN:
         return SINK_BY_BUILTIN[dotted]
     # Method on an unresolved receiver: over-flag by name (see doctrine note).
     if isinstance(call.func, _pyast.Attribute):
-        return SINK_BY_METHOD.get(call.func.attr)
+        m = SINK_BY_METHOD.get(call.func.attr)
+        if m is not None and _is_parameterized_query(call):
+            return None      # DB-API parameter binding — the sanctioned exit
+        return m
     return None
 
 
-def _call_expr(node: _pyast.Call, imp: "_Imports") -> Dict[str, Any]:
+def _call_expr(node: _pyast.Call, imp: "_Imports",
+               safe_xml: Optional[Set[str]] = None) -> Dict[str, Any]:
     """A Python call as an Aether Call node, named so the existing
     detectors recognize it: the Aether SINK name when it maps to one, the
     Aether WRAPPER name when it is a sanctioned exit, otherwise its Python
     spelling (which matches neither, so an argument that is one of these
     calls is refused — the flag-more direction)."""
     dotted = _callee_spelling(node.func, imp)
-    name = (_sink_name(node, imp)
+    name = (_sink_name(node, imp, safe_xml)
             or SANITIZER_BY_QUALIFIED.get(dotted or "")
             or dotted or "<expr>")
     out: Dict[str, Any] = {"kind": "Call",
                            "func": {"kind": "Ident", "name": name},
-                           "args": [_expr(a, imp) for a in node.args],
+                           "args": [_expr(a, imp, safe_xml) for a in node.args],
                            "pos": _pos(node)}
     # A call used as a RECEIVER is still a call: `open(p).read()`,
     # `conn.cursor().execute(sql)`, `requests.get(u).json()`. Chaining is
@@ -428,7 +485,7 @@ def _call_expr(node: _pyast.Call, imp: "_Imports") -> Dict[str, Any]:
     # so it cannot mistake a receiver for an argument.
     if isinstance(node.func, _pyast.Attribute) and \
             isinstance(node.func.value, _pyast.Call):
-        out["recv"] = _call_expr(node.func.value, imp)
+        out["recv"] = _call_expr(node.func.value, imp, safe_xml)
     return out
 
 
@@ -461,8 +518,11 @@ def _classify_dotted(dotted: str) -> Optional[Tuple[str, str]]:
 class _FnVisitor:
     """Walk one function body and emit (effects, local_calls, unprovable)."""
     def __init__(self, imports: _Imports, local_fns: Set[str], fn_name: str,
-                 fn_line: int):
+                 fn_line: int, safe_xml: Optional[Set[str]] = None):
         self.imp = imports
+        # Names bound to an XML parser with entity resolution disabled —
+        # the guard lives in a different statement than the parse call.
+        self.safe_xml: Set[str] = safe_xml or set()
         self.local_fns = local_fns
         self.fn_name = fn_name
         self.fn_line = fn_line
@@ -505,14 +565,14 @@ class _FnVisitor:
             if len(targets) == 1 and isinstance(targets[0], _pyast.Name) \
                     and stmt.value is not None:
                 self.stmts.append({"kind": "Let", "name": targets[0].id,
-                                   "value": _expr(stmt.value, self.imp),
+                                   "value": _expr(stmt.value, self.imp, self.safe_xml),
                                    "pos": _pos(stmt, self.fn_line)})
             return
         if isinstance(stmt, _pyast.Expr) and isinstance(stmt.value, _pyast.Call):
-            self.stmts.append(_expr(stmt.value, self.imp))
+            self.stmts.append(_expr(stmt.value, self.imp, self.safe_xml))
             return
         if isinstance(stmt, _pyast.Return) and stmt.value is not None:
-            self.stmts.append({"kind": "Return", "value": _expr(stmt.value, self.imp),
+            self.stmts.append({"kind": "Return", "value": _expr(stmt.value, self.imp, self.safe_xml),
                                "pos": _pos(stmt, self.fn_line)})
 
     def visit_call(self, call: _pyast.Call):
@@ -655,7 +715,8 @@ def py_to_ir(source: str) -> Tuple[Dict[str, Any], Dict[str, List[Dict[str, Any]
 
     for qual, node in func_nodes:
         line = getattr(node, "lineno", 0)
-        v = _FnVisitor(imports, simple_names, qual, line)
+        v = _FnVisitor(imports, simple_names, qual, line,
+                       _safe_xml_parser_names(node, imports))
         # Two separate walks, deliberately. `visit_call` drives the untouched
         # capability/UNPROVABLE analysis over EVERY call anywhere in the
         # function (including inside comprehensions and nested calls);
