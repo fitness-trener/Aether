@@ -1,5 +1,31 @@
 # Operation Log (append-only — newest on top)
 
+## [2026-07-25] aether-scan workflow fixed | gate on the difference, not the findings
+- The carry-over finding both the 03 and 05 handoffs recorded as unclaimed.
+  The workflow ran `tools.scan .` over a repo that deliberately contains
+  vulnerable demos and exited 1 on any finding, so it was red by
+  construction from 2026-07-09 and a real regression was indistinguishable
+  from every other run.
+- Root cause was a single file serving two conflicting roles: a shipped
+  EXAMPLE for consumer repos ("any finding fails" — correct there) and
+  this repo's own CI ("this tree legitimately contains violations").
+  Fixed by making one flag correct in both roles rather than forking the
+  file: `tools.scan --expect` holds a header-less file to `clean`, so in a
+  repo that uses no `// expect:` headers the flag is a no-op.
+- Gains a direction the old gate never had. "Fail on any finding" could
+  only count upward; `--expect` also fails on DECLARED BUT NOT REPORTED —
+  a detector that went quiet. That is the regression class the ratchet
+  catches for detector COUNT and nothing caught for detector BEHAVIOUR.
+- `tools/expectations.py` is now the one home for the header grammar and
+  the corpus scope; `tests/test_corpus.py` and the CI gate judge files by
+  the same rules, so the suite and the workflow cannot drift apart. Same
+  shape as `tools/diagnostic_codes.py` in candidate 05.
+- Verified by planting drift, not by reading: a demo whose header was
+  rewritten to `clean` turns the gate red, and a header claiming a code
+  the file does not produce turns it red the other way. Both directions
+  are pinned in `tests/test_scan.py`, which the gate runs. No analysis
+  behaviour changed — corpus and full-tree dumps diff empty.
+
 ## [2026-07-25] architecture review candidate 05 | diagnostics catalog scanner
 - Executes ADR-0002. The catalog test promised "every diagnostic code the
   toolchain can emit is documented" while matching 2 of 3 construction

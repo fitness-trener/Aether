@@ -34,9 +34,7 @@ Run: python -B tests/test_corpus.py   (exit 0 = pass)
 """
 from __future__ import annotations
 import collections
-import glob
 import os
-import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -45,60 +43,12 @@ sys.path.insert(0, ROOT)          # sdk.run reaches bench.harness for its timeou
 
 from aether.parser import parse                        # noqa: E402
 from aether.passes import analyze_flat                 # noqa: E402
-
-_HEADER = re.compile(r'^//\s*expect(-run)?:\s*(.+?)\s*$', re.M)
-_ENTRY = re.compile(r'^(E\d{4})(?:x(\d+))?$')
-
-
-def _corpus() -> list:
-    """Hand-authored `.aeth` under the two in-scope roots.
-
-    `<source>.fixed.aeth` is excluded: that is the output filename
-    `demos/payment_workflow/fix_loop.py` writes, and
-    `tests/test_fix_loop_demo.py` regenerates it on every gate run — a
-    header written into it would be silently overwritten. Generated
-    files make no compliance claim, same reason `bench/` is out of scope
-    (ADR-0003). The hand-authored case-study `fixed.aeth` files do NOT
-    match this suffix and stay in.
-    """
-    files = glob.glob(os.path.join(ROOT, "demos", "**", "*.aeth"), recursive=True)
-    files += glob.glob(os.path.join(ROOT, "playground", "examples", "**", "*.aeth"),
-                       recursive=True)
-    return sorted(f for f in set(files)
-                  if not os.path.basename(f).endswith(".fixed.aeth"))
-
-
-def _render(codes) -> str:
-    """Codes -> the canonical `// expect:` spec. Inverse of _parse_spec, so
-    a failure message can print the line a human would paste."""
-    counts = collections.Counter(codes)
-    if not counts:
-        return "clean"
-    return ", ".join(f"{c}x{n}" if n > 1 else c for c, n in sorted(counts.items()))
-
-
-def _parse_spec(spec: str, where: str) -> collections.Counter:
-    if spec.strip() == "clean":
-        return collections.Counter()
-    counts: collections.Counter = collections.Counter()
-    for tok in spec.split(","):
-        m = _ENTRY.match(tok.strip())
-        if not m:
-            raise ValueError(f"{where}: bad expectation entry {tok.strip()!r} "
-                             f"(want `E0710`, `E0710x3`, or `clean`)")
-        counts[m.group(1)] += int(m.group(2) or 1)
-    return counts
-
-
-def _headers(src: str, where: str):
-    """Return (static_spec|None, run_spec|None) from the file's header."""
-    static = run = None
-    for is_run, spec in _HEADER.findall(src):
-        if is_run:
-            run = _parse_spec(spec, where)
-        else:
-            static = _parse_spec(spec, where)
-    return static, run
+# The header grammar and the corpus scope live in tools/expectations.py so
+# that `tools.scan --expect` — the aether-scan CI gate — judges files by
+# exactly the claim this suite enforces.
+from tools.expectations import (                       # noqa: E402
+    corpus_files, parse_header, render,
+)
 
 
 def _runtime_codes(path: str, src: str) -> collections.Counter:
@@ -108,7 +58,7 @@ def _runtime_codes(path: str, src: str) -> collections.Counter:
 
 
 def test_corpus_states_its_expectations():
-    corpus = _corpus()
+    corpus = corpus_files(ROOT)
     assert corpus, "corpus is empty — glob found nothing"
     failures = []
     ran = 0
@@ -116,27 +66,27 @@ def test_corpus_states_its_expectations():
         rel = os.path.relpath(path, ROOT).replace(os.sep, "/")
         with open(path, encoding="utf-8") as f:
             src = f.read()
-        want, want_run = _headers(src, rel)
+        want, want_run = parse_header(src, rel)
         if want is None:
             failures.append(
                 f"{rel}: no `// expect:` header. Every corpus file states its "
-                f"own claim — add `// expect: {_render([])}` (or the codes it "
+                f"own claim — add `// expect: {render([])}` (or the codes it "
                 f"demonstrates) as the first line.")
             continue
         got = collections.Counter(d.code for d in analyze_flat(parse(src, path)))
         if got != want:
             failures.append(
                 f"{rel}: static expectation mismatch\n"
-                f"    declared: // expect: {_render(want.elements())}\n"
-                f"    actual:   // expect: {_render(got.elements())}")
+                f"    declared: // expect: {render(want.elements())}\n"
+                f"    actual:   // expect: {render(got.elements())}")
         if want_run is not None:
             ran += 1
             got_run = _runtime_codes(path, src)
             if got_run != want_run:
                 failures.append(
                     f"{rel}: runtime expectation mismatch\n"
-                    f"    declared: // expect-run: {_render(want_run.elements())}\n"
-                    f"    actual:   // expect-run: {_render(got_run.elements())}")
+                    f"    declared: // expect-run: {render(want_run.elements())}\n"
+                    f"    actual:   // expect-run: {render(got_run.elements())}")
     assert not failures, (
         f"{len(failures)} corpus expectation(s) unmet:\n\n"
         + "\n".join(failures)
