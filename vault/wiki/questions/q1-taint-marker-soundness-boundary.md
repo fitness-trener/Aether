@@ -51,6 +51,9 @@ boundary; bodies are still not analyzed across calls.
 | Function-alias laundering MISS found & CLOSED | iter-42 (BUGS.md BUG-002, fixed f6b8bf3): callee/source resolution was by declared name only — `let f = logIt; f(secret)` bypassed E0729 and `let f = getToken; f()` defeated seeding, both exit 0. Fixed by per-function alias resolution (`_fn_aliases`) applied flag-more only; single-target aliases extend the sanctioned-crossing mask; aliased unwrappers deliberately NOT honored (documented, test-pinned over-flag) | high |
 | The 13 sink detectors are TWO shapes, and collapsing them moved the boundary nowhere | candidate 02: 6 marker-flow + 7 literal-or-wrapper rows now drive off `passes/detector_specs.py`; `(code, line, message, suggestion)` is byte-identical across the 83-file corpus, all 427 in-tree `.aeth`, and a 67-row synthetic probe covering every reason branch. The marker→unwrapper map E0729/E0730 read is now DERIVED from the marker-flow rows, so a new row extends both without editing them | high |
 | E0711's safe-name pass is single-pass, not a fixpoint — latent, not live | candidate-02 probe across all 427 in-tree `.aeth`: single-pass and fixpoint resolution of `_safe_names` agree on every file. A fixpoint would prove a superset of names safe (relax direction). Recorded as a precision knob, NOT a residual — probe found no live difference, per the iter-41 lesson | high |
+| Container-carried markers CLOSED — generic args and record fields | iter-44: `_is_marker_type` matched a marker only at the TOP of a type node, so `List<PII<String>>` params and `record User do email: PII<String> end` field reads were both **exit 0** (probe-confirmed on `f98fdce`) — a genuine FALSE ACCEPT inside the modeled surface, the contract-breach class. Fixed by `_type_carries_marker` (whole type tree) + record masks in `_marker_param_mask` + `_marker_field_names`. Symmetric FALSE POSITIVES fixed in the same change: construction into a marker-typed field, and returning such a record, no longer raise E0729/E0730 — a marker-typed FIELD is a sanctioned crossing, the dual of a marker-typed param. Without that half the safe shape was unwritable, which is *why* the unsafe shape went unnoticed `[source: diagnostics, section: E0729/E0730, key: laundering]` | high |
+| `Authorized<T>` deliberately NOT widened to containers | iter-44: `_is_marker_type` keeps its top-level-only rule at the six `_AUTH_MARKER` sites. `Authorized<T>` is a PROOF marker: counting `List<Authorized<T>>` as a proof would RELAX acceptance and could silence E0716/E0717. Test-pinned (`test_nested_authorized_still_unproven`) `[source: diagnostics, section: E0716, key: Authorized]` | high |
+| NEW residual: record fields are matched by NAME, not by resolved record type | iter-44: the `Field` node holds only the field name and a base expression; resolving the base's record type needs inference this pass does not have. A plain `email` field on an unrelated record over-flags. Accepted direction (over-flag, never miss); the type-directed upgrade would reuse the param/`let`-annotation resolution `check_exhaustiveness` uses for union scrutinees. **Probe for a live over-flag on the corpus before building it** (iter-41 lesson: residuals enter the backlog only probe-confirmed) `[source: types, section: Records, key: record]` | high |
 | HOF residual RE-FRAMED and closed | iter-42 grammar check: `grammar.ebnf` has no function types — "HOF/function-typed callees" was never expressible; the real indirect-call surface was function ALIASES, now resolved. Nothing HOF-shaped remains in the language | high |
 
 ## Recommended Actions
@@ -64,7 +67,12 @@ boundary; bodies are still not analyzed across calls.
   Evidence — the signature is now enforced both directions; iter-41
   closed the match-destructure false accept; iter-42 closed
   function-alias laundering and re-framed the HOF item out of
-  existence). What remains: **value-equality / copy-alias reasoning for
+  existence). Iter-44 adds the CONTAINER axis to that story: the
+  signature is now enforced in both directions AND through the two
+  containers the language has (generic arguments, record fields), so
+  "signature-level" no longer means "top-level-type-only"; what remains
+  on that axis is the type-directed field resolution in Evidence.
+  What remains: **value-equality / copy-alias reasoning for
   E0717's resource ids** — now PROBE-CONFIRMED (iter-42,
   `probe_e0717_alias.aeth`: `let id2 = docId` + proof on `docId` is
   refused — over-flag precision target, RELAX direction, must keep the
