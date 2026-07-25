@@ -1640,7 +1640,13 @@ def _format_effect(eff: EffectEntry) -> str:
 def _format_effect_list(effs: List[EffectEntry]) -> str:
     if not effs:
         return "'pure'"
-    return ", ".join(_format_effect(e) for e in sorted(effs))
+    # Sort on an ORDERING KEY, not on the entry. An EffectEntry's arg is
+    # Optional[str], so two effects sharing a path — `net.fetch` and
+    # `net.fetch("https://...")`, which is legal and meaningful — made
+    # tuple comparison fall through to `None < str` and crash the whole
+    # check with a TypeError instead of emitting E0801. BUGS.md BUG-003.
+    return ", ".join(_format_effect(e)
+                     for e in sorted(effs, key=lambda e: (e[0], e[1] or "")))
 
 
 # ----------------------------------------------------------------------

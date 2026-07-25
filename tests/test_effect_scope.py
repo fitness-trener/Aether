@@ -24,7 +24,7 @@ from aether.passes.effects import (                   # noqa: E402
     check_metadata_fetch, check_hardcoded_secret, check_log_injection,
     check_reflected_xss, check_header_injection, check_xxe,
     check_csv_injection, check_marker_boundary, check_return_laundering,
-    _net_authority_wildcarded,
+    check_effects, _net_authority_wildcarded,
 )
 
 
@@ -116,6 +116,35 @@ end
 """
     assert _codes(src) == [], "*.subdomain pin keeps host bounded"
     print("E0710 integration: *.subdomain pin passes clean")
+
+
+# --- BUG-003: mixed-arg effect list must not crash the check -----------
+# `effects net.fetch, net.fetch("https://...")` is legal: a path with no
+# arg alongside the same path with one. Formatting the caller's effect
+# list for an E0801 message sorted the entries themselves, so tuple
+# comparison reached the Optional[str] arg slot and compared None with a
+# str — an uncaught TypeError that killed the compiler instead of
+# emitting the diagnostic it had already decided to emit.
+
+def test_mixed_arg_effect_list_does_not_crash():
+    src = """
+function helper() returns Unit
+  effects fs.write
+do
+  let _r: Result<Unit, String> = writeFile("/tmp/x", "y")
+end
+
+function go() returns Unit
+  effects net.fetch, net.fetch("https://api.example.com/x")
+do
+  helper()
+end
+"""
+    ast = parse(src, "<effmix>")
+    diags = check_effects(ast)          # must not raise
+    assert [d.code for d in diags] == ["E0801"], \
+        "the uncovered fs.write must still be reported, not crash the pass"
+    print("BUG-003: mixed-arg effect list formats instead of crashing")
 
 
 # --- E0711 filesystem path-traversal precondition ----------------------
@@ -1916,6 +1945,7 @@ if __name__ == "__main__":
     test_scheme_only_rejected()
     test_pinned_clean()
     test_subdomain_pin_clean()
+    test_mixed_arg_effect_list_does_not_crash()
     test_fs_dynamic_path_rejected()
     test_fs_literal_clean()
     test_fs_literal_dotdot_rejected()
