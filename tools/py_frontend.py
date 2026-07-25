@@ -234,6 +234,99 @@ def _const_str(node: Any) -> Optional[str]:
     return None
 
 
+# ----------------------------------------------------------------------
+# EXPRESSION TRANSLATION
+# ----------------------------------------------------------------------
+# The detectors in `aether.passes.detector_specs` judge argument SHAPES:
+# a fixed StringLit passes, a `+` concatenation is refused, a sanctioned
+# wrapper call passes, an unknown expression is refused. Translating
+# Python expressions into exactly those shapes is what lets the untouched
+# Aether detectors run on Python.
+#
+# Anything not modeled becomes `PyExpr`, a kind no rule knows. `_arg_reason`
+# falls through to `rule.default` for it — REFUSED, not cleared. That is the
+# same direction as the UNPROVABLE discipline above: never assume clean.
+
+def _pos(node: Any, fallback: int = 0) -> Dict[str, int]:
+    return {"line": getattr(node, "lineno", fallback),
+            "column": getattr(node, "col_offset", 0) + 1}
+
+
+def _concat(parts: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Left-nested `+` tree over `parts` (>=1)."""
+    out = parts[0]
+    for p in parts[1:]:
+        out = {"kind": "BinOp", "op": "+", "left": out, "right": p}
+    return out
+
+
+def _expr(node: Any, imp: "_Imports") -> Dict[str, Any]:
+    """One Python expression -> one Aether expression node. Total: always
+    returns a dict, never None."""
+    if isinstance(node, _pyast.Constant):
+        if isinstance(node.value, str):
+            return {"kind": "StringLit", "value": node.value}
+        return {"kind": "PyExpr", "py": "Constant"}
+    if isinstance(node, _pyast.Name):
+        return {"kind": "Ident", "name": node.id}
+    if isinstance(node, _pyast.BinOp):
+        # `a + b` is concatenation; `"fmt" % x` builds a dynamic string and
+        # is the same hazard, so it gets the same shape.
+        if isinstance(node.op, _pyast.Add):
+            return {"kind": "BinOp", "op": "+",
+                    "left": _expr(node.left, imp), "right": _expr(node.right, imp)}
+        if isinstance(node.op, _pyast.Mod) and _const_str(node.left) is not None:
+            return _concat([_expr(node.left, imp), _expr(node.right, imp)])
+        return {"kind": "PyExpr", "py": "BinOp"}
+    if isinstance(node, _pyast.JoinedStr):
+        # f-string. With >=1 FormattedValue it is a dynamic string — the
+        # dominant modern injection shape — so it reaches the rules as a
+        # concatenation. With none it is just a literal.
+        parts: List[Dict[str, Any]] = []
+        dynamic = False
+        for v in node.values:
+            if isinstance(v, _pyast.FormattedValue):
+                dynamic = True
+                parts.append(_expr(v.value, imp))
+            elif isinstance(v, _pyast.Constant) and isinstance(v.value, str):
+                parts.append({"kind": "StringLit", "value": v.value})
+            else:
+                dynamic = True
+                parts.append({"kind": "PyExpr", "py": "FormattedValue"})
+        if not parts:
+            return {"kind": "StringLit", "value": ""}
+        if not dynamic:
+            return {"kind": "StringLit",
+                    "value": "".join(p.get("value", "") for p in parts)}
+        return _concat(parts)
+    if isinstance(node, _pyast.Call):
+        return _call_expr(node, imp)
+    return {"kind": "PyExpr", "py": type(node).__name__}
+
+
+def _call_expr(node: _pyast.Call, imp: "_Imports") -> Dict[str, Any]:
+    """A Python call as an Aether Call node. Task 2 maps the callee to an
+    Aether SINK name; until then every call is named by its Python spelling,
+    which matches no sink and no wrapper — the refused direction."""
+    name = _callee_spelling(node.func, imp) or "<expr>"
+    return {"kind": "Call",
+            "func": {"kind": "Ident", "name": name},
+            "args": [_expr(a, imp) for a in node.args],
+            "pos": _pos(node)}
+
+
+def _callee_spelling(func: Any, imp: "_Imports") -> Optional[str]:
+    """Dotted path for a call target, using the file's imports; falls back
+    to the bare attribute/name as written."""
+    if isinstance(func, _pyast.Name):
+        return imp.resolve_name(func.id) or func.id
+    if isinstance(func, _pyast.Attribute):
+        if isinstance(func.value, _pyast.Name):
+            return imp.resolve_attr(func.value.id, func.attr) or func.attr
+        return func.attr
+    return None
+
+
 def _classify_dotted(dotted: str) -> Optional[Tuple[str, str]]:
     """Return (capability, verb) for a dotted call path, or None if not a
     known capability. Checks exact qualified entry, then module root, then
@@ -258,6 +351,7 @@ class _FnVisitor:
         self.fn_line = fn_line
         self.effects: List[Dict[str, Any]] = []
         self.local_calls: List[str] = []
+        self.stmts: List[Dict[str, Any]] = []
         self.unprovable: List[Dict[str, Any]] = []
         self._eff_seen: Set[Tuple[str, str, Optional[str]]] = set()
         self._unp_seen: Set[str] = set()
@@ -283,6 +377,26 @@ class _FnVisitor:
             "callee": construct, "reason": reason, "detail": detail,
             "construct_line": line, "needs": "human review or a runtime check",
         })
+
+    def visit_stmt(self, stmt: Any):
+        """Collect the statements the detectors read: single-target
+        assignments (the safe-name pass's input) and expression calls
+        (the sink sites). Everything else contributes nothing — control
+        flow is not modeled, exactly as in the Aether passes themselves."""
+        if isinstance(stmt, (_pyast.Assign, _pyast.AnnAssign)):
+            targets = stmt.targets if isinstance(stmt, _pyast.Assign) else [stmt.target]
+            if len(targets) == 1 and isinstance(targets[0], _pyast.Name) \
+                    and stmt.value is not None:
+                self.stmts.append({"kind": "Let", "name": targets[0].id,
+                                   "value": _expr(stmt.value, self.imp),
+                                   "pos": _pos(stmt, self.fn_line)})
+            return
+        if isinstance(stmt, _pyast.Expr) and isinstance(stmt.value, _pyast.Call):
+            self.stmts.append(_expr(stmt.value, self.imp))
+            return
+        if isinstance(stmt, _pyast.Return) and stmt.value is not None:
+            self.stmts.append({"kind": "Return", "value": _expr(stmt.value, self.imp),
+                               "pos": _pos(stmt, self.fn_line)})
 
     def visit_call(self, call: _pyast.Call):
         func = call.func
@@ -425,18 +539,28 @@ def py_to_ir(source: str) -> Tuple[Dict[str, Any], Dict[str, List[Dict[str, Any]
     for qual, node in func_nodes:
         line = getattr(node, "lineno", 0)
         v = _FnVisitor(imports, simple_names, qual, line)
+        # Two separate walks, deliberately. `visit_call` drives the untouched
+        # capability/UNPROVABLE analysis over EVERY call anywhere in the
+        # function (including inside comprehensions and nested calls);
+        # `visit_stmt` builds the expression shapes the detectors judge.
+        # Merging them would change what the capability pass sees.
         for sub in _pyast.walk(node):
             if isinstance(sub, _pyast.Call):
                 v.visit_call(sub)
+        for sub in _pyast.walk(node):
+            if isinstance(sub, (_pyast.Assign, _pyast.AnnAssign, _pyast.Expr,
+                                _pyast.Return)):
+                v.visit_stmt(sub)
         body_calls = [{"kind": "Call",
                        "func": {"kind": "Ident", "name": c},
                        "args": [], "pos": {"line": line, "column": 1}}
                       for c in v.local_calls]
+        body = v.stmts + body_calls
         decls.append({
             "kind": "FunctionDecl",
             "name": qual,
             "effects": v.effects,
-            "body": body_calls,
+            "body": body,
             "pos": {"line": line, "column": 1},
         })
         export_names.append(qual)
