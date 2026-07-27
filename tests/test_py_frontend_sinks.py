@@ -398,6 +398,52 @@ def test_shell_false_bound_elsewhere_is_clean():
     print("guard: shell=False bound elsewhere resolves clean")
 
 
+# --- recall gaps found by the bandit oracle (bench/pypi_scan/run_recall) ---
+# Each of these was a confirmed MISS on real PyPI code: an independent
+# tool flagged the shape and Aether said nothing. Table rows were added
+# only for shapes the oracle actually flagged - no speculative entries.
+
+def test_recall_gap_shapes_now_fire():
+    src = ("import marshal\nimport pickle\n"
+           "from xml.dom import pulldom\n"
+           "from xml.etree import ElementTree as ET\n"
+           "import xml.sax\n"
+           "def a(f):\n    return marshal.load(f)\n"
+           "def b(f):\n    return pickle.Unpickler(f).load()\n"
+           "def c(s):\n    return pulldom.parseString(s)\n"
+           "def d(s):\n    return ET.fromstring(s)\n"
+           "def e(s):\n    return xml.sax.parseString(s, None)\n")
+    codes = _codes(src)
+    assert codes.count("E0720") == 2, f"marshal.load + Unpickler: {codes}"
+    assert codes.count("E0727") == 3, f"pulldom + ET alias + xml.sax: {codes}"
+    print("recall: all five oracle-confirmed misses now fire")
+
+
+def test_chained_module_path_resolves():
+    """`import xml.sax` + `xml.sax.parseString(...)` arrives as
+    Attribute(Attribute(Name)). Resolving one level returned the bare
+    method name, so the dotted table never matched - while the
+    `from xml.dom import minidom` spelling of the same sink matched fine.
+
+    Also pins the substitution bug found while fixing it: `import xml.sax`
+    binds the ROOT name, so alias_to_path["xml"] is "xml.sax" and naive
+    substitution produced "xml.sax.sax.parseString"."""
+    from tools.py_frontend import _callee_spelling, _Imports
+    import ast as pyast
+    imp = _Imports()
+    tree = pyast.parse("import xml.sax\nimport numpy as np\n"
+                       "xml.sax.parseString(s)\nnp.linalg.norm(v)\n")
+    for n in tree.body:
+        if isinstance(n, pyast.Import):
+            imp.add_import(n)
+    calls = [n for n in pyast.walk(tree) if isinstance(n, pyast.Call)]
+    assert _callee_spelling(calls[0].func, imp) == "xml.sax.parseString", \
+        _callee_spelling(calls[0].func, imp)
+    assert _callee_spelling(calls[1].func, imp) == "numpy.linalg.norm", \
+        _callee_spelling(calls[1].func, imp)
+    print("recall: chained module paths resolve, aliases still substitute")
+
+
 def test_pypi_scan_row_set_matches_cli():
     """The PyPI scan claims to measure exactly what `check-py` prints. If
     the CLI's row set drifts, the scan's headline number silently stops
@@ -535,6 +581,8 @@ if __name__ == "__main__":
     test_safe_loader_bound_elsewhere_is_clean()
     test_rebound_loader_is_still_a_sink()
     test_shell_false_bound_elsewhere_is_clean()
+    test_recall_gap_shapes_now_fire()
+    test_chained_module_path_resolves()
     test_pypi_scan_row_set_matches_cli()
     test_unmapped_call_cannot_collide_with_an_aether_sink_name()
     test_real_mapped_sinks_still_fire_after_prefixing()

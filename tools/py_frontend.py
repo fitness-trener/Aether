@@ -133,6 +133,19 @@ SINK_BY_QUALIFIED: Dict[str, str] = {
     "os.system": "shellExec", "os.popen": "shellExec",
     "pickle.loads": "deserialize", "pickle.load": "deserialize",
     "marshal.loads": "deserialize", "shelve.open": "deserialize",
+    # Added after the bandit-oracle recall run (bench/pypi_scan/run_recall.py)
+    # confirmed each of these as a MISS on real PyPI code. Only shapes the
+    # oracle actually flagged were added - no speculative rows.
+    "marshal.load": "deserialize",        # B302: .load, not just .loads
+    "pickle.Unpickler": "deserialize",    # B301: the constructor form
+    "xml.dom.pulldom.parse": "parseXml",      # B319
+    "xml.dom.pulldom.parseString": "parseXml",
+    "xml.sax.parse": "parseXml",              # B317
+    "xml.sax.parseString": "parseXml",
+    "xml.dom.expatbuilder.parse": "parseXml",         # B316
+    "xml.dom.expatbuilder.parseString": "parseXml",
+    "xml.etree.cElementTree.fromstring": "parseXml",  # B313
+    "xml.etree.cElementTree.parse": "parseXml",
     "flask.render_template_string": "renderTemplate",
     "jinja2.Template": "renderTemplate",
     "django.template.Template": "renderTemplate",
@@ -630,6 +643,29 @@ def _callee_spelling(func: Any, imp: "_Imports") -> Optional[str]:
     if isinstance(func, _pyast.Attribute):
         if isinstance(func.value, _pyast.Name):
             return imp.resolve_attr(func.value.id, func.attr) or func.attr
+        if isinstance(func.value, _pyast.Attribute):
+            # Chained module path: `import xml.sax` + `xml.sax.parseString(...)`
+            # arrives as Attribute(Attribute(Name)). Resolving only one level
+            # returned the bare method name, so the dotted entry never
+            # matched — `xml.sax.parseString` was a confirmed MISS in the
+            # bandit-oracle run while the `from xml.dom import minidom` form
+            # of the same sink matched fine. Mirrors _FnVisitor._flatten_attr,
+            # which the capability side has always done.
+            parts, cur = [], func
+            while isinstance(cur, _pyast.Attribute):
+                parts.append(cur.attr)
+                cur = cur.value
+            if isinstance(cur, _pyast.Name):
+                base = imp.alias_to_path.get(cur.id, cur.id)
+                # `import xml.sax` binds the ROOT name: alias_to_path["xml"]
+                # is "xml.sax". Substituting there would yield
+                # "xml.sax.sax.parseString". Substitute only for a real
+                # rename (`import numpy as np`), where the bound name is not
+                # the path's own root.
+                if _module_root(base) == cur.id:
+                    base = cur.id
+                parts.append(base)
+                return ".".join(reversed(parts))
         return func.attr
     return None
 
