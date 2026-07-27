@@ -588,12 +588,23 @@ def _call_expr(node: _pyast.Call, imp: "_Imports",
     """A Python call as an Aether Call node, named so the existing
     detectors recognize it: the Aether SINK name when it maps to one, the
     Aether WRAPPER name when it is a sanctioned exit, otherwise its Python
-    spelling (which matches neither, so an argument that is one of these
-    calls is refused — the flag-more direction)."""
+    spelling under a `py:` prefix (which matches neither, so an argument
+    that is one of these calls is refused — the flag-more direction).
+
+    The prefix is load-bearing. Without it the raw Python spelling shares
+    a namespace with Aether's sink names, and any method that happens to
+    be spelled like one becomes a sink WITHOUT passing through the
+    mapping table: `self.redirect(uri)` fired E0718 and
+    `self.renderTemplate(x)` fired E0719 on that collision alone. Found
+    by the PyPI scan (`bench/pypi_scan/`), where it accounted for most of
+    tornado's and websockets' E0718 hits. It over-flags rather than
+    misses, so it is not a soundness bug — but an unmapped, unaudited
+    sink is invisible to `mapping_table()`, which is exactly what the
+    auditable-surface design exists to prevent."""
     dotted = _callee_spelling(node.func, imp)
     name = (_sink_name(node, imp, safe_xml, resolver)
             or SANITIZER_BY_QUALIFIED.get(dotted or "")
-            or dotted or "<expr>")
+            or ("py:" + dotted if dotted else "<expr>"))
     out: Dict[str, Any] = {"kind": "Call",
                            "func": {"kind": "Ident", "name": name},
                            "args": [_expr(a, imp, safe_xml, resolver) for a in node.args],

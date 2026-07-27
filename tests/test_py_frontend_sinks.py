@@ -398,6 +398,55 @@ def test_shell_false_bound_elsewhere_is_clean():
     print("guard: shell=False bound elsewhere resolves clean")
 
 
+def test_pypi_scan_row_set_matches_cli():
+    """The PyPI scan claims to measure exactly what `check-py` prints. If
+    the CLI's row set drifts, the scan's headline number silently stops
+    describing the shipped tool."""
+    import importlib.util
+    from transpiler.aether import cli
+    spec = importlib.util.spec_from_file_location(
+        "pypi_scan", os.path.join(ROOT, "bench", "pypi_scan", "run_scan.py"))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    assert m.SKIP_STRICT == cli._PY_SKIP_STAGES, \
+        f"scan {m.SKIP_STRICT} vs cli {cli._PY_SKIP_STAGES}"
+    assert m.SKIP_DEFAULT == cli._PY_SKIP_STAGES + ("capability",), \
+        f"scan default stages drifted: {m.SKIP_DEFAULT}"
+    assert m.STRICT_ONLY == cli._PY_STRICT_ONLY_CODES, \
+        f"scan {m.STRICT_ONLY} vs cli {cli._PY_STRICT_ONLY_CODES}"
+    print("scan: row set matches the CLI's")
+
+
+def test_unmapped_call_cannot_collide_with_an_aether_sink_name():
+    """An unmapped Python call keeps its spelling under a `py:` prefix, so
+    a method merely SPELLED like an Aether sink cannot become one without
+    passing through the mapping table. Found by the PyPI scan: before the
+    prefix, `self.redirect(uri)` fired E0718 and `self.renderTemplate(x)`
+    fired E0719 on the name collision alone."""
+    src = ("class H:\n"
+           "    def go(self, uri):\n"
+           "        self.redirect(uri)\n"
+           "    def w(self, x):\n"
+           "        self.renderTemplate(x)\n"
+           "    def d(self, b):\n"
+           "        self.deserialize(b)\n")
+    codes = _codes(src)
+    assert codes == [], \
+        f"a name collision must not create an unmapped sink: {codes}"
+    print("sinks: unmapped calls cannot collide with Aether sink names")
+
+
+def test_real_mapped_sinks_still_fire_after_prefixing():
+    """The prefix must not cost a mapped sink. Control for the test above."""
+    src = ("import os\nfrom flask import redirect\n"
+           "def a(cmd):\n    os.system('sh ' + cmd)\n"
+           "def b(nxt):\n    redirect(nxt)\n")
+    codes = _codes(src)
+    assert "E0714" in codes and "E0718" in codes, \
+        f"mapped sinks must still fire: {codes}"
+    print("sinks: mapped sinks unaffected by the py: prefix")
+
+
 # --- CLI ----------------------------------------------------------------
 # `_emit_error` writes diagnostics to STDERR and the summary to STDOUT,
 # so these assert against the combined output.
@@ -486,6 +535,9 @@ if __name__ == "__main__":
     test_safe_loader_bound_elsewhere_is_clean()
     test_rebound_loader_is_still_a_sink()
     test_shell_false_bound_elsewhere_is_clean()
+    test_pypi_scan_row_set_matches_cli()
+    test_unmapped_call_cannot_collide_with_an_aether_sink_name()
+    test_real_mapped_sinks_still_fire_after_prefixing()
     test_check_py_cli_reports_and_exits_2()
     test_check_py_clean_exits_0()
     test_e0711_is_held_back_by_default()
