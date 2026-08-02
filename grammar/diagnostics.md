@@ -439,3 +439,36 @@ everything else is counted `skipped` in the `prove:` summary and keeps
 runtime checks. A function whose `requires` clauses or param
 refinements do not translate is skipped entirely — dropping an
 assumption would fabricate spurious counterexamples.
+
+---
+
+## Risk ratings (the triage axis)
+
+Every code carries a second, orthogonal rating in
+`transpiler/aether/risk.py`: a **risk** of `critical`, `high`, `medium`,
+`low` or `info`.
+
+- **`severity`** (on the `Diagnostic` itself) answers *does the run
+  fail?* — `error` refuses the program, `warning` does not.
+- **`risk`** answers *what does a reviewer read first?* — it ranks a
+  finding against the other findings in a scan.
+
+The two are independent: a parse error is `severity: error` (the
+compiler refuses it) and `risk: info` (it is not a security finding).
+
+A rating is a **triage heuristic about the class**, fixed per code — the
+blast radius a violation of that class typically carries. It is not
+CVSS, is not computed per finding, and must not be presented as a
+measurement of a specific bug's impact.
+
+Ratings are consumed by `tools/scan.py`:
+
+- findings sort worst-first, then by line;
+- `--min-risk <rating>` reports only findings at or above a floor;
+- SARIF maps `critical`/`high` → `level: error`, `medium` → `warning`,
+  `low`/`info` → `note`, and sets each rule's `security-severity`
+  property (critical 9.0, high 7.0, medium 5.0, low 3.0, info 1.0) so
+  GitHub Code Scanning ranks them.
+
+`tests/test_risk.py` fails if any emitted code lacks a rating, or if the
+table rates a code the tree never emits.
