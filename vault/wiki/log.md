@@ -1,5 +1,22 @@
 # Operation Log (append-only — newest on top)
 
+## [2026-08-02] Q6 added | risk vs severity, the two-axes design point
+- **Iteration 46 shipped no detector.** `transpiler/aether/risk.py` added
+  a code→rating table (critical/high/medium/low/info) read only at output
+  time by `tools/scan.py` — sort order, `--min-risk`, and SARIF
+  `security-severity`. The ratchet stayed at 54 codes / 30 detectors.
+- **The settled design point that must not be re-litigated:** `severity`
+  on `Diagnostic` is the gate axis (`error` fails the run, `warning`
+  does not — load-bearing in `transpiler/aether/passes/__init__.py`);
+  `risk` is a separate triage axis with no effect on the gate. Recorded
+  as [[questions/q6-risk-vs-severity-two-axes|q6]] so a future pass does
+  not collapse the two and either silently weaken the gate or wreck
+  SARIF ranking.
+- **Residual carried forward:** ratings are per-code, not per-finding;
+  `Diagnostic.confidence` is the unused per-finding axis, constant `1.0`
+  at all 30 detectors. q6's Residual section and the LOOP_LOG "TYPE gap
+  surfaced for next iter" both point the same way.
+
 ## [2026-07-26] Q5 extended | the rule covers VALUES, and three false accepts
 - **The residual turned out to be a soundness bug.** Q5 filed
   "guard bound elsewhere" as a precision item. Probing it found **three

@@ -1550,6 +1550,40 @@ State carried forward: the full gate suite must stay green
 
 ---
 
+## Iteration 46 — risk ratings: the triage axis (no new detector)
+
+- **Target:** not a violation class. The product gap the phase-2 scans
+  exposed: 54 codes, every one `severity="error"` and every SARIF result
+  `level: error`, so a corpus scan returns an unordered wall.
+- **Source of the idea:** nuclei's template `severity:` field — five
+  levels, filterable at the CLI, carried into SARIF. The reason nuclei's
+  output survives thousands of hits.
+- **Gap confirmed:** `tools/scan.py` hardcoded `"level": "error"` and
+  stripped everything but code/message/line off each finding.
+- **Improvement:** `transpiler/aether/risk.py` — one code→rating table
+  (critical/high/medium/low/info), read only at output time. Findings
+  sort worst-first, `--min-risk` filters, SARIF maps level and sets
+  `security-severity` so Code Scanning ranks. `tests/test_risk.py` fails
+  on an unrated code or a phantom one.
+  - Review caught that `--min-risk` combined with `--expect` would
+    filter a declared code out before the expectation diff ran, so a
+    filtered-but-still-present code would report as a regressed
+    detector; the combination is refused as a usage error (exit 2)
+    instead.
+- **Ratchet:** unchanged (54 codes / 30 detectors) — no detector shipped.
+- **Design point recorded:** why two axes, not one —
+  `vault/wiki/questions/q6-risk-vs-severity-two-axes.md`.
+- **TYPE gap surfaced for next iter:** risk is per-CODE, so it cannot
+  separate a reachable E0713 from an unreachable one. `Diagnostic.
+  confidence` is a constant `1.0` at all 30 detectors and is the unused
+  half of the triage story — a per-FINDING axis needs something the
+  detectors actually vary (e.g. whether taint reached the sink through a
+  resolved local vs. an unresolvable one, the `_local_constants`
+  distinction iteration 45 already computes).
+- **Suite:** exit 0.
+
+---
+
 ## Next-iteration checklist (for the loop)
 
 1. Read the previous report's "TYPE gap for next iter".

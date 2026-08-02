@@ -32,6 +32,7 @@ query — start here, follow links.
 - [[questions/q3-what-makes-a-good-backlog-target|Q3]] — the loop's target-selection heuristic (reuse × prevalence ÷ new machinery)
 - [[questions/q4-formal-methods-adoption-filter|Q4]] — which formal-methods/PLT concepts to adopt vs park (3 shipped, 1 next upgrade, 2 candidates, 5 traps)
 - [[questions/q5-sink-matching-vs-purity-matching|Q5]] — why matching SINKS by method name is legitimate where matching PURITY by name was unsound (the direction of the error), and the measured cost
+- [[questions/q6-risk-vs-severity-two-axes|Q6]] — why Aether carries two severity-like axes (gate vs triage) instead of one, and the unused per-finding confidence residual
 
 ## Concepts (`wiki/concepts/`)
 - _none yet — decisions beyond sources go here_

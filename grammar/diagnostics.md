@@ -464,7 +464,9 @@ measurement of a specific bug's impact.
 Ratings are consumed by `tools/scan.py`:
 
 - findings sort worst-first, then by line;
-- `--min-risk <rating>` reports only findings at or above a floor;
+- `--min-risk <rating>` reports only findings at or above a floor, and is
+  refused together with `--expect` (exit 2) since a filtered-out
+  declared code would otherwise read as a regressed detector;
 - SARIF maps `critical`/`high` → `level: error`, `medium` → `warning`,
   `low`/`info` → `note`, and sets each rule's `security-severity`
   property (critical 9.0, high 7.0, medium 5.0, low 3.0, info 1.0) so
