@@ -9,7 +9,7 @@ This is the product shape of Aether's phase-2 story: not "model a known
 CVE", but "scan real code and surface real issues".
 
 Usage:
-    python -m tools.scan <dir-or-file>... [--json|--sarif] [--expect]
+    python -m tools.scan <dir-or-file>... [--json|--sarif] [--expect] [--min-risk RATING]
 
 Exit code: 0 if no findings, 1 if any file has findings, 2 on usage error.
 Parse errors (E0201) are reported separately as generation failures, not
@@ -46,6 +46,7 @@ from aether.parser import parse                        # noqa: E402
 from aether.diagnostics import AetherError             # noqa: E402
 from aether.passes import analyze_flat                 # noqa: E402
 from tools.expectations import parse_header            # noqa: E402
+from aether.risk import risk_of, rank, at_or_above, ORDER   # noqa: E402
 
 
 def _rel(path: str) -> str:
@@ -71,9 +72,13 @@ def scan_file(path: str) -> dict:
     except AetherError as e:
         # Generation failure — invalid syntax. Reported separately.
         return {"path": path, "parse_error": str(e), "findings": []}
-    findings = [{"code": d.code, "message": d.message, "line": d.position.line}
+    findings = [{"code": d.code, "message": d.message,
+                 "line": d.position.line, "risk": risk_of(d.code)}
                 for d in analyze_flat(ast)]
-    findings.sort(key=lambda x: (x["line"], x["code"]))
+    # Worst-first: a reviewer reading only the top of a 4,000-finding
+    # scan must be reading the critical ones. Line/code break ties so
+    # output stays deterministic (tests/test_deterministic.py).
+    findings.sort(key=lambda x: (-rank(x["code"]), x["line"], x["code"]))
     declared, _run = parse_header(src, path)
     return {"path": path, "findings": findings, "declared": declared}
 
@@ -131,16 +136,39 @@ def to_sarif(results: list) -> dict:
 
 
 def main(argv) -> int:
-    args = [a for a in argv if not a.startswith("--")]
     as_json = "--json" in argv
     as_sarif = "--sarif" in argv
     expect = "--expect" in argv
+
+    # `--min-risk <rating>` takes a value, so its argument must not be
+    # mistaken for a scan target.
+    min_risk = "info"
+    args, skip = [], False
+    for i, a in enumerate(argv):
+        if skip:
+            skip = False
+            continue
+        if a == "--min-risk":
+            if i + 1 >= len(argv):
+                sys.stderr.write("--min-risk needs a rating\n")
+                return 2
+            min_risk, skip = argv[i + 1], True
+        elif not a.startswith("--"):
+            args.append(a)
+    if min_risk not in ORDER:
+        sys.stderr.write(f"unknown --min-risk {min_risk!r}; "
+                         f"expected one of {', '.join(sorted(ORDER))}\n")
+        return 2
     if not args:
         sys.stderr.write("usage: python -m tools.scan <dir-or-file>... "
-                         "[--json|--sarif] [--expect]\n")
+                         "[--json|--sarif] [--expect] [--min-risk RATING]\n")
         return 2
     files = sorted({p for a in args for p in _files(a)})
     results = [scan_file(p) for p in files]
+    if min_risk != "info":
+        results = [dict(r, findings=[f for f in r["findings"]
+                                     if at_or_above(f["code"], min_risk)])
+                   for r in results]
 
     parse_errs = [r for r in results if r.get("parse_error")]
     if not expect:
@@ -176,7 +204,8 @@ def main(argv) -> int:
         for r in with_find:
             print(f"\n{_rel(r['path'])}")
             for f in r["findings"]:
-                print(f"  L{f['line']:>4}  {f['code']}  {f['message'][:90]}")
+                print(f"  L{f['line']:>4}  {f['risk']:<8} {f['code']}  "
+                      f"{f['message'][:80]}")
                 by_code[f["code"]] = by_code.get(f["code"], 0) + 1
         if expect:
             for p, m in missing:
@@ -199,6 +228,14 @@ def main(argv) -> int:
         if by_code:
             print(("unexpected " if expect else "findings ") + "by code: "
                   + ", ".join(f"{c}×{n}" for c, n in sorted(by_code.items())))
+        if by_code:
+            by_risk: dict = {}
+            for r in with_find:
+                for f in r["findings"]:
+                    by_risk[f["risk"]] = by_risk.get(f["risk"], 0) + 1
+            print("by risk: " + ", ".join(
+                f"{lvl}×{by_risk[lvl]}"
+                for lvl in sorted(by_risk, key=lambda l: -ORDER[l])))
     return 1 if failed else 0
 
 

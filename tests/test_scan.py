@@ -8,6 +8,7 @@ Run: python3 tests/test_scan.py   (exit 0 = pass)
 """
 from __future__ import annotations
 import io
+import json
 import os
 import sys
 from collections import Counter
@@ -106,6 +107,65 @@ def test_expect_mode_clean_over_the_corpus():
     print("scan: --expect is green over the whole expectation corpus")
 
 
+def test_findings_carry_risk_and_sort_worst_first():
+    p = os.path.join(ROOT, "demos", "case_studies", "sql_injection",
+                     "aether", "vulnerable.aeth")
+    r = scan.scan_file(p)
+    assert r["findings"], "expected findings on the vulnerable demo"
+    for f in r["findings"]:
+        assert f["risk"] in ("critical", "high", "medium", "low", "info"), f
+    ranks = [scan.rank(f["code"]) for f in r["findings"]]
+    assert ranks == sorted(ranks, reverse=True), (
+        f"findings must sort worst-first, got {ranks}")
+    assert r["findings"][0]["risk"] == "critical", (
+        f"E0713 is critical and must lead: {r['findings'][0]}")
+    print("scan: findings carry risk and sort worst-first")
+
+
+def test_min_risk_filters_out_lower_ratings():
+    # E0718 (open redirect) is rated medium; E0713 (SQLi) is critical.
+    # A `critical` floor must keep the second and drop the first.
+    medium = os.path.join(ROOT, "demos", "case_studies", "open_redirect",
+                          "aether", "vulnerable.aeth")
+    critical = os.path.join(ROOT, "demos", "case_studies", "sql_injection",
+                            "aether", "vulnerable.aeth")
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = scan.main([medium, critical, "--json", "--min-risk", "critical"])
+    out = json.loads(buf.getvalue())
+    codes = {f["code"] for r in out["results"] for f in r["findings"]}
+    assert codes == {"E0713"}, (
+        f"--min-risk critical should drop the medium E0718: {codes}")
+    assert rc == 1, rc
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = scan.main([medium, "--json", "--min-risk", "critical"])
+    out = json.loads(buf.getvalue())
+    assert out["files_with_findings"] == 0, out
+    assert rc == 0, "no findings at or above the floor means exit 0"
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = scan.main([medium, "--json", "--min-risk", "medium"])
+    out = json.loads(buf.getvalue())
+    codes = {f["code"] for r in out["results"] for f in r["findings"]}
+    assert codes == {"E0718"}, f"a medium floor keeps a medium: {codes}"
+    assert rc == 1, rc
+    print("scan: --min-risk filters and gates on the floor")
+
+
+def test_bad_min_risk_is_a_usage_error():
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = scan.main([os.path.join(ROOT, "reference", "01_hello",
+                                     "program.aeth"),
+                        "--min-risk", "catastrophic"])
+    assert rc == 2, f"unknown rating must be a usage error, got {rc}"
+    print("scan: unknown --min-risk value is a usage error")
+
+
 if __name__ == "__main__":
     test_clean_file_no_findings()
     test_vulnerable_file_flagged()
@@ -113,4 +173,7 @@ if __name__ == "__main__":
     test_sarif_output_wellformed()
     test_expect_mode_gates_on_the_difference()
     test_expect_mode_clean_over_the_corpus()
+    test_findings_carry_risk_and_sort_worst_first()
+    test_min_risk_filters_out_lower_ratings()
+    test_bad_min_risk_is_a_usage_error()
     print("SCAN TOOL: all tests pass")
