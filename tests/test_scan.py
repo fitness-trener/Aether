@@ -183,6 +183,30 @@ def test_min_risk_with_expect_is_a_usage_error():
     print("scan: --min-risk with --expect is refused")
 
 
+def test_sarif_carries_risk_metadata():
+    p = os.path.join(ROOT, "demos", "case_studies", "sql_injection",
+                     "aether", "vulnerable.aeth")
+    doc = scan.to_sarif([scan.scan_file(p)])
+    run = doc["runs"][0]
+    rule = next(r for r in run["tool"]["driver"]["rules"]
+                if r["id"] == "E0713")
+    # GitHub Code Scanning reads security-severity as a STRING.
+    assert rule["properties"]["security-severity"] == "9.0", rule
+    assert "critical" in rule["properties"]["tags"], rule
+    res = next(r for r in run["results"] if r["ruleId"] == "E0713")
+    assert res["level"] == "error", res
+    print("scan: SARIF carries security-severity, tags and mapped level")
+
+
+def test_sarif_level_maps_below_high_to_warning_and_note():
+    assert scan._sarif_level("critical") == "error"
+    assert scan._sarif_level("high") == "error"
+    assert scan._sarif_level("medium") == "warning"
+    assert scan._sarif_level("low") == "note"
+    assert scan._sarif_level("info") == "note"
+    print("scan: SARIF level mapping covers all five ratings")
+
+
 if __name__ == "__main__":
     test_clean_file_no_findings()
     test_vulnerable_file_flagged()
@@ -194,4 +218,6 @@ if __name__ == "__main__":
     test_min_risk_filters_out_lower_ratings()
     test_bad_min_risk_is_a_usage_error()
     test_min_risk_with_expect_is_a_usage_error()
+    test_sarif_carries_risk_metadata()
+    test_sarif_level_maps_below_high_to_warning_and_note()
     print("SCAN TOOL: all tests pass")

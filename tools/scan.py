@@ -46,7 +46,8 @@ from aether.parser import parse                        # noqa: E402
 from aether.diagnostics import AetherError             # noqa: E402
 from aether.passes import analyze_flat                 # noqa: E402
 from tools.expectations import parse_header            # noqa: E402
-from aether.risk import risk_of, rank, at_or_above, ORDER   # noqa: E402
+from aether.risk import (risk_of, rank, at_or_above, ORDER,   # noqa: E402
+                         SECURITY_SEVERITY)
 
 
 def _rel(path: str) -> str:
@@ -103,6 +104,14 @@ def diff_expected(result: dict) -> dict:
             "missing": sorted((declared - actual).items())}
 
 
+def _sarif_level(risk: str) -> str:
+    """SARIF has three levels; risk has five. critical/high are the ones
+    that should break a Code Scanning gate, medium warns, the rest are
+    notes."""
+    return {"critical": "error", "high": "error",
+            "medium": "warning"}.get(risk, "note")
+
+
 def to_sarif(results: list) -> dict:
     """Render findings as SARIF v2.1.0 — the format GitHub Code Scanning,
     VS Code, and most CI security dashboards ingest. This is how Aether
@@ -113,13 +122,26 @@ def to_sarif(results: list) -> dict:
         for f in r["findings"]:
             sarif_results.append({
                 "ruleId": f["code"],
-                "level": "error",
+                "level": _sarif_level(risk_of(f["code"])),
                 "message": {"text": f["message"]},
                 "locations": [{"physicalLocation": {
                     "artifactLocation": {"uri": _rel(r["path"])},
                     "region": {"startLine": max(1, f["line"])},
                 }}],
             })
+    rules = []
+    for rid in rule_ids:
+        risk = risk_of(rid)
+        rules.append({
+            "id": rid,
+            "shortDescription": {"text": rid},
+            "properties": {
+                # Code Scanning parses this as a string, and ranks
+                # >=9.0 critical, >=7.0 high, >=4.0 medium.
+                "security-severity": str(SECURITY_SEVERITY[risk]),
+                "tags": ["security", "aether", risk],
+            },
+        })
     return {
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
         "version": "2.1.0",
@@ -127,8 +149,7 @@ def to_sarif(results: list) -> dict:
             "tool": {"driver": {
                 "name": "aether-scan",
                 "informationUri": "https://github.com/aether-lang/aether",
-                "rules": [{"id": rid,
-                           "shortDescription": {"text": rid}} for rid in rule_ids],
+                "rules": rules,
             }},
             "results": sarif_results,
         }],
