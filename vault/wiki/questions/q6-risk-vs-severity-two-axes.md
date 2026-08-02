@@ -36,13 +36,6 @@ any specific finding's impact.
   `tests/test_risk.py` enforces it.
 - Do not present a rating as CVSS in any report or README.
 
-## Related
-- [[../clusters/violation-taxonomy]] — the class each rating rates
-- [[q3-what-makes-a-good-backlog-target]] — target selection, the other
-  place a per-class judgement is made
-- [[q1-taint-marker-soundness-boundary]] — the residual below is a
-  precision limit of the same shape
-
 ## Residual
 Ratings are per **code**, so every E0713 ranks identically whether the
 tainted value arrives from a request handler or a test fixture. The
@@ -51,3 +44,10 @@ the constant `1.0` at all 30 detectors. Varying it needs something the
 detectors actually compute — for example iteration 45's
 `_local_constants` distinction between a resolved local and an
 unresolvable one.
+
+## Related
+- [[../clusters/violation-taxonomy]] — the class each rating rates
+- [[q3-what-makes-a-good-backlog-target]] — target selection, the other
+  place a per-class judgement is made
+- [[q1-taint-marker-soundness-boundary]] — the residual above is a
+  precision limit of the same shape
