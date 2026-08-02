@@ -139,7 +139,7 @@ def to_sarif(results: list) -> dict:
                 # Code Scanning parses this as a string, and ranks
                 # >=9.0 critical, >=7.0 high, >=4.0 medium.
                 "security-severity": str(SECURITY_SEVERITY[risk]),
-                "tags": ["security", "aether", risk],
+                "tags": (["security"] if risk != "info" else []) + ["aether", risk],
             },
         })
     return {
@@ -174,6 +174,8 @@ def main(argv) -> int:
                 sys.stderr.write("--min-risk needs a rating\n")
                 return 2
             min_risk, skip = argv[i + 1], True
+        elif a.startswith("--min-risk="):
+            min_risk = a.split("=", 1)[1]
         elif not a.startswith("--"):
             args.append(a)
     if min_risk not in ORDER:
@@ -256,7 +258,6 @@ def main(argv) -> int:
         if by_code:
             print(("unexpected " if expect else "findings ") + "by code: "
                   + ", ".join(f"{c}×{n}" for c, n in sorted(by_code.items())))
-        if by_code:
             by_risk: dict = {}
             for r in with_find:
                 for f in r["findings"]:

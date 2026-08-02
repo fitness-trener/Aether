@@ -156,6 +156,25 @@ def test_min_risk_filters_out_lower_ratings():
     print("scan: --min-risk filters and gates on the floor")
 
 
+def test_min_risk_equals_form_filters():
+    # `--min-risk=critical` (the equals form) must filter exactly like
+    # the two-token `--min-risk critical` form, not silently fall through
+    # to an unfiltered scan.
+    medium = os.path.join(ROOT, "demos", "case_studies", "open_redirect",
+                          "aether", "vulnerable.aeth")
+    critical = os.path.join(ROOT, "demos", "case_studies", "sql_injection",
+                            "aether", "vulnerable.aeth")
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = scan.main([medium, critical, "--json", "--min-risk=critical"])
+    out = json.loads(buf.getvalue())
+    codes = {f["code"] for r in out["results"] for f in r["findings"]}
+    assert codes == {"E0713"}, (
+        f"--min-risk=critical should drop the medium E0718: {codes}")
+    assert rc == 1, rc
+    print("scan: --min-risk=critical (equals form) filters")
+
+
 def test_bad_min_risk_is_a_usage_error():
     buf = io.StringIO()
     with redirect_stdout(buf):
@@ -195,6 +214,16 @@ def test_sarif_carries_risk_metadata():
     assert "critical" in rule["properties"]["tags"], rule
     res = next(r for r in run["results"] if r["ruleId"] == "E0713")
     assert res["level"] == "error", res
+
+    # An info-rated code (E0201 — parse error) must NOT be tagged
+    # "security": GitHub only honours security-severity on rules tagged
+    # security, and non-security codes must not land in Code Scanning.
+    fake = [{"path": __file__,
+             "findings": [{"code": "E0201", "message": "m", "line": 1,
+                           "risk": "info"}]}]
+    info_rule = scan.to_sarif(fake)["runs"][0]["tool"]["driver"]["rules"][0]
+    assert "security" not in info_rule["properties"]["tags"], info_rule
+    assert info_rule["properties"]["tags"] == ["aether", "info"], info_rule
     print("scan: SARIF carries security-severity, tags and mapped level")
 
 
@@ -216,6 +245,7 @@ if __name__ == "__main__":
     test_expect_mode_clean_over_the_corpus()
     test_findings_carry_risk_and_sort_worst_first()
     test_min_risk_filters_out_lower_ratings()
+    test_min_risk_equals_form_filters()
     test_bad_min_risk_is_a_usage_error()
     test_min_risk_with_expect_is_a_usage_error()
     test_sarif_carries_risk_metadata()

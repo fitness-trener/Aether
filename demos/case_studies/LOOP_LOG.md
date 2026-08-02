@@ -1553,8 +1553,9 @@ State carried forward: the full gate suite must stay green
 ## Iteration 46 — risk ratings: the triage axis (no new detector)
 
 - **Target:** not a violation class. The product gap the phase-2 scans
-  exposed: 54 codes, every one `severity="error"` and every SARIF result
-  `level: error`, so a corpus scan returns an unordered wall.
+  exposed: 53 of the 54 codes are `severity="error"` (the SMT timeout
+  `E0902` is the sole `warning`), and every SARIF result is hardcoded to
+  `level: error` regardless, so a corpus scan returns an unordered wall.
 - **Source of the idea:** nuclei's template `severity:` field — five
   levels, filterable at the CLI, carried into SARIF. The reason nuclei's
   output survives thousands of hits.
@@ -1580,6 +1581,10 @@ State carried forward: the full gate suite must stay green
   detectors actually vary (e.g. whether taint reached the sink through a
   resolved local vs. an unresolvable one, the `_local_constants`
   distinction iteration 45 already computes).
+  - This residual is recorded in the question page that owns it —
+    `vault/wiki/questions/q6-risk-vs-severity-two-axes.md` — rather than
+    unconditionally in q1, because it is a triage-granularity limit, not
+    a taint-marker soundness boundary.
 - **Suite:** exit 0.
 
 ---

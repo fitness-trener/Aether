@@ -60,6 +60,9 @@ RISK = {
     "E0305": "medium",
 
     # --- runtime effect (E05xx) -------------------------------------
+    # medium, not high like their static sibling E0801: these fire during
+    # execution and can never reach a tools/scan.py report; E0801 is the
+    # static face that a scan can actually surface.
     "E0501": "medium", "E0502": "medium",
 
     # --- harness timeout (E06xx) ------------------------------------
@@ -73,7 +76,11 @@ RISK = {
 
     # --- security detectors (E071x-E073x) ---------------------------
     "E0710": "high",       # SSRF, unpinned fetch scope (CWE-918)
-    "E0711": "high",       # path traversal / Zip-Slip (CWE-22)
+    "E0711": "high",       # path traversal / Zip-Slip (CWE-22) — not
+                           # critical: the read half dominates in
+                           # practice; the write half (writeFile,
+                           # attacker-steerable arbitrary write) is why
+                           # it is not medium either
     "E0712": "high",       # secret exfil to log/disk (CWE-532)
     "E0713": "critical",   # SQL injection (CWE-89)
     "E0714": "critical",   # command injection -> RCE (CWE-78)
@@ -83,7 +90,12 @@ RISK = {
     "E0718": "medium",     # open redirect (CWE-601) — phishing pivot
     "E0719": "critical",   # SSTI -> RCE (CWE-94)
     "E0720": "critical",   # insecure deserialization -> RCE (CWE-502)
-    "E0721": "medium",     # cleartext transmission (CWE-319)
+    "E0721": "medium",     # cleartext transmission (CWE-319) — a
+                           # scheme/config signal on the effect
+                           # annotation (channel is cleartext), not proof
+                           # anything sensitive crosses it, unlike
+                           # E0710/E0722's reachable attacker-steerable
+                           # target; deliberate, not an oversight
     "E0722": "critical",   # SSRF to IMDS -> IAM credential theft
     "E0723": "critical",   # hardcoded credential (CWE-798)
     "E0724": "medium",     # log injection / forging (CWE-117)

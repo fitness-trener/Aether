@@ -12,7 +12,7 @@ last_updated: 2026-08-02
 `Diagnostic.severity` is a **gate** decision: it answers "does this run
 fail?", and `transpiler/aether/passes/__init__.py` depends on its current
 values — a pass `where severity == "warning"` must not fail the run
-`[source: diagnostics, section: catalog, key: severity]`. **Risk** is a
+(`transpiler/aether/passes/__init__.py:18`). **Risk** is a
 **triage** ordering: it answers "which of 4,000 findings do I read
 first?". Collapsing them costs one of the two: either a `low` finding
 stops failing the build — a weakening the monotonic ratchet cannot see,
@@ -24,7 +24,7 @@ any specific finding's impact.
 ## Evidence
 | Finding | Evidence | Confidence |
 |---|---|---|
-| Before this iteration every code was flat | all 30 detectors construct with `severity="error"`; `tools/scan.py`'s `to_sarif` hardcoded `"level": "error"` | high |
+| Before this iteration every detector was flat | all 30 detectors construct with `severity="error"`; `tools/scan.py`'s `to_sarif` hardcoded `"level": "error"` | high |
 | The gate axis is load-bearing | `transpiler/aether/passes/__init__.py` documents that `severity == "warning"` must not fail the run | high |
 | The triage axis is free of the gate | `transpiler/aether/risk.py` is read only by output layers; no detector and no `Diagnostic` construction site changed, and the ratchet stayed at 54 codes / 30 detectors | high |
 | The vocabulary is not invented | five levels (info/low/medium/high/critical) and the SARIF `security-severity` property are what GitHub Code Scanning already consumes | high |
