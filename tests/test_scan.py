@@ -166,6 +166,23 @@ def test_bad_min_risk_is_a_usage_error():
     print("scan: unknown --min-risk value is a usage error")
 
 
+def test_min_risk_with_expect_is_a_usage_error():
+    p = os.path.join(ROOT, "demos", "case_studies", "open_redirect",
+                     "aether", "vulnerable.aeth")
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = scan.main([p, "--expect", "--min-risk", "high"])
+    assert rc == 2, (
+        f"--min-risk with --expect must be refused, got {rc}: a filtered "
+        f"declared code would read as a regressed detector")
+    # The default floor is not a filter, so --expect alone still works.
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = scan.main([p, "--expect", "--json"])
+    assert rc in (0, 1), f"--expect alone must still run, got {rc}"
+    print("scan: --min-risk with --expect is refused")
+
+
 if __name__ == "__main__":
     test_clean_file_no_findings()
     test_vulnerable_file_flagged()
@@ -176,4 +193,5 @@ if __name__ == "__main__":
     test_findings_carry_risk_and_sort_worst_first()
     test_min_risk_filters_out_lower_ratings()
     test_bad_min_risk_is_a_usage_error()
+    test_min_risk_with_expect_is_a_usage_error()
     print("SCAN TOOL: all tests pass")

@@ -163,6 +163,13 @@ def main(argv) -> int:
         sys.stderr.write("usage: python -m tools.scan <dir-or-file>... "
                          "[--json|--sarif] [--expect] [--min-risk RATING]\n")
         return 2
+    if expect and min_risk != "info":
+        sys.stderr.write(
+            "--min-risk cannot be combined with --expect: expectation mode "
+            "gates on the diff from each file's `// expect:` header, and a "
+            "filtered-out declared code reads as a regressed detector, not "
+            "as a filtered one\n")
+        return 2
     files = sorted({p for a in args for p in _files(a)})
     results = [scan_file(p) for p in files]
     if min_risk != "info":
