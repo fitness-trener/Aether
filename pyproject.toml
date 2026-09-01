@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "aether-lang"
 version = "0.3.0"
-description = "A programming language designed for AI agents to write production code."
+description = "Security checker for AI-written Python: injection, deserialization, hardcoded credentials, access control. Emits SARIF."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "BUSL-1.1"
@@ -14,19 +14,24 @@ authors = [
     { name = "Aether contributors" },
 ]
 keywords = [
-    "programming language", "AI agents", "effects",
-    "capabilities", "refinement types", "static analysis",
+    "security", "sast", "static analysis", "taint analysis", "sarif",
+    "code scanning", "appsec", "vulnerability scanner", "python",
+    "AI generated code", "AI agents", "programming language", "effects",
+    "capabilities", "refinement types",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
+    "Environment :: Console",
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
     "Topic :: Software Development :: Compilers",
     "Topic :: Software Development :: Interpreters",
+    "Topic :: Software Development :: Quality Assurance",
 ]
 
 # Aether's core depends on the Python stdlib only. The optional LLM

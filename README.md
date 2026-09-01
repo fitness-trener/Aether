@@ -67,7 +67,7 @@ Bandit's B105/B106 match password-*ish* variable names; `E0723` matches
 provider key *shapes* (`AKIA…`, `ghp_…`, PEM blocks).
 
 This is not a general "better than bandit" claim, and the repo says so at
-length in [`bench/py_frontend/REPORT.md`](bench/py_frontend/REPORT.md) §3:
+length in [`bench/py_frontend/REPORT.md`](https://github.com/fitness-trener/Aether/blob/main/bench/py_frontend/REPORT.md) §3:
 bandit ships ~70 plugins across crypto, Django, TLS and more; Aether models
 8 rows on Python. **On breadth bandit wins outright.** The narrow claim is
 the one above, and it is checkable in two commands.
@@ -90,8 +90,8 @@ got some that weren't.
 **No vulnerability was discovered in that corpus**, and roughly 56% of the
 39 findings trace to one documented over-flag rule. Both facts are stated
 up front in the reports, not buried:
-[`bench/pypi_scan/REPORT.md`](bench/pypi_scan/REPORT.md) (precision,
-triaged line by line) and [`bench/pypi_scan/RECALL.md`](bench/pypi_scan/RECALL.md)
+[`bench/pypi_scan/REPORT.md`](https://github.com/fitness-trener/Aether/blob/main/bench/pypi_scan/REPORT.md) (precision,
+triaged line by line) and [`bench/pypi_scan/RECALL.md`](https://github.com/fitness-trener/Aether/blob/main/bench/pypi_scan/RECALL.md)
 (recall against bandit as an independent oracle — which found **5 real
 false negatives**, since fixed).
 
@@ -128,17 +128,22 @@ Further limits, stated plainly: the analysis is **intraprocedural and
 syntactic** — over-flag, never miss *within the modeled surface*, which is
 not a soundness proof. Sinks are matched by method name on receivers of
 unresolved type. Single file, no cross-module resolution, no control flow.
-Full list in [`bench/py_frontend/REPORT.md`](bench/py_frontend/REPORT.md) §4.
+Full list in [`bench/py_frontend/REPORT.md`](https://github.com/fitness-trener/Aether/blob/main/bench/py_frontend/REPORT.md) §4.
 
 ## Install
 
-Python 3.10+ (tested on 3.11). The core toolchain is stdlib-only — zero
-third-party packages.
+Python 3.10+. The core toolchain is stdlib-only — zero third-party
+packages.
+
+    pip install aether-lang
+    aether check-py <your_file.py>
+
+From a checkout, to get the corpus and the benchmarks the commands on this
+page reference:
 
     git clone https://github.com/fitness-trener/Aether.git
     cd Aether
     pip install .
-    aether check-py <your_file.py>
 
 Without installing, every command works through the module path:
 
@@ -166,7 +171,7 @@ scan is the part worth reading.
 ## CI and GitHub Code Scanning
 
 Findings carry `security-severity` derived from a per-code risk table
-([`risk.py`](transpiler/aether/risk.py)), so they land in the **Security →
+([`risk.py`](https://github.com/fitness-trener/Aether/blob/main/transpiler/aether/risk.py)), so they land in the **Security →
 Code Scanning** tab already ranked, and appear inline on the PR diff.
 
 ```yaml
@@ -190,7 +195,7 @@ jobs:
 
 Inputs: `path`, `strict`, `fail-on-findings`, `upload-sarif`, `sarif-file`,
 `category`, `setup-python`, `python-version`. Outputs: `findings`,
-`sarif-file`, `exit-code`. Full contract in [`action.yml`](action.yml).
+`sarif-file`, `exit-code`. Full contract in [`action.yml`](https://github.com/fitness-trener/Aether/blob/main/action.yml).
 
 Or drive the CLI yourself:
 
@@ -199,7 +204,7 @@ Or drive the CLI yourself:
 `.aeth` corpora go through `tools/scan.py`, which additionally supports
 `--min-risk high` as a triage filter and `--expect` for a repo that
 deliberately contains violations;
-[`.github/workflows/aether-scan.yml`](.github/workflows/aether-scan.yml)
+[`.github/workflows/aether-scan.yml`](https://github.com/fitness-trener/Aether/blob/main/.github/workflows/aether-scan.yml)
 is the working reference for that path.
 
 ---
@@ -223,7 +228,7 @@ for:
   that is not bound to the *same resource id* the sink mutates.
 
 Nine named companies' own public CVEs and incidents are ported and refused
-at check time in [`outreach/CUSTOMER_EVIDENCE.md`](outreach/CUSTOMER_EVIDENCE.md)
+at check time in [`outreach/CUSTOMER_EVIDENCE.md`](https://github.com/fitness-trener/Aether/blob/main/outreach/CUSTOMER_EVIDENCE.md)
 — Copilot, Cursor, Lovable, Replit, Vercel, Atlassian, Ivanti, GitLab,
 crawl4ai. **Five of the nine are access-control cases that mainstream SAST
 does not cover.** These are retrospective ports of public incidents, not
@@ -275,15 +280,15 @@ Full gate: `python -B scripts/run_all.py` (exit 0 = green; 37 PASS suites).
 
 ## Documentation
 
-- [`docs/SCANNING.md`](docs/SCANNING.md) — scanner and CI setup
-- [`SECURITY_POSTURE.md`](SECURITY_POSTURE.md) — the violation classes and the four detector families
-- [`grammar/diagnostics.md`](grammar/diagnostics.md) — every diagnostic code
-- [`demos/case_studies/LOOP_LOG.md`](demos/case_studies/LOOP_LOG.md) — how each detector was built and what it still misses
-- [`BUGS.md`](BUGS.md) — open and fixed defects in Aether itself
+- [`docs/SCANNING.md`](https://github.com/fitness-trener/Aether/blob/main/docs/SCANNING.md) — scanner and CI setup
+- [`SECURITY_POSTURE.md`](https://github.com/fitness-trener/Aether/blob/main/SECURITY_POSTURE.md) — the violation classes and the four detector families
+- [`grammar/diagnostics.md`](https://github.com/fitness-trener/Aether/blob/main/grammar/diagnostics.md) — every diagnostic code
+- [`demos/case_studies/LOOP_LOG.md`](https://github.com/fitness-trener/Aether/blob/main/demos/case_studies/LOOP_LOG.md) — how each detector was built and what it still misses
+- [`BUGS.md`](https://github.com/fitness-trener/Aether/blob/main/BUGS.md) — open and fixed defects in Aether itself
 
 ## License
 
-Business Source License 1.1 — see [`LICENSE`](LICENSE). Source is public.
+Business Source License 1.1 — see [`LICENSE`](https://github.com/fitness-trener/Aether/blob/main/LICENSE). Source is public.
 Using Aether on your own code, in production and in CI, is free; so is
 research, teaching and evaluation. Code you write in Aether and the Python
 the transpiler emits are yours and carry no obligation from this license.
