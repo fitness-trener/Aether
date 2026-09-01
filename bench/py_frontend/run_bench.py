@@ -54,9 +54,20 @@ def _function_slice(src: str, fn_name: str):
     """One function plus the file's import header — the unit a label
     describes. Analysing the whole file would attribute a sibling
     function's finding to this one."""
-    header = "\n".join(l for l in src.splitlines()
-                       if l.startswith("import ") or l.startswith("from "))
-    for node in pyast.parse(src).body:
+    # Every top-level statement that CONTAINS an import, kept whole — so a
+    # `try: import yaml / except ImportError:` guard survives with its
+    # structure. The old header took only lines starting at column 0 with
+    # `import`/`from`, which dropped every guarded import and had the
+    # harness re-create BUG-011 on the very repro written to pin it.
+    tree = pyast.parse(src)
+    header = "\n".join(
+        pyast.get_source_segment(src, node) or ""
+        for node in tree.body
+        if not isinstance(node, (pyast.FunctionDef, pyast.AsyncFunctionDef,
+                                 pyast.ClassDef))
+        and any(isinstance(n, (pyast.Import, pyast.ImportFrom))
+                for n in pyast.walk(node)))
+    for node in tree.body:
         if isinstance(node, (pyast.FunctionDef, pyast.AsyncFunctionDef)) \
                 and node.name == fn_name:
             return header + "\n\n" + (pyast.get_source_segment(src, node) or "")

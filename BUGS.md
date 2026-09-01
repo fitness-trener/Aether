@@ -353,7 +353,10 @@ Verified in a clean venv: `transpiler` NOT importable, `from aether import
 sdk` works, `sdk.run` and `sdk.grade` return ok, and the `aether check-py`
 console script reports E0723 on the hardcoded-credential repro.
 
-### BUG-010  E0713 flags every SQLAlchemy ORM call, at 97% of all findings  [OPEN]
+### BUG-010  E0713 flags every SQLAlchemy ORM call, at 97% of all findings  [FIXED pending-commit]
+test: tests/test_py_frontend_sinks.py
+
+NOTE: replace `pending-commit` with the real hash when this lands.
 
 Found 2026-09-01 by `bench/framework_scan/run_scan.py` over 15 AI-agent
 frameworks (4,946 files). Repro — the safest form of SQL in Python:
@@ -408,3 +411,98 @@ Related, much smaller, same family: a `yaml.SafeLoader` **subclass** as a
 because BUG-004's contract is that an unrecognized guard value means SINK.
 Correct by policy, wrong in fact; already listed as a known imprecision in
 `bench/py_frontend/REPORT.md` §4.
+
+**Fixed 2026-09-02, direction (1), in three rounds.** The frontend names
+a call rooted at a `sqlalchemy`/`sqlmodel` builder as `sqlBind`, the way
+`shlex.quote` is named `shellArg`. Three shapes, each with a soundness
+argument stated in code: a builder call resolved **through imports** (a
+bare `select` from any other module clears nothing); a statement built
+incrementally, resolved by a least fixpoint that allows self-reference but
+**requires an anchor** (a parameter-only chain never qualifies); and the
+Table-method form `table.delete().where(...)`, accepted only when the root
+call takes **no positional argument**, since a builder that returns a raw
+string has to be handed one. Raw-string entry points — `text`,
+`literal_column`, `column`, `table` — handed a non-literal anywhere inside
+the expression sanction nothing; a name resolves only when every binding
+is a literal. Neither Aether rule changed.
+
+Round two cleared almost nothing, and the reason was BUG-011: the guarded
+imports every framework uses were invisible, so `select` never resolved.
+That is a false-negative class and is filed separately.
+
+Measured on the same 4,946 files: **1,055 -> 411 findings, E0713
+1,029 -> 381.** Of the 381, ~108 are genuinely dynamic queries (SQL
+toolkits that run agent-supplied SQL by design, and DDL migrations built
+from names), ~100 are cross-function or parameter cases no intraprocedural
+rule resolves, 8 are psycopg's `sql.SQL(...).format(sql.Identifier(...))`
+composition grammar (not modelled), and the rest are unmodelled shapes.
+Benign corpus unchanged (E0711 11 · E0713 1 · E0720 1); ground truth 29 TP
+/ 0 FN / 0 FP over 57 labelled functions; bandit B608 agreement unchanged
+(97 hit / 14 miss). `bench/py_frontend/corpus/sqlalchemy_repro.py` pins 11
+safe and 10 vulnerable shapes.
+
+### BUG-011  an import under `try:` or inside a function was invisible, so its sinks were SILENT  [FIXED pending-commit]
+test: tests/test_py_frontend_sinks.py
+
+NOTE: replace `pending-commit` with the real hash when this lands.
+
+Found 2026-09-02 while fixing BUG-010: the first fix cleared only 43 of
+1,029 SQLAlchemy findings, and reading the survivors showed `select` was
+not resolving to `sqlalchemy.select` at all. agno, like most frameworks,
+imports it under the optional-dependency guard:
+
+```python
+try:
+    from sqlalchemy.sql.expression import select, text
+except ImportError:
+    raise ImportError("`sqlalchemy` not installed ...")
+```
+
+`py_to_ir`'s `collect()` registered imports only as direct children of
+the module and class bodies it walked. Anything under `try:`, `if`, or
+inside a function body was never seen.
+
+**That is a false-accept class, not a precision one.** Confirmed by
+execution before the fix — this file produced NO finding for the first
+two functions:
+
+```python
+try:
+    import yaml
+    import pickle
+except ImportError:
+    raise
+
+def load(raw):     return yaml.load(raw)       # silent
+def unpickle(b):   return pickle.loads(b)      # silent
+```
+
+An unresolved qualified sink is not over-flagged. `yaml.load` never
+reaches `SINK_GUARDS`, `pickle.loads` never reaches `SINK_BY_QUALIFIED`,
+and neither `load` nor `loads` is a method-name sink, so the call is
+translated as `py:load` and every detector looks past it. Same family as
+BUG-004: the unknown case defaulted to "not a sink".
+
+Fix: imports are collected from the whole module with `ast.walk` before
+`collect()` runs, so guarded, conditional and function-local imports all
+register. The rule that comes with it: a local name bound by two imports
+to DIFFERENT targets (`try: import ujson as json` / `except: import
+json`) is marked ambiguous and resolves to nothing — it clears no query
+and sanctions no builder, and a sink reached through it is missed exactly
+as it was before, never worse. Picking a winner would be a false accept
+in one direction or the other.
+
+The bench harness had the same bug in its own slicer: `_function_slice`
+built each function's import header from lines starting at column 0 with
+`import`/`from`, so the repro written to pin this class failed under the
+bench while passing under `check-py`. The header now keeps every
+top-level statement that contains an import, whole.
+
+`bench/py_frontend/corpus/guarded_import_repro.py` carries the two silent
+sinks, a function-local `marshal.loads`, the guarded builders, the
+ambiguous-alias case, and `yaml.safe_load`, all labelled. Ground truth:
+29 TP / 0 FN / 0 FP over 57 functions; benign corpus unchanged.
+
+Residual: `collect()` still discovers FUNCTIONS only as direct children of
+module and class bodies, so a `def` nested under `if TYPE_CHECKING:` or
+`try:` is not analysed at all. Different gap, same shape; not fixed here.

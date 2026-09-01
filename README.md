@@ -117,6 +117,14 @@ capability inventory. Both are **held back by measurement, not taste**:
 E0711 alone fired 476 times on the PyPI corpus against 39 for the entire
 default set.
 
+A SQLAlchemy or SQLModel expression — `conn.execute(select(t).where(...))`,
+built in one statement or across several, or the `table.delete()` form —
+is read as the parameterized query it is, not as a dynamic string. The
+line that does not move: `text(...)` or `literal_column(...)` handed a
+concatenation is still an injection, nested inside a `select()` or not.
+This was measured, not assumed — see
+[`bench/framework_scan/REPORT.md`](https://github.com/fitness-trener/Aether/blob/main/bench/framework_scan/REPORT.md).
+
 **Not checked on Python at all**, and the CLI prints this every run rather
 than letting you assume otherwise: `E0801` effect composition and the
 taint-marker family (`E0712`/`E0715`/`E0716`/`E0717`/`E0724`). Those need a

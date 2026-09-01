@@ -642,6 +642,179 @@ def test_missing_path_is_a_usage_error():
     print("cli: a missing target is a usage error, not a traceback")
 
 
+# --- BUG-010: a SQLAlchemy expression is a parameterized query --------
+# 1,029 of 1,055 findings across 15 agent frameworks were E0713 on
+# `conn.execute(select(t).where(...))` — the safest SQL in Python. The
+# soundness line: `text(...)`/`literal_column(...)` are where raw strings
+# re-enter, and a concatenation there must still fire, nested or not.
+
+def test_sqlalchemy_expression_is_not_a_dynamic_query():
+    src = ("from sqlalchemy import select, delete, insert\n"
+           "def a(conn, t, cid):\n    return conn.execute(select(t).where(t.c.id == cid))\n"
+           "def b(conn, t, now):\n    conn.execute(delete(t).where(t.c.x < now))\n"
+           "def c(conn, t, n):\n    conn.execute(insert(t).values(name=n))\n")
+    assert "E0713" not in _codes(src), _codes(src)
+    print("sqla: select/delete/insert expressions are not dynamic queries")
+
+
+def test_sqlalchemy_alias_and_chained_receiver_are_clean():
+    src = ("import sqlalchemy as sa\n"
+           "def a(conn, t, cid):\n"
+           "    return conn.execute(sa.select(t.c.m).where(t.c.id == cid)).first()\n")
+    assert "E0713" not in _codes(src), _codes(src)
+    print("sqla: module alias resolves; call-as-receiver shape is clean")
+
+
+def test_sqlalchemy_text_literal_clean_but_concat_fires():
+    clean = ("from sqlalchemy import text\n"
+             "def a(conn):\n    conn.execute(text('SELECT 1'))\n"
+             "def b(conn, u):\n"
+             "    conn.execute(text('SELECT * FROM t WHERE id = :id'), {'id': u})\n")
+    bad = ("from sqlalchemy import text\n"
+           "def a(conn, u):\n    conn.execute(text('SELECT 1 WHERE id=' + u))\n")
+    assert "E0713" not in _codes(clean), _codes(clean)
+    assert "E0713" in _codes(bad), "text() with a concatenation is an injection"
+    print("sqla: text(literal) clean, text(concat) still fires")
+
+
+def test_raw_string_nested_inside_a_safe_builder_still_fires():
+    src = ("from sqlalchemy import select, text, literal_column\n"
+           "def a(conn, t, n):\n"
+           "    return conn.execute(select(t).where(text(\"name='\" + n + \"'\")))\n"
+           "def b(conn, t, c):\n"
+           "    return conn.execute(select(literal_column('id, ' + c)).select_from(t))\n")
+    codes = _codes(src)
+    assert codes.count("E0713") == 2, f"both nested raw strings must fire: {codes}"
+    print("sqla: raw SQL nested in select() is not laundered by the builder")
+
+
+def test_non_sqlalchemy_name_spelled_select_clears_nothing():
+    """q5: a NAME may not clear a call. Only a root that resolves through
+    imports into sqlalchemy/sqlmodel is a builder."""
+    src = ("from mylib import select\n"
+           "def a(conn, q):\n    return conn.execute(select('SELECT ' + q))\n")
+    assert "E0713" in _codes(src), "a foreign `select` must stay a computed query"
+    print("sqla: a foreign name spelled `select` is still a sink argument")
+
+
+def test_sql_expression_bound_to_a_local_is_clean():
+    src = ("from sqlalchemy import select\n"
+           "def a(conn, t, cid):\n"
+           "    stmt = select(t).where(t.c.id == cid)\n"
+           "    return conn.execute(stmt)\n")
+    assert "E0713" not in _codes(src), _codes(src)
+    print("sqla: expression bound elsewhere resolves through _safe_names")
+
+
+def test_statement_built_incrementally_is_clean():
+    """The dominant real-world shape: bound to a builder, then rebound to
+    methods on itself. Anchored, and closed under self-reference."""
+    src = ("from sqlalchemy import select\n"
+           "def a(conn, t, cid, lim):\n"
+           "    stmt = select(t)\n"
+           "    if cid:\n        stmt = stmt.where(t.c.id == cid)\n"
+           "    stmt = stmt.limit(lim)\n"
+           "    return conn.execute(stmt).fetchall()\n")
+    assert "E0713" not in _codes(src), _codes(src)
+    print("sqla: incrementally built statement is clean")
+
+
+def test_one_raw_rebinding_disqualifies_the_name():
+    src = ("from sqlalchemy import select, text\n"
+           "def a(conn, t, n):\n"
+           "    stmt = select(t)\n"
+           "    stmt = stmt.where(text(\"name='\" + n + \"'\"))\n"
+           "    return conn.execute(stmt)\n")
+    assert "E0713" in _codes(src), "a raw rebinding must poison every use"
+    print("sqla: one raw rebinding disqualifies the name")
+
+
+def test_unanchored_self_chain_never_qualifies():
+    """Two parameters rebound to methods on each other: no anchor. q5 —
+    a name clears nothing, however the chain is spelled."""
+    src = ("def a(conn, a, b):\n"
+           "    a = b.where(True)\n    b = a.where(True)\n"
+           "    return conn.execute(a)\n")
+    assert "E0713" in _codes(src), "no builder anchor means no clearance"
+    print("sqla: an unanchored self-referential chain stays a sink")
+
+
+def test_table_method_form_argument_free_only():
+    clean = ("def a(conn, t, rid):\n"
+             "    conn.execute(t.delete().where(t.c.run_id == rid))\n"
+             "    conn.execute(t.update().where(t.c.x == 1).values(d=True))\n")
+    bad = ("def a(conn, qb, q):\n"
+           "    return conn.execute(qb.select('SELECT * FROM t WHERE ' + q))\n")
+    assert "E0713" not in _codes(clean), _codes(clean)
+    assert "E0713" in _codes(bad), "a method root handed a string is not the Table form"
+    print("sqla: Table-method form accepted only with no positional argument")
+
+
+def test_text_of_literal_bound_name_clean_but_parameter_fires():
+    clean = ("from sqlalchemy import text\n"
+             "def a(conn, s):\n"
+             "    q = 'SELECT 1 WHERE schema = :s'\n"
+             "    return conn.execute(text(q), {'s': s})\n")
+    bad = ("from sqlalchemy import text\n"
+           "def a(conn, q):\n    return conn.execute(text(q))\n")
+    assert "E0713" not in _codes(clean), _codes(clean)
+    assert "E0713" in _codes(bad), "a parameter is unresolvable, so text(param) is a sink"
+    print("sqla: text(literal-bound name) clean, text(parameter) fires")
+
+
+# --- BUG-011: imports under try:/in functions were invisible -----------
+# An unresolved qualified sink is SILENT, not over-flagged. Confirmed by
+# execution before the fix: try-guarded yaml.load / pickle.loads produced
+# no finding at all.
+
+def test_try_guarded_import_sinks_are_seen():
+    src = ("try:\n    import yaml\n    import pickle\nexcept ImportError:\n    raise\n"
+           "def a(raw):\n    return yaml.load(raw)\n"
+           "def b(blob):\n    return pickle.loads(blob)\n")
+    codes = _codes(src)
+    assert codes.count("E0720") == 2, f"both guarded sinks must fire: {codes}"
+    print("imports: try-guarded yaml.load and pickle.loads are sinks")
+
+
+def test_function_local_import_sink_is_seen():
+    src = ("def a(raw):\n    import marshal\n    return marshal.loads(raw)\n")
+    assert "E0720" in _codes(src), "a function-local import must resolve"
+    print("imports: function-local import resolves to its sink")
+
+
+def test_try_guarded_builder_import_clears_the_query():
+    src = ("try:\n    from sqlalchemy.sql.expression import select\n"
+           "except ImportError:\n    raise\n"
+           "def q(conn, t, cid):\n    return conn.execute(select(t).where(t.c.id == cid))\n")
+    assert "E0713" not in _codes(src), _codes(src)
+    print("imports: try-guarded select resolves to a builder")
+
+
+def test_ambiguous_import_clears_nothing_and_sinks_nothing_new():
+    """Two imports bind `update` to different targets. It must not be a
+    builder (would clear a query) — never pick a winner."""
+    src = ("try:\n    from sqlalchemy import update\nexcept ImportError:\n"
+           "    from mylib.compat import update\n"
+           "def q(conn, t, cid):\n    return conn.execute(update(t).where(t.c.id == cid))\n")
+    assert "E0713" in _codes(src), "an ambiguous alias must not clear a query"
+    from aether.py_frontend import _Imports
+    import ast as _ast
+    imp = _Imports()
+    for n in _ast.walk(_ast.parse(src)):
+        if isinstance(n, _ast.ImportFrom):
+            imp.add_importfrom(n)
+    assert "update" in imp.ambiguous and imp.resolve_name("update") is None
+    print("imports: an ambiguous alias resolves to nothing")
+
+
+def test_sql_builder_tables_are_auditable():
+    from aether.py_frontend import mapping_table
+    t = mapping_table()["sql_expression_builders"]
+    assert "sqlalchemy" in t["roots"] and "select" in t["builders"]
+    assert "text" in t["raw_string_entry_points"]
+    print("sqla: builder tables exposed via mapping_table()")
+
+
 if __name__ == "__main__":
     test_body_is_no_longer_discarded()
     test_assign_becomes_let()
@@ -689,4 +862,20 @@ if __name__ == "__main__":
     test_unparseable_file_does_not_abort_the_walk()
     test_utf8_bom_file_is_scanned_not_silently_skipped()
     test_missing_path_is_a_usage_error()
+    test_sqlalchemy_expression_is_not_a_dynamic_query()
+    test_sqlalchemy_alias_and_chained_receiver_are_clean()
+    test_sqlalchemy_text_literal_clean_but_concat_fires()
+    test_raw_string_nested_inside_a_safe_builder_still_fires()
+    test_non_sqlalchemy_name_spelled_select_clears_nothing()
+    test_sql_expression_bound_to_a_local_is_clean()
+    test_statement_built_incrementally_is_clean()
+    test_one_raw_rebinding_disqualifies_the_name()
+    test_unanchored_self_chain_never_qualifies()
+    test_table_method_form_argument_free_only()
+    test_text_of_literal_bound_name_clean_but_parameter_fires()
+    test_try_guarded_import_sinks_are_seen()
+    test_function_local_import_sink_is_seen()
+    test_try_guarded_builder_import_clears_the_query()
+    test_ambiguous_import_clears_nothing_and_sinks_nothing_new()
+    test_sql_builder_tables_are_auditable()
     print("PY FRONTEND: ALL TESTS PASS")

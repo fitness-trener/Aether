@@ -1589,6 +1589,76 @@ State carried forward: the full gate suite must stay green
 
 ---
 
+## Iteration 47 — the corpus Aether is for: 97% noise, then the silence under it (no new detector)
+
+- **Target:** not a violation class. `bench/framework_scan/` ran
+  `check-py` over 15 AI-agent frameworks (langchain, llama-index, crewai,
+  openhands, aider, smolagents, mcp, agno, ...) — 4,946 files, 0 parse
+  failures, 0 crashes — because that is the population the Python
+  scanner claims to be for, and nothing had measured it there.
+- **Gap confirmed empirically, and it was Aether's:** 1,029 of 1,055
+  findings were E0713 on SQLAlchemy Core expressions,
+  `conn.execute(select(t).where(...))` — the safest SQL in Python. Two
+  correct rules composed into a wrong answer: `execute` is a sink by
+  method name (q5), and any non-literal argument read as dynamic.
+  BUGS.md BUG-010. `bench/py_frontend/corpus/sqlalchemy_repro.py` proved
+  all 8 safe shapes fired before the fix.
+- **Improvement (precision, neither Aether rule changed):** the frontend
+  names a call rooted at a `sqlalchemy`/`sqlmodel` builder as `sqlBind`,
+  exactly as `shlex.quote` is named `shellArg`. Three shapes: builder call
+  resolved through imports; statement built incrementally, via a least
+  fixpoint that allows self-reference but requires an anchor; Table-method
+  form accepted only with no positional argument. Raw-string entry points
+  (`text`, `literal_column`, `column`, `table`) handed a non-literal
+  anywhere inside sanction nothing.
+- **Round two cleared 194 of 1,029, and reading the survivors found a
+  false accept (BUG-011).** `stmt = select(t)` — the anchor case — was
+  still firing, because agno imports SQLAlchemy under `try:` like every
+  framework, and `py_to_ir` registered imports only as direct children of
+  the module body. For a builder that is precision; for a sink it is
+  silence: confirmed by execution, a guarded `import yaml` +
+  `yaml.load(raw)` produced NO finding. Same family as BUG-004 — the
+  unknown case defaulted to "not a sink". Imports are now collected from
+  the whole module; a name bound by two imports to different targets is
+  ambiguous and clears nothing. The bench harness's own slicer had the
+  identical bug and re-created it on the repro written to pin it; fixed
+  alongside.
+- **Wiring:** `transpiler/aether/py_frontend.py` (`_SQL_EXPR_*`,
+  `_FnScope`, `_sql_expression_names`, `_Imports.ambiguous`, whole-module
+  import walk); 16 tests in `tests/test_py_frontend_sinks.py`;
+  `bench/py_frontend/corpus/{sqlalchemy,guarded_import}_repro.py` + 28
+  labels; `bench/py_frontend/run_bench.py` slice fix;
+  `bench/framework_scan/` (new bench); BUGS.md BUG-010, BUG-011.
+- **Measured cost and gain, same files, same day:** frameworks
+  **1,055 → 411** (E0713 1,029 → 381; 4 previously-silent sinks surfaced,
+  two of them lxml-with-entity-resolution over network bytes in
+  langchain-community's docugami loader). PyPI corpus, pre/post on the
+  same interpreter: E0720 **109 → 124**; bandit B301→E0720 **102 → 118
+  hits, 26 → 10 misses**; B608 unchanged. Benign corpus unchanged. Ground
+  truth 29 TP / 0 FN / 0 FP over 57 labelled functions.
+- **A bench limitation surfaced:** `bench/pypi_scan/` scans the running
+  interpreter's site-packages, which had changed since July (370 vs 170
+  findings on "the same" corpus). Its REPORT now says so; the before/after
+  above was taken from a `git archive` of HEAD on the same day.
+- **Ratchet:** unchanged (54 codes / 30 detectors) — no detector shipped.
+- **Reports:** `bench/framework_scan/REPORT.md`,
+  `bench/py_frontend/REPORT.md` §3c; q5 extended with both rules
+  (`vault/wiki/questions/q5-sink-matching-vs-purity-matching.md`).
+- **TYPE gap surfaced for next iter:** of the 381 E0713 left, ~100 are a
+  statement assembled in a **helper** (`stmt = self._base_query()`,
+  `apply_sorting(stmt, ...)`) — the cross-function boundary, which is the
+  same limit q1 records for taint. Any intraprocedural rule stops there.
+  The next structural capability is a per-module summary of which local
+  functions return a SQL expression, so a helper's result can be rooted;
+  it is the first place the frontend would need the local-call graph
+  `_FnVisitor` already collects. Separately: `collect()` still discovers
+  FUNCTIONS only as direct children of module and class bodies, so a `def`
+  under `if TYPE_CHECKING:` or `try:` is not analysed at all — the
+  function-shaped instance of BUG-011, unfixed.
+- **Suite:** exit 0.
+
+---
+
 ## Next-iteration checklist (for the loop)
 
 1. Read the previous report's "TYPE gap for next iter".

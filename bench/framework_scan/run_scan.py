@@ -112,8 +112,9 @@ def main() -> int:
     print(f"analyzer errors  {sum(s['errors'] for s in stats.values())}")
     print(f"unparseable      {sum(s['unreadable'] for s in stats.values())}")
     print("by code: " + ", ".join(f"{c}x{n}" for c, n in sorted(by_code.items())))
-    print("\nSee REPORT.md — most of the E0713 count is one documented "
-          "over-flag (BUGS.md BUG-010), not a finding.")
+    print("\nSee REPORT.md §4 for what the remaining E0713 are: agent SQL "
+          "toolkits that run dynamic queries by design, and statements "
+          "assembled in helpers no intraprocedural rule can root.")
     return 0
 
 

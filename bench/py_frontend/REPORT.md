@@ -203,6 +203,78 @@ shape without `.returncode` was flagged, which is why every unit test
 passed. Fixed by carrying the base expression; pinned by
 `test_attribute_read_of_a_call_result_is_not_lost`.
 
+## 3c. Re-measured after BUG-010 (2026-09-01)
+
+`bench/framework_scan/` ran `check-py` over 15 AI-agent frameworks and
+found that **1,029 of 1,055 findings were E0713 on SQLAlchemy expression
+objects** — `conn.execute(select(t).where(t.c.id == cid))`, the safest
+SQL in Python. Two correct rules composed into a wrong answer: `execute`
+is a sink by method name (q5), and any non-literal argument read as
+dynamic. Neither rule changed. The frontend now recognises a call rooted,
+through the file's imports, at a `sqlalchemy`/`sqlmodel` builder and
+names it as `sqlBind`, the way `shlex.quote` is already named `shellArg`.
+
+The soundness line is the raw-string entry points — `text`,
+`literal_column`, `column`, `table`. A non-literal first argument to any
+of them, **anywhere inside the expression**, sanctions nothing, so
+`select(t).where(text("name='" + n + "'"))` still fires. A bare name
+spelled `select` from any other module clears nothing.
+
+The first cut recognised only a direct builder call at the sink and
+cleared 43 of 1,029. Reading the survivors at source gave three more
+shapes, each with its own soundness argument:
+
+- **A statement built incrementally** — `stmt = select(t)` then
+  `stmt = stmt.where(...)`. Resolved by a least fixpoint that allows
+  self-reference but **requires an anchor**: a name qualifies only if at
+  least one binding is a builder expression with no reference to the
+  name, and every binding stays rooted at a builder, a qualifying name,
+  or itself. Two parameters rebound to methods on each other have no
+  anchor and never qualify. One raw-string rebinding disqualifies the
+  name for every use.
+- **The Table-method form** — `table.delete().where(...)`. The receiver
+  is a bare name, so no import vouches for it; it is accepted only when
+  the root call takes **no positional argument**, because a builder that
+  returns a raw string has to be handed one. A receiver whose *state* is
+  a raw string is outside any argument-shape rule and is the residual.
+- **`text(name)` with the name bound only to a literal** — resolved with
+  the `_local_constants` discipline (every binding agrees). A parameter
+  is bound nowhere and stays a sink.
+
+`bench/py_frontend/corpus/sqlalchemy_repro.py` carries 11 safe and 10
+vulnerable shapes, all labelled, so the corpus can no longer be blind to
+this class.
+
+**The second cut still cleared only 194, and the reason was a false
+negative, not a precision gap (BUG-011).** Every framework imports
+SQLAlchemy under the optional-dependency guard —
+`try: from sqlalchemy.sql.expression import select, text` — and
+`py_to_ir` registered imports only as direct children of the module body.
+A guarded `select` was a rootless name, so nothing resolved to a builder.
+The same blindness made a guarded `import yaml` leave `yaml.load(raw)`
+**silent**: an unresolved qualified sink matches no table and is
+translated as `py:load`, which every detector looks past. Confirmed by
+execution before the fix. Imports are now collected from the whole
+module; a local name bound by two imports to different targets is
+ambiguous and resolves to nothing — it clears no query and sanctions no
+builder. `bench/py_frontend/corpus/guarded_import_repro.py` pins both
+directions. The bench's own slicer had the same bug (a column-0
+`import`/`from` header) and was fixed alongside.
+
+| | before | after |
+|---|---|---|
+| labelled functions | 28 | **57** |
+| false negatives | 0 | **0** |
+| false positives | 0 | **0** |
+| true positives | 15 | **29** |
+| benign-corpus findings | E0711 11 · E0713 1 · E0720 1 | **E0711 11 · E0713 1 · E0720 1** |
+
+The benign counts did not move, for the same reason as §3b: the 76
+benign modules use raw DB-API cursors or literal queries, not SQLAlchemy
+Core, so there was nothing there for the recogniser to clear. The cost
+was measured on the corpus that had the problem — see
+`bench/framework_scan/REPORT.md` §2 for the after-numbers there.
+
 ## 4. Limits
 
 - **Intraprocedural and syntactic.** Over-flag, never miss *within the
@@ -229,3 +301,11 @@ passed. Fixed by carrying the base expression; pinned by
 - **A finding is a sound positive, not a complete inventory** — the same
   caveat `PYTHON_VIABILITY.md` states for capabilities. Unresolved regions
   remain UNPROVABLE and are reported as such.
+- **SQL expression builders are recognised by module root only**
+  (`sqlalchemy`, `sqlmodel`). Django's ORM does not route through
+  `execute` and is unaffected; other query builders (`peewee`, `pypika`,
+  `sqlglot`) still read as computed queries — over-flag, until each is
+  measured and added. Inside a recognised expression, `text(name)` where
+  `name` is bound to a literal elsewhere is NOT resolved — the raw-string
+  check reads the argument as written, so it over-flags. Same direction as
+  the SafeLoader-subclass limit above: correct by policy, imprecise in fact.

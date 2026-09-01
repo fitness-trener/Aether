@@ -241,6 +241,154 @@ SANITIZER_BY_QUALIFIED: Dict[str, str] = {
 }
 
 
+# ----------------------------------------------------------------------
+# SQL EXPRESSION BUILDERS — a query that is not a string (BUG-010)
+# ----------------------------------------------------------------------
+# `conn.execute(select(t).where(t.c.id == cid))` is the safest SQL in
+# Python: SQLAlchemy compiles the expression with bound parameters, and no
+# string is assembled anywhere. Two correct rules composed into refusing
+# it anyway — `execute` is a sink by method name, and `_SQL_RULE` reads any
+# non-literal argument as dynamic — at a rate of 1,029 findings across 15
+# agent frameworks, 97% of everything reported (bench/framework_scan).
+#
+# A call rooted at one of these builders is named as the E0713 wrapper
+# (`sqlBind`) so the untouched Aether rule clears it. Rooted means: walk
+# `select(t).where(x).order_by(y)` down its receiver chain to `select(t)`.
+# The root must resolve, through the file's imports, to one of these
+# MODULES — a bare NAME spelled `select` from anywhere else clears
+# nothing (q5).
+_SQL_EXPR_ROOTS = frozenset({"sqlalchemy", "sqlmodel"})
+_SQL_EXPR_BUILDERS = frozenset({"select", "insert", "update", "delete",
+                                "text", "union", "union_all", "exists"})
+# Where a RAW SQL STRING re-enters the expression language. These are the
+# soundness line: `text("... " + uid)` is a real injection, nested inside
+# a safe `select(...)` or not. Every such call anywhere in the expression
+# must take a str literal as its first argument, or nothing is sanctioned.
+# A name bound to a literal is NOT resolved here — over-flag direction.
+_SQL_RAW_ENTRY = frozenset({"text", "literal_column", "column", "table"})
+# The Table-object form: `table.delete().where(...)`, `t.select()`,
+# `t.update().values(...)`. The receiver is a plain NAME, so no import can
+# vouch for it — and q5 says a name clears nothing. What makes this form
+# safe to accept is narrower than the name: the root call is accepted ONLY
+# when it takes no positional argument at all. A homegrown builder that
+# returns a raw string (`qb.select("SELECT " + x)`) has to be handed that
+# string, so it can never match; `.values(...)` keywords are bound
+# parameters. A receiver whose STATE is a raw string is outside any
+# argument-shape rule, and is the recorded residual (q5).
+_SQL_TABLE_METHODS = frozenset({"select", "insert", "update", "delete"})
+
+
+class _FnScope:
+    """Per-function facts the expression translator consults.
+
+    Callable, so it stands wherever a plain `consts.get` resolver did:
+    `_dotted_of` asks only for a name's single dotted binding. The two
+    sets are what BUG-010's second measurement needed — names that hold a
+    SQL expression (`stmt = select(t); stmt = stmt.where(...)`) and names
+    bound only to a string literal (`text(sql_query)`)."""
+    def __init__(self, consts: Dict[str, str], sql_names=(), lit_names=()):
+        self.consts = consts
+        self.sql_names = frozenset(sql_names)
+        self.lit_names = frozenset(lit_names)
+
+    def __call__(self, name: str) -> Optional[str]:
+        return self.consts.get(name)
+
+
+def _sql_builder_of(func: Any, imp: "_Imports") -> Optional[str]:
+    """The builder's bare name if `func` resolves, via imports, into one of
+    `_SQL_EXPR_ROOTS` (`sqlalchemy.select`, `sqlalchemy.sql.text`,
+    `sa.delete` through an alias); else None."""
+    dotted = _callee_spelling(func, imp)
+    if not dotted or "." not in dotted:
+        return None
+    if _module_root(dotted) not in _SQL_EXPR_ROOTS:
+        return None
+    return dotted.rpartition(".")[2]
+
+
+def _is_sql_expression(node: _pyast.Call, imp: "_Imports",
+                       scope: Any = None, self_name: Optional[str] = None) -> bool:
+    """True if `node` is a SQL expression that carries no raw SQL string
+    anywhere inside it.
+
+    Rooted means: walk `select(t).where(x).order_by(y)` down its receiver
+    chain to the first call. That root is accepted if it resolves through
+    imports to a builder, or is a method on a name already known to hold a
+    SQL expression (`self_name` lets a rebinding `stmt = stmt.where(x)`
+    refer to itself during the fixpoint), or is the argument-free Table
+    form. Then every raw-string entry point inside the whole expression
+    must take a str literal, or a name bound only to one."""
+    sql_names = getattr(scope, "sql_names", frozenset())
+    lit_names = getattr(scope, "lit_names", frozenset())
+    root = node
+    while isinstance(root.func, _pyast.Attribute) \
+            and isinstance(root.func.value, _pyast.Call):
+        root = root.func.value
+    rf = root.func
+    ok = _sql_builder_of(rf, imp) in _SQL_EXPR_BUILDERS
+    if not ok and isinstance(rf, _pyast.Attribute) \
+            and isinstance(rf.value, _pyast.Name):
+        recv = rf.value.id
+        if recv in sql_names or recv == self_name:
+            ok = True
+        elif rf.attr in _SQL_TABLE_METHODS and not root.args:
+            ok = True
+    if not ok:
+        return False
+    for sub in _pyast.walk(node):
+        if isinstance(sub, _pyast.Call) \
+                and _sql_builder_of(sub.func, imp) in _SQL_RAW_ENTRY:
+            a0 = sub.args[0] if sub.args else None
+            if _const_str(a0) is not None:
+                continue
+            if isinstance(a0, _pyast.Name) and a0.id in lit_names:
+                continue
+            return False
+    return True
+
+
+def _assign_bindings(fn_node: Any) -> Dict[str, List[Any]]:
+    """name -> every value bound to it by a single-target assignment."""
+    out: Dict[str, List[Any]] = {}
+    for stmt in _pyast.walk(fn_node):
+        if isinstance(stmt, _pyast.Assign) and len(stmt.targets) == 1 \
+                and isinstance(stmt.targets[0], _pyast.Name):
+            out.setdefault(stmt.targets[0].id, []).append(stmt.value)
+    return out
+
+
+def _sql_expression_names(fn_node: Any, imp: "_Imports") -> Tuple[Set[str], Set[str]]:
+    """(names holding a SQL expression, names bound only to a str literal).
+
+    The first is a least fixpoint that ALLOWS self-reference but REQUIRES
+    an anchor: a name qualifies when at least one binding is a SQL
+    expression with no reference to the name, and every binding is one
+    when the name may refer to itself. So `stmt = select(t)` followed by
+    `stmt = stmt.where(x)` qualifies, and a parameter-only chain
+    (`a = b.where(); b = a.where()`) never does — there is no anchor, and
+    a name still clears nothing. A binding that fails the raw-string check
+    disqualifies the name outright, in every later round."""
+    binds = _assign_bindings(fn_node)
+    lit = {n for n, vs in binds.items()
+           if vs and all(_const_str(v) is not None for v in vs)}
+    sql: Set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        scope = _FnScope({}, sql, lit)
+        for n, vs in binds.items():
+            if n in sql or not vs \
+                    or not all(isinstance(v, _pyast.Call) for v in vs):
+                continue
+            anchored = any(_is_sql_expression(v, imp, scope) for v in vs)
+            closed = all(_is_sql_expression(v, imp, scope, self_name=n) for v in vs)
+            if anchored and closed:
+                sql.add(n)
+                changed = True
+    return sql, lit
+
+
 # Builtins that DEFEAT sound static analysis -> always UNPROVABLE.
 DYNAMIC_BUILTINS: Dict[str, str] = {
     "eval": "eval", "exec": "exec", "compile": "compile",
@@ -334,20 +482,36 @@ class _Imports:
     def __init__(self):
         self.alias_to_path: Dict[str, str] = {}    # local name -> dotted path
         self.fromimport: Dict[str, str] = {}       # local name -> module.attr
+        # A local name bound by two imports to DIFFERENT targets
+        # (`try: import ujson as json` / `except: import json`) resolves to
+        # nothing: a sink reached through it is missed exactly as it was
+        # before imports were collected from the whole module, and a
+        # builder or sanitizer reached through it clears nothing. Never
+        # pick a winner — the direction of that error is a false accept.
+        self.ambiguous: Set[str] = set()
+
+    def _bind(self, table: Dict[str, str], local: str, target: str):
+        prev = table.get(local)
+        other = (self.fromimport if table is self.alias_to_path
+                 else self.alias_to_path).get(local)
+        if (prev is not None and prev != target) or other is not None:
+            self.ambiguous.add(local)
+        table[local] = target
 
     def add_import(self, node: _pyast.Import):
         for a in node.names:
-            local = a.asname or _module_root(a.name)
-            self.alias_to_path[local] = a.name
+            self._bind(self.alias_to_path, a.asname or _module_root(a.name), a.name)
 
     def add_importfrom(self, node: _pyast.ImportFrom):
         mod = node.module or ""
         for a in node.names:
-            local = a.asname or a.name
-            self.fromimport[local] = (mod + "." + a.name) if mod else a.name
+            self._bind(self.fromimport, a.asname or a.name,
+                       (mod + "." + a.name) if mod else a.name)
 
     def resolve_attr(self, value_name: str, attr: str) -> Optional[str]:
         """`value_name.attr` -> dotted path using import aliases."""
+        if value_name in self.ambiguous:
+            return None
         base = self.alias_to_path.get(value_name)
         if base is not None:
             return base + "." + attr
@@ -357,6 +521,8 @@ class _Imports:
 
     def resolve_name(self, name: str) -> Optional[str]:
         """bare `name(...)` -> dotted path if it came from a `from` import."""
+        if name in self.ambiguous:
+            return None
         return self.fromimport.get(name)
 
 
@@ -617,6 +783,10 @@ def _call_expr(node: _pyast.Call, imp: "_Imports",
     dotted = _callee_spelling(node.func, imp)
     name = (_sink_name(node, imp, safe_xml, resolver)
             or SANITIZER_BY_QUALIFIED.get(dotted or "")
+            # A SQLAlchemy expression is a parameterized query by
+            # construction; naming it as E0713's wrapper is the same move
+            # SANITIZER_BY_QUALIFIED makes for `shlex.quote` (BUG-010).
+            or ("sqlBind" if _is_sql_expression(node, imp, resolver) else None)
             or ("py:" + dotted if dotted else "<expr>"))
     out: Dict[str, Any] = {"kind": "Call",
                            "func": {"kind": "Ident", "name": name},
@@ -688,7 +858,9 @@ class _FnVisitor:
     """Walk one function body and emit (effects, local_calls, unprovable)."""
     def __init__(self, imports: _Imports, local_fns: Set[str], fn_name: str,
                  fn_line: int, safe_xml: Optional[Set[str]] = None,
-                 consts: Optional[Dict[str, str]] = None):
+                 consts: Optional[Dict[str, str]] = None,
+                 sql_names: Optional[Set[str]] = None,
+                 lit_names: Optional[Set[str]] = None):
         self.imp = imports
         # Names bound to an XML parser with entity resolution disabled —
         # the guard lives in a different statement than the parse call.
@@ -697,6 +869,9 @@ class _FnVisitor:
         # Empty here means every bare Name is unresolved, which the guard
         # contract reads as SINK — the sound default.
         self.consts: Dict[str, str] = consts or {}
+        # What the expression translator resolves against. Empty sets mean
+        # no name holds a SQL expression or a literal — the sound default.
+        self.scope = _FnScope(self.consts, sql_names or (), lit_names or ())
         self.local_fns = local_fns
         self.fn_name = fn_name
         self.fn_line = fn_line
@@ -739,14 +914,14 @@ class _FnVisitor:
             if len(targets) == 1 and isinstance(targets[0], _pyast.Name) \
                     and stmt.value is not None:
                 self.stmts.append({"kind": "Let", "name": targets[0].id,
-                                   "value": _expr(stmt.value, self.imp, self.safe_xml, self.consts.get),
+                                   "value": _expr(stmt.value, self.imp, self.safe_xml, self.scope),
                                    "pos": _pos(stmt, self.fn_line)})
             return
         if isinstance(stmt, _pyast.Expr) and isinstance(stmt.value, _pyast.Call):
-            self.stmts.append(_expr(stmt.value, self.imp, self.safe_xml, self.consts.get))
+            self.stmts.append(_expr(stmt.value, self.imp, self.safe_xml, self.scope))
             return
         if isinstance(stmt, _pyast.Return) and stmt.value is not None:
-            self.stmts.append({"kind": "Return", "value": _expr(stmt.value, self.imp, self.safe_xml, self.consts.get),
+            self.stmts.append({"kind": "Return", "value": _expr(stmt.value, self.imp, self.safe_xml, self.scope),
                                "pos": _pos(stmt, self.fn_line)})
             return
         if isinstance(stmt, (_pyast.With, _pyast.AsyncWith)):
@@ -756,7 +931,7 @@ class _FnVisitor:
             # benign-corpus false-positive count looked good only because
             # most file opens were invisible.
             for item in stmt.items:
-                val = _expr(item.context_expr, self.imp, self.safe_xml, self.consts.get)
+                val = _expr(item.context_expr, self.imp, self.safe_xml, self.scope)
                 tgt = item.optional_vars
                 if isinstance(tgt, _pyast.Name):
                     self.stmts.append({"kind": "Let", "name": tgt.id,
@@ -880,13 +1055,23 @@ def py_to_ir(source: str) -> Tuple[Dict[str, Any], Dict[str, List[Dict[str, Any]
     imports = _Imports()
     func_nodes: List[Tuple[str, Any]] = []   # (qualname, node)
 
+    # Every import anywhere in the module: under `try:` (the optional-
+    # dependency guard every framework uses), inside functions, behind
+    # `if TYPE_CHECKING:`. `collect` below used to read imports only as
+    # direct children of the module and class bodies it walked, so a
+    # try-guarded `import yaml` left `yaml.load(x)` unresolved — and an
+    # unresolved qualified sink is SILENT, not over-flagged. Found by
+    # bench/framework_scan (BUGS.md BUG-011); the same gap kept every
+    # try-guarded `select` from resolving to a builder (BUG-010).
+    for n in _pyast.walk(tree):
+        if isinstance(n, _pyast.Import):
+            imports.add_import(n)
+        elif isinstance(n, _pyast.ImportFrom):
+            imports.add_importfrom(n)
+
     def collect(node, prefix=""):
         for child in node.body:
-            if isinstance(child, _pyast.Import):
-                imports.add_import(child)
-            elif isinstance(child, _pyast.ImportFrom):
-                imports.add_importfrom(child)
-            elif isinstance(child, (_pyast.FunctionDef, _pyast.AsyncFunctionDef)):
+            if isinstance(child, (_pyast.FunctionDef, _pyast.AsyncFunctionDef)):
                 qual = (prefix + child.name)
                 func_nodes.append((qual, child))
             elif isinstance(child, _pyast.ClassDef):
@@ -905,9 +1090,11 @@ def py_to_ir(source: str) -> Tuple[Dict[str, Any], Dict[str, List[Dict[str, Any]
 
     for qual, node in func_nodes:
         line = getattr(node, "lineno", 0)
+        sql_names, lit_names = _sql_expression_names(node, imports)
         v = _FnVisitor(imports, simple_names, qual, line,
                        _safe_xml_parser_names(node, imports),
-                       _local_constants(node, imports))
+                       _local_constants(node, imports),
+                       sql_names, lit_names)
         # Two separate walks, deliberately. `visit_call` drives the untouched
         # capability/UNPROVABLE analysis over EVERY call anywhere in the
         # function (including inside comprehensions and nested calls);
@@ -973,5 +1160,10 @@ def mapping_table() -> Dict[str, Any]:
                    "absent_is_sink": g.absent_is_sink}
             for name, g in sorted(SINK_GUARDS.items())},
         "sanitizer_by_qualified": SANITIZER_BY_QUALIFIED,
+        "sql_expression_builders": {
+            "roots": sorted(_SQL_EXPR_ROOTS),
+            "builders": sorted(_SQL_EXPR_BUILDERS),
+            "table_methods_argument_free_only": sorted(_SQL_TABLE_METHODS),
+            "raw_string_entry_points": sorted(_SQL_RAW_ENTRY)},
         "mode": "sound",
     }

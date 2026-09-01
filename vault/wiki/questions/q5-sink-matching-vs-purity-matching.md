@@ -3,7 +3,7 @@ type: question_page
 question_id: q5
 status: answered
 confidence: high
-last_updated: 2026-07-26
+last_updated: 2026-09-01
 tags: [diagnostics, design-rationale, toolchain, effect-system]
 ---
 
@@ -139,6 +139,43 @@ is nothing to gate. That is a missing-detector item for
 [[q3-what-makes-a-good-backlog-target]]'s normal selection, not a guard
 bug — the distinction matters, because probing one and reporting the
 other would manufacture a gap that does not exist.
+
+**The name rule's cost, measured on the population it was written for
+(2026-09-01, iter 47).** `execute` matched by name is sanctioned because
+the error direction is safe. `bench/framework_scan/` put a number on that
+direction for the first time on code Aether is aimed at: **1,029 of 1,055
+findings across 15 AI-agent frameworks** were E0713 on SQLAlchemy Core
+expressions — `conn.execute(select(t).where(...))`, a parameterized query
+by construction. The name rule did not change; it was never wrong about
+`execute` being a sink. What was wrong was one level down: the
+*argument* rule read a `select(...)` call as a dynamic query because it
+is not a literal. The fix is the same shape as `SANITIZER_BY_QUALIFIED`:
+a call rooted, through imports, at a `sqlalchemy`/`sqlmodel` builder is
+named `sqlBind`. Rooted through imports, not by name — a `select` from
+any other module still clears nothing, which is this page's rule applied
+to the fix of its own side effect.
+
+The soundness line inside a recognised expression is the raw-string
+entry points (`text`, `literal_column`, `column`, `table`): a non-literal
+first argument to any of them, anywhere in the tree, sanctions nothing.
+`bench/py_frontend/corpus/sqlalchemy_repro.py` pins 8 safe and 6
+vulnerable shapes; the benign corpus did not move.
+
+The rule reached one more place while this was measured: **an import is a
+name too.** Frameworks import SQLAlchemy under `try:`, and the frontend
+had never registered a guarded import, so `select` was rootless — and,
+worse, a guarded `import yaml` left `yaml.load(x)` silent (BUG-011, the
+false-accept class). Imports are now read from the whole module, and a
+local name bound by two imports to different targets resolves to
+nothing: it clears no query and sanctions no builder. Picking a winner is
+a false accept in one direction or the other.
+
+*Residual:* recognition is by module root, so other query builders
+(`peewee`, `pypika`, `sqlglot`) still read as computed queries until each
+is measured and added — over-flag, not miss. A statement assembled in a
+helper (`stmt = self._base_query()`) crosses a function boundary and stays
+a computed query. `text(name)` resolves only when every binding of `name`
+is a literal; a parameter never is. `[source: README, section: Python, key: sqlBind]`
 
 ## Related
 - [[q1-taint-marker-soundness-boundary]] — the over-flag-never-miss contract every taint pass inherits

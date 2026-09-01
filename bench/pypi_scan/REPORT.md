@@ -10,6 +10,16 @@ finding). The corpus is the active interpreter's `site-packages` —
 published PyPI distributions already on disk. Nothing is downloaded,
 imported, or executed; files are read as text and parsed with `ast`.
 
+**Reproducibility caveat, added 2026-09-02.** The corpus is *whatever is
+in the running interpreter's `site-packages`*. Re-running on 2026-09-02
+on the same machine touched 30 distributions and produced 370 findings
+against the 170 below, because the installed set had changed in the
+meantime. The numbers in this report describe the corpus of 2026-07-26 and
+are not a baseline any later run can be diffed against; a run that needs
+a before/after (`bench/py_frontend/REPORT.md` §3c) must take both
+measurements on the same day. A pinned corpus — a requirements file and a
+throwaway venv — is the fix, and is not done here.
+
 **Headline, stated first: no vulnerability was discovered.** 39
 non-test findings across 111 distributions, and triage below classifies
 roughly two-thirds as a documented over-flag. What the scan did produce
@@ -143,3 +153,32 @@ Effect on the numbers, which is why this report shows both:
 - Generalize beyond installed libraries. Application code — web handlers
   taking request data — is where these rows are aimed, and 111 libraries
   are not that.
+
+## 6. Re-measured 2026-09-02, before and after BUG-010 / BUG-011
+
+Same interpreter, same day, before taken from a `git archive` of HEAD
+(`6ad43b6`), so the two runs saw an identical corpus — the caveat at the
+top of this report is why that mattered.
+
+| | before | after |
+|---|---:|---:|
+| findings, default row set | 370 | **386** |
+| outside test directories | 123 | 126 |
+| E0713 | 216 | 216 |
+| E0720 | 109 | **124** |
+| E0719 | 0 | 1 |
+| E0711 (held back) | 1,003 | 990 |
+| bandit B301 → E0720, hits / misses | 102 / 26 | **118 / 10** |
+| bandit B608 → E0713, hits / misses | 97 / 14 | 97 / 14 |
+
+E0713 did not move because this corpus's SQL hits are distutils'
+`Command.execute` and DB-API cursors, not SQLAlchemy; the BUG-010
+recogniser had nothing to clear here, and the benign-corpus result in
+`bench/py_frontend/REPORT.md` §3c says the same. What moved is E0720:
+**fifteen pickle sinks under guarded or function-local imports were
+silent** (BUG-011), and bandit — written to a different specification —
+had been reporting sixteen of them as misses. That agreement is the
+second, independent confirmation of the false-negative class the
+framework scan found. The 13-finding drop in E0711 was not investigated;
+the row is held back from the default output and the change is inside its
+noise.

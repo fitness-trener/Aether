@@ -1,5 +1,28 @@
 # Operation Log (append-only — newest on top)
 
+## [2026-09-01] Q5 extended | the name rule's cost, measured on agent frameworks
+- **Iteration 47 shipped no detector; it repaired one.** `bench/framework_scan/`
+  ran `check-py` over 15 AI-agent frameworks (4,946 files, 0 crashes) and
+  1,029 of 1,055 findings were E0713 on SQLAlchemy Core expressions — the
+  safest SQL in Python, refused as "a computed call". BUGS.md BUG-010.
+- **Fix, recorded on the page that licensed the rule it repairs:** the
+  frontend names a call rooted (through imports) at a `sqlalchemy`/
+  `sqlmodel` builder as `sqlBind`; raw-string entry points (`text`,
+  `literal_column`, `column`, `table`) with a non-literal argument
+  anywhere inside sanction nothing. q5's own rule — a name clears nothing
+  — applied to the fix of its own side effect.
+- **The precision chase surfaced a false accept (BUG-011).** Guarded and
+  function-local imports were never registered, so a `try:`-imported
+  `yaml.load(x)` was SILENT, not over-flagged — confirmed by execution.
+  Imports are now collected from the whole module; a name bound by two
+  imports to different targets is ambiguous and clears nothing.
+- **Cost:** benign corpus unchanged (E0711 11 · E0713 1 · E0720 1);
+  ground truth 29 TP / 0 FN / 0 FP over 57 labelled functions.
+- **Residual carried forward (q5 Residual):** other query builders still
+  read as computed queries; a statement built in a helper crosses a
+  function boundary; `text(param)` stays a sink. Taxonomy E0713 row
+  annotated.
+
 ## [2026-08-02] Q6 added | risk vs severity, the two-axes design point
 - **Iteration 46 shipped no detector.** `transpiler/aether/risk.py` added
   a code→rating table (critical/high/medium/low/info) read only at output

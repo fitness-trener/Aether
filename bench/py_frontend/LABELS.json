@@ -41,5 +41,35 @@
   "bench/realworld_flask_ssti/flask_repro.py::greeting_safe": "clean",
 
   "bench/realworld_xxe/lxml_repro.py::load_config": "E0727",
-  "bench/realworld_xxe/lxml_repro.py::load_config_safe": "clean"
+  "bench/realworld_xxe/lxml_repro.py::load_config_safe": "clean",
+
+  "bench/py_frontend/corpus/sqlalchemy_repro.py::orm_select": "clean",
+  "bench/py_frontend/corpus/sqlalchemy_repro.py::orm_delete": "clean",
+  "bench/py_frontend/corpus/sqlalchemy_repro.py::orm_insert": "clean",
+  "bench/py_frontend/corpus/sqlalchemy_repro.py::orm_aliased_module": "clean",
+  "bench/py_frontend/corpus/sqlalchemy_repro.py::orm_chained_first": "clean",
+  "bench/py_frontend/corpus/sqlalchemy_repro.py::text_literal": "clean",
+  "bench/py_frontend/corpus/sqlalchemy_repro.py::text_bound_params": "clean",
+  "bench/py_frontend/corpus/sqlalchemy_repro.py::stmt_bound_elsewhere": "clean",
+  "bench/py_frontend/corpus/sqlalchemy_repro.py::stmt_built_incrementally": "clean",
+  "bench/py_frontend/corpus/sqlalchemy_repro.py::table_method_form": "clean",
+  "bench/py_frontend/corpus/sqlalchemy_repro.py::text_of_literal_name": "clean",
+  "bench/py_frontend/corpus/sqlalchemy_repro.py::stmt_rebound_to_raw_text": "E0713",
+  "bench/py_frontend/corpus/sqlalchemy_repro.py::table_method_with_string_arg": "E0713",
+  "bench/py_frontend/corpus/sqlalchemy_repro.py::text_of_parameter": "E0713",
+  "bench/py_frontend/corpus/sqlalchemy_repro.py::unanchored_self_chain": "E0713",
+  "bench/py_frontend/corpus/sqlalchemy_repro.py::text_concat": "E0713",
+  "bench/py_frontend/corpus/sqlalchemy_repro.py::text_fstring": "E0713",
+  "bench/py_frontend/corpus/sqlalchemy_repro.py::nested_text_concat": "E0713",
+  "bench/py_frontend/corpus/sqlalchemy_repro.py::literal_column_concat": "E0713",
+  "bench/py_frontend/corpus/sqlalchemy_repro.py::unknown_builder_concat": "E0713",
+  "bench/py_frontend/corpus/sqlalchemy_repro.py::raw_concat": "E0713",
+
+  "bench/py_frontend/corpus/guarded_import_repro.py::load_guarded_yaml": "E0720",
+  "bench/py_frontend/corpus/guarded_import_repro.py::unpickle_guarded": "E0720",
+  "bench/py_frontend/corpus/guarded_import_repro.py::load_in_function_scope": "E0720",
+  "bench/py_frontend/corpus/guarded_import_repro.py::guarded_select": "clean",
+  "bench/py_frontend/corpus/guarded_import_repro.py::guarded_text_literal": "clean",
+  "bench/py_frontend/corpus/guarded_import_repro.py::ambiguous_update_is_not_a_builder": "E0713",
+  "bench/py_frontend/corpus/guarded_import_repro.py::guarded_yaml_safe": "clean"
 }

@@ -3,7 +3,7 @@ type: cluster_page
 cluster_id: violation-taxonomy
 status: active
 confidence: medium
-last_updated: 2026-07-04
+last_updated: 2026-09-01
 tags: [violation-taxonomy, security, effect-system, capability-model, detection-backlog]
 ---
 
@@ -34,7 +34,7 @@ idea noted).
 | **SSRF (unpinned fetch scope)** | `net.fetch` host/authority is a wildcard → steerable inward to `169.254.169.254` | **E0710** | *Shipped 2026-07-04, iter 1.* Closes the open-by-default fetch scope. |
 | **Path traversal / Zip-Slip** | `readFile`/`writeFile` path is dynamic/untrusted, not literal or `safeJoin`ed | **E0711** | *Shipped 2026-07-04, iter 2.* `safeJoin` stdlib is the sanctioned repair. |
 | **Secret exfil via log/disk** | a `Secret<T>` value reaches `print` or `writeFile` contents without `reveal(...)` | **E0712** | *Shipped 2026-07-04, iter 3 (log); widened 2026-07-07, iter 11 (disk).* First taint-lite pass: `Secret<T>` marker + `reveal`/`classify`; param-origin taint, straight-line dataflow. Sink set now `{print, writeFile-contents}` via a sink-spec dict (mirrors E0715). |
-| **SQL injection** | a `sqlQuery` arg is raw concatenation, not a literal or `sqlBind(...)` | **E0713** | *Shipped 2026-07-04, iter 4.* `sqlQuery` sink (effect `db.query`) + `sqlBind` parameterizing sanitizer; sink+sanitizer+literal shape. |
+| **SQL injection** | a `sqlQuery` arg is raw concatenation, not a literal or `sqlBind(...)` | **E0713** | *Shipped 2026-07-04, iter 4.* `sqlQuery` sink (effect `db.query`) + `sqlBind` parameterizing sanitizer; sink+sanitizer+literal shape. *Precision widened 2026-09-01, iter 47 (Python frontend only):* a SQLAlchemy/SQLModel expression rooted at `select`/`insert`/`update`/`delete`/`text`/`union`/`exists` is named as `sqlBind` — a parameterized query by construction — unless a raw-string entry point (`text`, `literal_column`, `column`, `table`) anywhere inside takes a non-literal, in which case nothing is sanctioned. Was 97% of all findings on 15 agent frameworks (BUG-010). Residual in [[../questions/q5-sink-matching-vs-purity-matching\|q5]]. |
 | **Command injection** | a `shellExec` arg is raw concatenation, not a literal or `shellArg(...)` | **E0714** | *Shipped 2026-07-04, iter 5 (self-teaching agent).* `shellExec` sink (effect `exec.run`, new `exec` capability) + `shellArg` quoting sanitizer; E0713 slice cloned (CVE-2022-1292 shape). |
 | **PII egress (GDPR / residency)** | a `PII<T>` value reaches `print` or `writeFile` contents without `redact(...)` | **E0715** | *Shipped 2026-07-04, iter 6.* Second taint marker on the generalized taint helpers; `PII<T>` + `classifyPII` + masking `redact`; log + disk sinks. |
 | **Missing authorization before mutation (CWE-862/863)** | a data-mutating sink (`sqlExec`, effect `db.exec`) is reachable with no authorization proof in its dataflow | **E0716** | *Shipped 2026-07-04, iter 7.* The taint core INVERTED: the sink *requires* an `Authorized<T>` marker (from the `authorize(principal, action)` guard or an `Authorized<T>` param) instead of refusing one. `sqlExec`'s query arg also joined the E0713 sink list. Ivanti EPMM CVE-2023-35078 shape. |
