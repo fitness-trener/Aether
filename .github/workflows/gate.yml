@@ -125,13 +125,18 @@ jobs:
 
       - name: The console script finds a real vulnerability
         run: |
+          # Both invocations exit 2 on purpose -- that is the contract for
+          # "found something". `set -e` must stay off across BOTH of them,
+          # and each exit code is asserted rather than discarded.
           set +e
           /tmp/venv/bin/aether check-py bench/py_frontend/corpus/sqli_repro.py
-          rc=$?
-          set -e
-          [ "$rc" -eq 2 ] || { echo "::error::a file with two E0713 must exit 2, got $rc"; exit 1; }
-
+          rc_text=$?
           /tmp/venv/bin/aether check-py bench/py_frontend/corpus/sqli_repro.py --sarif > /tmp/out.sarif
+          rc_sarif=$?
+          set -e
+          [ "$rc_text" -eq 2 ] || { echo "::error::a file with two E0713 must exit 2, got $rc_text"; exit 1; }
+          [ "$rc_sarif" -eq 2 ] || { echo "::error::--sarif must exit 2 the same way, got $rc_sarif"; exit 1; }
+
           python - <<'PY'
           import json
           d = json.load(open("/tmp/out.sarif"))
