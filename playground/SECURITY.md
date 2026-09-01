@@ -137,6 +137,6 @@ is verified at deploy time, not in CI.
 
 ## How to report a security issue
 
-Open an issue at `https://github.com/aether-lang/aether/issues` with
+Open an issue at `https://github.com/fitness-trener/Aether/issues` with
 the label `security`. Critical issues: email the address in
 `yc/marketing/ONE_PAGER.md`. Public disclosure after fix + 14 days.

@@ -27,7 +27,7 @@ sys.path.insert(0, ROOT)
 
 from aether.passes.capability import check_capabilities          # noqa: E402  (REUSED VERBATIM)
 
-from tools.py_frontend import py_to_ir, mapping_table, PYMAP_VERSION  # noqa: E402
+from aether.py_frontend import py_to_ir, mapping_table, PYMAP_VERSION  # noqa: E402
 from tools import alsp_surface as S                               # noqa: E402
 
 

@@ -34,7 +34,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 sys.path.insert(0, os.path.join(ROOT, "transpiler"))
 sys.path.insert(0, ROOT)
 
-from tools.py_frontend import py_to_ir                      # noqa: E402
+from aether.py_frontend import py_to_ir                      # noqa: E402
 from aether.passes import analyze_flat                      # noqa: E402
 from bench.pypi_scan.run_scan import (                      # noqa: E402
     SKIP_STRICT, SINK_CODES, _is_test_path,

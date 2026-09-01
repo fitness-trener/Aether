@@ -38,14 +38,11 @@ Wedge-grading mode:
 
 from __future__ import annotations
 import argparse
-import io
 import json
 import os
 import re
-import signal
 import sys
 import time
-from contextlib import redirect_stdout
 from typing import Any, Dict, List, Optional
 
 # transpiler must be importable
@@ -53,10 +50,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "transpiler"))
 
-from aether.diagnostics import AetherError, Diagnostic       # noqa: E402
-from aether.parser import parse                              # noqa: E402
-from aether.emitter import emit                              # noqa: E402
-from aether.runtime import build_namespace                   # noqa: E402
 
 
 TASK_SCHEMA = {
@@ -74,156 +67,15 @@ TASK_SCHEMA = {
 # Compile + run a candidate program
 # ----------------------------------------------------------------------
 
-class _CandidateTimeout(Exception):
-    """Raised by the SIGALRM handler when a candidate exceeds timeout_ms."""
-
-
-def _alarm_handler(signum, frame):
-    raise _CandidateTimeout("candidate exceeded timeout_ms")
-
-
-def _format_diag_as_stderr(diag) -> str:
-    """Format a diagnostic the same way cli._emit_error does (non-JSON form)
-    so wedge tasks can pattern-match stderr as if running the CLI."""
-    if isinstance(diag, Diagnostic):
-        d = diag.to_dict()
-    elif isinstance(diag, dict):
-        d = diag
-    else:
-        return ""
-    code = d.get("code", "?")
-    severity = d.get("severity", "error")
-    category = d.get("category", "unknown")
-    pos = d.get("position") or {}
-    line = pos.get("line", 0) if isinstance(pos, dict) else 0
-    col = pos.get("column", 0) if isinstance(pos, dict) else 0
-    msg = d.get("message", "")
-    out = f"[{code}] {severity} ({category}) at line {line}, col {col}: {msg}\n"
-    sugg = d.get("suggestion")
-    if sugg:
-        out += f"  hint: {sugg}\n"
-    return out
-
-
-def compile_and_run(src: str, filename: str, stdin_text: str = "",
-                    timeout_ms: int = 5000) -> Dict[str, Any]:
-    """Run an Aether candidate and return a structured result.
-
-    Always-present fields:
-        stage          one of: parse, emit, emit-compile, exec
-        ok             True if execution completed normally; False otherwise
-        actual         captured stdout (str)
-        stderr         formatted diagnostic if any (str; "" on success)
-        exit_code      0 success, 2 AetherError, 1 other Python exception, 124 timeout
-        elapsed_ms     int
-    On failure paths:
-        diagnostic     dict
-    """
-    t0 = time.time()
-    elapsed = lambda: int((time.time() - t0) * 1000)
-
-    try:
-        ast = parse(src, filename)
-    except AetherError as e:
-        return {
-            "stage": "parse", "ok": False,
-            "diagnostic": e.diag.to_dict(),
-            "actual": "",
-            "stderr": _format_diag_as_stderr(e.diag),
-            "exit_code": 2,
-            "elapsed_ms": elapsed(),
-        }
-    try:
-        py = emit(ast)
-    except Exception as e:
-        diag = {"message": str(e), "category": "emit", "code": "E9001"}
-        return {
-            "stage": "emit", "ok": False,
-            "diagnostic": diag,
-            "actual": "",
-            "stderr": f"emit error: {e}\n",
-            "exit_code": 1,
-            "elapsed_ms": elapsed(),
-        }
-    try:
-        code = compile(py, filename + ".py", "exec")
-    except SyntaxError as e:
-        diag = {"message": str(e), "category": "internal", "code": "E9002"}
-        return {
-            "stage": "emit-compile", "ok": False,
-            "diagnostic": diag,
-            "actual": "",
-            "stderr": f"internal error (emitter produced bad python): {e}\n",
-            "exit_code": 1,
-            "elapsed_ms": elapsed(),
-        }
-
-    g = build_namespace()
-    g["__name__"] = "__main__"
-    g["__file__"] = filename + ".py"
-    buf = io.StringIO()
-    saved_stdin = sys.stdin
-    sys.stdin = io.StringIO(stdin_text)
-
-    have_alarm = hasattr(signal, "SIGALRM")
-    prev_handler = None
-    if have_alarm and timeout_ms and timeout_ms > 0:
-        prev_handler = signal.signal(signal.SIGALRM, _alarm_handler)
-        signal.setitimer(signal.ITIMER_REAL, timeout_ms / 1000.0)
-    try:
-        try:
-            with redirect_stdout(buf):
-                exec(code, g)
-        except _CandidateTimeout:
-            timeout_diag = {
-                "code": "E0601", "category": "timeout", "severity": "error",
-                "message": f"candidate exceeded timeout_ms={timeout_ms}",
-                "suggestion": "check for infinite loops or runaway recursion",
-                "position": {"line": 0, "column": 0},
-            }
-            return {
-                "stage": "exec", "ok": False,
-                "diagnostic": timeout_diag,
-                "actual": buf.getvalue(),
-                "stderr": _format_diag_as_stderr(timeout_diag),
-                "exit_code": 124,
-                "elapsed_ms": elapsed(),
-            }
-        except AetherError as e:
-            return {
-                "stage": "exec", "ok": False,
-                "diagnostic": e.diag.to_dict(),
-                "actual": buf.getvalue(),
-                "stderr": _format_diag_as_stderr(e.diag),
-                "exit_code": 2,
-                "elapsed_ms": elapsed(),
-            }
-        except Exception as e:
-            return {
-                "stage": "exec", "ok": False,
-                "diagnostic": {
-                    "message": f"{type(e).__name__}: {e}",
-                    "category": "runtime", "code": "E9003",
-                },
-                "actual": buf.getvalue(),
-                "stderr": f"runtime error: {type(e).__name__}: {e}\n",
-                "exit_code": 1,
-                "elapsed_ms": elapsed(),
-            }
-    finally:
-        if have_alarm and timeout_ms and timeout_ms > 0:
-            signal.setitimer(signal.ITIMER_REAL, 0)
-            if prev_handler is not None:
-                signal.signal(signal.SIGALRM, prev_handler)
-        sys.stdin = saved_stdin
-
-    return {
-        "stage": "exec", "ok": True,
-        "actual": buf.getvalue(),
-        "stderr": "",
-        "exit_code": 0,
-        "elapsed_ms": elapsed(),
-    }
+# The implementation lives in the package (`aether/runner.py`), not here.
+# `aether.sdk.run`/`grade` need it too, and `bench/` is excluded from the
+# wheel by `[tool.setuptools.packages.find]` — so while it lived only here,
+# the SDK raised ModuleNotFoundError in every installed copy and reported it
+# as the candidate failing (BUGS.md BUG-008). Re-exported under the original
+# names so every `from bench.harness import compile_and_run` still works.
+from aether.runner import (compile_and_run,                   # noqa: E402,F401
+                           format_diag_as_stderr as _format_diag_as_stderr,
+                           TIMEOUT_ENFORCED)
 
 
 # ----------------------------------------------------------------------

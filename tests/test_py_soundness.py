@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.join(ROOT, "transpiler"))
 sys.path.insert(0, ROOT)
 
 from tools.py_surface import build_surface_py          # noqa: E402
-from tools.py_frontend import PURE_MODULES, CAP_BY_QUALIFIED, mapping_table  # noqa: E402
+from aether.py_frontend import PURE_MODULES, CAP_BY_QUALIFIED, mapping_table  # noqa: E402
 
 FORBIDDEN = "PROVEN_CLEAN"
 
@@ -96,7 +96,7 @@ def test_pure_modules_have_no_io_offenders():
 
 
 def test_pragmatic_mode_is_gone():
-    import tools.py_frontend as pf
+    import aether.py_frontend as pf
     assert not hasattr(pf, "PURE_METHODS"), "PURE_METHODS allowlist must be deleted"
     assert not hasattr(pf, "_FnVisitor") or "strict" not in pf._FnVisitor.__init__.__code__.co_varnames, \
         "_FnVisitor must not take a strict flag"

@@ -8,7 +8,7 @@ version = "0.3.0"
 description = "A programming language designed for AI agents to write production code."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "BUSL-1.1" }
+license = "BUSL-1.1"
 license-files = ["LICENSE"]
 authors = [
     { name = "Aether contributors" },
@@ -20,8 +20,7 @@ keywords = [
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: Other/Proprietary License",
-    "Operating System :: POSIX",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -41,16 +40,36 @@ smt = ["z3-solver >= 4.12"]
 dev = ["pytest >= 7.0", "z3-solver >= 4.12"]
 
 [project.urls]
-Homepage   = "https://github.com/aether-lang/aether"
-Repository = "https://github.com/aether-lang/aether"
-Issues     = "https://github.com/aether-lang/aether/issues"
+Homepage   = "https://github.com/fitness-trener/Aether"
+Repository = "https://github.com/fitness-trener/Aether"
+Issues     = "https://github.com/fitness-trener/Aether/issues"
 
 [project.scripts]
-aether = "transpiler.aether.cli:main"
+aether = "aether.cli:main"
 
+# The wheel ships `aether` as the TOP-LEVEL package, which is the spelling
+# README, the sdk docstring and every file in this repo already use. It used
+# to ship `transpiler`, so an installed user's only working import was
+# `from transpiler.aether import sdk` while every document said otherwise
+# (BUGS.md BUG-009) — and `transpiler` is far too generic a name to occupy
+# in someone's site-packages, the same objection that kept `tools` out in
+# BUG-007.
+#
+# `transpiler/__init__.py` stays in the CHECKOUT: `python -m
+# transpiler.aether.cli` is how ~20 call sites across tests, bench, demos
+# and the playground invoke the CLI without installing. It is simply not
+# part of the distribution.
+[tool.setuptools]
+package-dir = {"" = "transpiler"}
+
+# `where` scopes discovery to the one directory that holds library code, so
+# tests/, demos/, bench/ and the rest cannot be shipped by accident. That is
+# a structural guarantee; the long `exclude` list this replaces was a
+# promise to remember every new top-level directory.
 [tool.setuptools.packages.find]
-include = ["transpiler*"]
-exclude = ["tests*", "demos*", "bench*", "scripts*", "validation*", "runs*", "audits*", "yc*", "docs*", "grammar*", "prompt*", "reference*", "playground*", "web*", "transpiler*__pycache__*", "*__pycache__*"]
+where = ["transpiler"]
+include = ["aether*"]
+exclude = ["*__pycache__*"]
 
 [tool.setuptools.package-data]
-"transpiler.aether" = ["py.typed"]
+"aether" = ["py.typed"]

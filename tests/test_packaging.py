@@ -5,22 +5,26 @@ We can't reach PyPI from this CI sandbox, so we don't actually run
 rely on:
 
   1. The console script entry point string in `pyproject.toml`
-     (`aether = transpiler.aether.cli:main`) resolves to a real
-     callable in the source tree.
+     (`aether = aether.cli:main`) resolves to a real callable in the
+     source tree.
   2. The `main` function it points at accepts the same arg shape as
      setuptools will hand it — calling `main(["--help"])` exits 0 and
      prints the top-level help.
   3. The package's `__version__` matches the version declared in
      `pyproject.toml`. A version drift here means a future release
      ships a wheel whose stamped version disagrees with what
-     `import transpiler.aether; transpiler.aether.__version__` reports.
+     `import aether; aether.__version__` reports.
   4. `pyproject.toml` declares no runtime dependencies — the core
      toolchain is stdlib-only by design and the H.B.1 contract is
      that `pip install aether-lang` pulls in no third-party
      packages. (`anthropic` lives under the `[llm]` extra.)
-  5. The `setuptools.packages.find` `include` / `exclude` lists let
-     `transpiler.aether` through and block everything else
-     (tests, demos, bench, scripts).
+  5. `package-dir` + `packages.find.where` ship `aether` as the
+     top-level package — the spelling every document and every import
+     in this repo uses — and structurally cannot ship anything outside
+     `transpiler/` (BUG-009).
+  6. Nothing under `transpiler/` imports a module that is not in the
+     wheel (BUG-007/008), and `project.license` is in the form current
+     setuptools accepts (BUG-006).
 """
 from __future__ import annotations
 import io
@@ -109,7 +113,7 @@ def test_console_script_entry_point_resolves():
     scripts = cfg["project"]["scripts"]
     assert "aether" in scripts, scripts
     target = scripts["aether"]
-    assert target == "transpiler.aether.cli:main", target
+    assert target == "aether.cli:main", target
     # And it actually resolves.
     mod_path, _, attr = target.partition(":")
     mod = __import__(mod_path, fromlist=[attr])
@@ -156,15 +160,87 @@ def test_zero_runtime_dependencies():
     print("H.B.1 deps: zero runtime, [llm] extra carries anthropic SDK")
 
 
-def test_packages_find_filters_correctly():
+def test_the_wheel_ships_aether_as_the_top_level_package():
+    """BUG-009. The wheel used to ship `transpiler`, so the only import
+    that worked for an installed user was `from transpiler.aether import
+    sdk` — while README, the sdk docstring and every file in this repo say
+    `from aether import sdk`. `package-dir` remaps the root to
+    `transpiler/`, so the package is `aether`, and `where` scopes discovery
+    to that one directory: tests/, demos/ and bench/ are then unshippable
+    by construction rather than by an exclude list somebody has to keep
+    extending.
+
+    Read from the file text: `package-dir = {"" = "transpiler"}` is an
+    inline table with an empty-string key, which the 3.10 fallback parser
+    in this file does not model."""
+    with open(os.path.join(ROOT, "pyproject.toml"), encoding="utf-8") as f:
+        text = f.read()
+    assert re.search(r'^package-dir\s*=\s*\{\s*""\s*=\s*"transpiler"\s*\}\s*$',
+                     text, re.M),         "package-dir must remap the root to transpiler/ so `aether` is top-level"
+
     cfg = _read_pyproject()
     find = cfg["tool"]["setuptools"]["packages"]["find"]
-    assert "transpiler*" in find["include"], find
-    for blocked in ("tests*", "demos*", "bench*", "scripts*", "yc*"):
-        assert blocked in find["exclude"], (blocked, find["exclude"])
-    assert os.path.isfile(os.path.join(ROOT, "transpiler", "__init__.py"))
+    assert find.get("where") == ["transpiler"], find
+    assert "aether*" in find["include"], find
+    assert not any(i.startswith("transpiler") for i in find["include"]),         f"`transpiler` must not be shipped as a package: {find['include']}"
+
     assert os.path.isfile(os.path.join(ROOT, "transpiler", "aether", "__init__.py"))
-    print("H.B.1 packages.find: include/exclude lists wired correctly")
+    # Still a package in the CHECKOUT: ~20 call sites run the CLI as
+    # `python -m transpiler.aether.cli` without installing.
+    assert os.path.isfile(os.path.join(ROOT, "transpiler", "__init__.py"))
+    print("H.B.1 packages: the wheel ships `aether`, scoped to transpiler/")
+
+
+def test_license_is_an_spdx_string_without_a_trove_classifier():
+    """BUG-006. `license = { text = ... }` is the PEP 621 table form; PEP
+    639 deprecated it and setuptools >= 77 REJECTS it, so `pip install .`
+    failed outright. Removing it surfaces the second half: an SPDX license
+    string may not coexist with a `License ::` trove classifier.
+
+    Asserted against the file text rather than through `_read_pyproject`,
+    because that reader has a branch that happily parses the broken form —
+    which is why the gate was green while the build was broken."""
+    with open(os.path.join(ROOT, "pyproject.toml"), encoding="utf-8") as f:
+        text = f.read()
+    assert re.search(r'^license\s*=\s*"[^"]+"\s*$', text, re.M), \
+        "project.license must be an SPDX string, not the `{ text = ... }` table"
+    assert "License ::" not in text, \
+        "a `License ::` classifier and an SPDX license string cannot coexist"
+    print("H.B.1 license: SPDX string, no conflicting trove classifier")
+
+
+def test_the_package_never_imports_an_unpackaged_top_level_module():
+    """BUG-007. `cmd_check_py` imported `tools.py_frontend`, reached via a
+    sys.path insert of the checkout root. `packages.find` ships only
+    `transpiler*`, so every pip-installed copy raised ModuleNotFoundError
+    on the headline Python feature while the source checkout worked and
+    every test passed.
+
+    The invariant: nothing under `transpiler/` may import a top-level
+    module that lives in the repo but is not in the wheel."""
+    unpackaged = {d for d in os.listdir(ROOT)
+                  if os.path.isdir(os.path.join(ROOT, d))
+                  and d not in ("transpiler", "build")
+                  and not d.startswith(".")}
+    pat = re.compile(r"^\s*(?:from|import)\s+(\w+)", re.M)
+    offenders = []
+    for dirpath, _dirs, files in os.walk(os.path.join(ROOT, "transpiler")):
+        if "__pycache__" in dirpath:
+            continue
+        for fn in files:
+            if not fn.endswith(".py"):
+                continue
+            p = os.path.join(dirpath, fn)
+            rel = os.path.relpath(p, ROOT).replace(os.sep, "/")
+            with open(p, encoding="utf-8") as f:
+                for mod in pat.findall(f.read()):
+                    if mod in unpackaged:
+                        offenders.append(f"{rel} imports {mod!r}")
+    assert not offenders, (
+        "the package imports a module that is not in the wheel, so this "
+        "works from a checkout and fails for every installed user: "
+        + "; ".join(sorted(offenders)))
+    print("H.B.1 imports: the package never reaches outside the wheel")
 
 
 if __name__ == "__main__":
@@ -172,5 +248,7 @@ if __name__ == "__main__":
     test_main_accepts_help()
     test_version_consistency()
     test_zero_runtime_dependencies()
-    test_packages_find_filters_correctly()
+    test_the_wheel_ships_aether_as_the_top_level_package()
+    test_license_is_an_spdx_string_without_a_trove_classifier()
+    test_the_package_never_imports_an_unpackaged_top_level_module()
     print("H.B.1 ALL PACKAGING TESTS PASS")

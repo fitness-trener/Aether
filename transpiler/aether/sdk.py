@@ -25,6 +25,11 @@ Diagnostics returned by the SDK are the same `aether.diagnostics.Diagnostic`
 dataclass used internally — `.code`, `.message`, `.position`, `.suggestion`,
 `.extra` — so anything the compiler knows about a problem is reachable
 without parsing strings.
+
+`TIMEOUT_ENFORCED` is part of this surface: False means this platform has
+no POSIX SIGALRM, so `timeout_ms` is not enforced and a runaway program
+hangs the caller. Each `RunResult.timeout_enforced` reports the same fact
+per call.
 """
 
 from __future__ import annotations
@@ -38,6 +43,7 @@ from .parser import parse as _parse_strict, parse_collect
 from .emitter import emit as _emit
 from .pretty import pretty as _pretty
 from .runtime import build_namespace, set_deterministic
+from .runner import compile_and_run as _compile_and_run, TIMEOUT_ENFORCED
 from .passes import analyze_flat
 from .diagnostics import Diagnostic, Position, AetherError
 
@@ -78,6 +84,11 @@ class RunResult:
     exit_code: int = 0
     elapsed_ms: int = 0
     diagnostic: Optional[Diagnostic] = None
+    #: Whether `timeout_ms` was actually armed for this run. False on a
+    #: platform without POSIX SIGALRM, where a runaway program hangs the
+    #: caller instead of returning exit_code=124 — so "no timeout fired"
+    #: and "no timer exists here" are distinguishable.
+    timeout_enforced: bool = False
 
 
 @dataclass
@@ -197,19 +208,23 @@ def run(source: str, stdin: str = "", timeout_ms: int = 5000,
     `AetherError` as a structured diagnostic. Honours the C.5
     deterministic test mode when `deterministic=True`.
 
-    `timeout_ms` is currently advisory on platforms without POSIX
-    SIGALRM (the bench harness enforces it via setitimer; the SDK
-    keeps the parameter for API symmetry and uses the bench helper
-    where available).
+    `timeout_ms` is enforced with POSIX `SIGALRM`; on a platform without
+    it (Windows) there is no enforcement and a runaway program hangs the
+    calling process. `aether.sdk.TIMEOUT_ENFORCED` says which applies, and
+    every `RunResult` carries `timeout_enforced` so a caller never has to
+    infer it. This used to read "uses the bench helper where available",
+    describing a fallback that did not exist: the helper lived in `bench/`,
+    which is not in the wheel, so every installed copy took the except
+    branch below and reported a working program as a failed run
+    (BUGS.md BUG-008). The runner is now in the package.
     """
     import time
     t0 = time.time()
     try:
-        from bench.harness import compile_and_run as _car
-        # Reuse the bench harness's SIGALRM-backed enforcement.
         if deterministic:
             set_deterministic(0)
-        res = _car(source, filename, stdin_text=stdin, timeout_ms=timeout_ms)
+        res = _compile_and_run(source, filename, stdin_text=stdin,
+                               timeout_ms=timeout_ms)
         diag = _rehydrate(res["diagnostic"]) if res.get("diagnostic") else None
         return RunResult(
             ok=bool(res.get("ok")),
@@ -218,6 +233,7 @@ def run(source: str, stdin: str = "", timeout_ms: int = 5000,
             exit_code=int(res.get("exit_code", 0)),
             elapsed_ms=int(res.get("elapsed_ms", 0)),
             diagnostic=diag,
+            timeout_enforced=bool(res.get("timeout_enforced", False)),
         )
     except Exception as e:
         return RunResult(
@@ -225,6 +241,7 @@ def run(source: str, stdin: str = "", timeout_ms: int = 5000,
             stderr=f"sdk.run error: {type(e).__name__}: {e}",
             exit_code=1,
             elapsed_ms=int((time.time() - t0) * 1000),
+            timeout_enforced=TIMEOUT_ENFORCED,
         )
 
 

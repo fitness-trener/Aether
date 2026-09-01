@@ -137,7 +137,11 @@ def main() -> int:
     # the gate — it only ran when someone ran it by hand. A test file not
     # in the gate does not exist.
     for _name, _rel in (("py_soundness", "test_py_soundness.py"),
-                        ("py_frontend_sinks", "test_py_frontend_sinks.py")):
+                        ("py_frontend_sinks", "test_py_frontend_sinks.py"),
+                        # The published Action only ever executes in someone
+                        # else's workflow, so every way it can drift from the
+                        # CLI is invisible here unless it is asserted here.
+                        ("action", "test_action.py")):
         _t = os.path.join(ROOT, "tests", _rel)
         if os.path.isfile(_t):
             r = subprocess.run([sys.executable, "-B", _t], cwd=ROOT, env=env,
@@ -425,6 +429,7 @@ def main() -> int:
     pysound_ok = bool(results.get("py_soundness") and results["py_soundness"]["ok"])
     pysink_ok = bool(results.get("py_frontend_sinks")
                      and results["py_frontend_sinks"]["ok"])
+    action_ok = bool(results.get("action") and results["action"]["ok"])
     recovery_ok = bool(results.get("parser_recovery") and results["parser_recovery"]["ok"])
     det_ok = bool(results.get("deterministic") and results["deterministic"]["ok"])
     rt_ok = bool(results.get("pretty_roundtrip") and results["pretty_roundtrip"]["ok"])
@@ -488,6 +493,7 @@ def main() -> int:
     print(f"# fuzz:           {'PASS' if fuzz_ok else 'FAIL'} (200 rounds x 3 modes)", file=sys.stderr)
     print(f"# py_soundness:  {'PASS' if pysound_ok else 'FAIL'} (nothing UNPROVABLE becomes clean)", file=sys.stderr)
     print(f"# py_sinks:      {'PASS' if pysink_ok else 'FAIL'} (sinks fire on unmodified Python)", file=sys.stderr)
+    print(f"# action:        {'PASS' if action_ok else 'FAIL'} (action.yml stays wired to the CLI)", file=sys.stderr)
     everything = ((n_ref_ok == n_ref) and (n_bench_ok == n_bench) and reg_ok
                   and static_ok and recovery_ok and det_ok and rt_ok and fmt_ok
                   and sdk_ok and lsp_ok and d1_ok and d2_ok and d3_ok and mf_ok
@@ -496,7 +502,7 @@ def main() -> int:
                   and demos_ok and fuzz_ok and scope_ok and rte_ok and fp_ok
                   and ex_ok and scan_ok and risk_ok and ratchet_ok and corpus_ok
                   and alsp_ok and flc_ok and capfw_ok
-                  and pysound_ok and pysink_ok)
+                  and pysound_ok and pysink_ok and action_ok)
     return 0 if everything else 1
 
 

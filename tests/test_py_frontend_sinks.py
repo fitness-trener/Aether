@@ -15,7 +15,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "transpiler"))
 sys.path.insert(0, ROOT)
 
-from tools.py_frontend import py_to_ir                    # noqa: E402
+from aether.py_frontend import py_to_ir                    # noqa: E402
 from aether.passes import analyze_flat                    # noqa: E402
 from aether.passes.ast_walk import walk                   # noqa: E402
 
@@ -178,7 +178,7 @@ def test_chained_receiver_call_is_not_lost():
 
 
 def test_sink_tables_are_auditable():
-    from tools.py_frontend import mapping_table
+    from aether.py_frontend import mapping_table
     t = mapping_table()
     for key in ("sink_by_qualified", "sink_by_method", "sink_by_builtin"):
         assert key in t and t[key], f"{key} must be exposed for audit"
@@ -428,7 +428,7 @@ def test_chained_module_path_resolves():
     Also pins the substitution bug found while fixing it: `import xml.sax`
     binds the ROOT name, so alias_to_path["xml"] is "xml.sax" and naive
     substitution produced "xml.sax.sax.parseString"."""
-    from tools.py_frontend import _callee_spelling, _Imports
+    from aether.py_frontend import _callee_spelling, _Imports
     import ast as pyast
     imp = _Imports()
     tree = pyast.parse("import xml.sax\nimport numpy as np\n"
@@ -548,6 +548,100 @@ def test_check_py_clean_exits_0():
     print("cli: check-py on a clean file exits 0")
 
 
+# --- directory walk -----------------------------------------------------
+
+_CMDI_SRC = ("import subprocess\n"
+             "def r(h):\n"
+             "    subprocess.run('ping ' + h, shell=True)\n")
+
+
+def _run_check_py_tree(files, *flags, target="."):
+    """Write `files` ({relative path: source-or-bytes}) into a temp tree and
+    run `check-py` over `target` within it. Returns (rc, combined output)."""
+    import subprocess as sp
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        for rel, src in files.items():
+            p = os.path.join(d, *rel.split("/"))
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            mode, enc = ("wb", None) if isinstance(src, bytes) else ("w", "utf-8")
+            with open(p, mode, encoding=enc) as f:
+                f.write(src)
+        r = sp.run([sys.executable, "-B", "-m", "transpiler.aether.cli",
+                    "check-py", os.path.join(d, *target.split("/")), *flags],
+                   cwd=ROOT, capture_output=True, text=True)
+    return r.returncode, r.stdout + r.stderr
+
+
+def test_directory_walk_scans_every_file():
+    rc, out = _run_check_py_tree({
+        "app/a.py": _CMDI_SRC,
+        "app/sub/b.py": "def f(cur, n):\n    cur.execute('SELECT ' + n)\n",
+        "app/clean.py": "def add(a, b):\n    return a + b\n",
+    })
+    assert rc == 2, f"findings in a tree must exit 2: {out}"
+    assert "E0714" in out and "E0713" in out, \
+        f"both files' findings must be reported: {out}"
+    assert "a.py" in out and "b.py" in out, \
+        f"each finding must name its file: {out}"
+    assert "scanned 3 file(s)" in out, f"summary must count every file: {out}"
+    print("cli: check-py walks a directory and names each file")
+
+
+def test_directory_walk_skips_vendored_trees():
+    """A repo scan must not become a dependency scan. Findings the user
+    cannot fix bury the ones they can."""
+    rc, out = _run_check_py_tree({
+        "app/mine.py": "def add(a, b):\n    return a + b\n",
+        ".venv/lib/vendored.py": _CMDI_SRC,
+        "node_modules/x/dep.py": _CMDI_SRC,
+        "__pycache__/cached.py": _CMDI_SRC,
+        "build/generated.py": _CMDI_SRC,
+    })
+    assert "E0714" not in out, f"vendored trees must not be walked: {out}"
+    assert "scanned 1 file(s)" in out, f"only the user's file counts: {out}"
+    assert rc == 0, f"no findings in the user's own code must exit 0: {out}"
+    print("cli: check-py skips .venv/node_modules/__pycache__/build")
+
+
+def test_unparseable_file_does_not_abort_the_walk():
+    """py2 sources, templates and fixtures are normal in a real tree. They
+    are counted, and the files after them are still scanned."""
+    rc, out = _run_check_py_tree({
+        "app/a_py2.py": "print 'hello'\n",       # sorts before b.py
+        "app/b.py": _CMDI_SRC,
+    })
+    assert rc == 2, f"the finding after the bad file must still be found: {out}"
+    assert "E0714" in out, out
+    assert "1 unparseable" in out, f"the skip must be counted, not hidden: {out}"
+    print("cli: an unparseable file does not abort the walk")
+
+
+def test_utf8_bom_file_is_scanned_not_silently_skipped():
+    """A UTF-8 BOM is common on Windows and Python's own tokenizer strips
+    it. Read as plain utf-8 it survives as U+FEFF, every such file becomes
+    a SyntaxError, and a tree walk counts it 'unparseable' — a SILENT
+    false negative. Found by scanning a tree written by PowerShell."""
+    rc, out = _run_check_py_tree({
+        "app/bom.py": b"\xef\xbb\xbf" + _CMDI_SRC.encode("utf-8"),
+    })
+    assert "0 unparseable" in out, \
+        f"a BOM must not make a file unreadable: {out}"
+    assert "E0714" in out and rc == 2, \
+        f"the finding in a BOM'd file must still be reported: {out}"
+    print("cli: a UTF-8 BOM does not hide a file from the scanner")
+
+
+def test_missing_path_is_a_usage_error():
+    import subprocess as sp
+    r = sp.run([sys.executable, "-B", "-m", "transpiler.aether.cli",
+                "check-py", "no/such/path.py"], cwd=ROOT,
+               capture_output=True, text=True)
+    assert r.returncode == 2, f"a missing target must exit 2: {r.stderr}"
+    assert "no such file or directory" in (r.stdout + r.stderr).lower()
+    print("cli: a missing target is a usage error, not a traceback")
+
+
 if __name__ == "__main__":
     test_body_is_no_longer_discarded()
     test_assign_becomes_let()
@@ -590,4 +684,9 @@ if __name__ == "__main__":
     test_check_py_clean_exits_0()
     test_e0711_is_held_back_by_default()
     test_e0711_appears_under_strict()
+    test_directory_walk_scans_every_file()
+    test_directory_walk_skips_vendored_trees()
+    test_unparseable_file_does_not_abort_the_walk()
+    test_utf8_bom_file_is_scanned_not_silently_skipped()
+    test_missing_path_is_a_usage_error()
     print("PY FRONTEND: ALL TESTS PASS")

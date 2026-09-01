@@ -50,7 +50,13 @@ def _emit_error(diag: Diagnostic, as_json: bool):
 
 
 def _read(path: str) -> str:
-    with open(path, "r", encoding="utf-8") as f:
+    # `utf-8-sig`, not `utf-8`: a UTF-8 BOM is common in files written on
+    # Windows, and Python's own tokenizer strips it. Read as plain utf-8 it
+    # survives as U+FEFF and every such file becomes a syntax error — which
+    # `check-py` over a tree would count as "unparseable" and skip SILENTLY.
+    # A file the scanner cannot read is a missed finding, not a clean file.
+    # On a file with no BOM this codec is identical to utf-8.
+    with open(path, "r", encoding="utf-8-sig") as f:
         return f.read()
 
 
@@ -255,39 +261,165 @@ _PY_SKIP_STAGES = ("effects", "semantic")
 _PY_STRICT_ONLY_CODES = ("E0711",)
 
 
+# Directories that are never the user's own source. Walking `.venv` or
+# `node_modules` turns a repo scan into a dependency scan — thousands of
+# findings in code the user cannot fix, burying the ones they can.
+_PY_SKIP_DIRS = frozenset((
+    ".git", ".hg", ".svn", "__pycache__", ".mypy_cache", ".pytest_cache",
+    ".ruff_cache", ".tox", ".nox", ".venv", "venv", "env", "node_modules",
+    "site-packages", "build", "dist", ".eggs",
+))
+
+
+def _py_files(target: str) -> list:
+    """Every `.py` file under `target`, or `[target]` if it is a file.
+
+    Sorted at every level so two runs over the same tree produce the same
+    output in the same order (tests/test_deterministic.py's rule)."""
+    if os.path.isfile(target):
+        return [target]
+    found = []
+    for dirpath, dirnames, filenames in os.walk(target):
+        dirnames[:] = sorted(d for d in dirnames
+                             if d not in _PY_SKIP_DIRS
+                             and not d.endswith(".egg-info"))
+        found.extend(os.path.join(dirpath, f) for f in sorted(filenames)
+                     if f.endswith(".py"))
+    return found
+
+
 def cmd_check_py(args) -> int:
-    """Run the language-independent detectors over a Python file.
+    """Run the language-independent detectors over Python files.
+
+    Takes any mix of files and directories; a directory is walked
+    recursively for `.py` (see `_PY_SKIP_DIRS` for what is not walked).
 
     Python has no declared `effects` clause and no marker types, so the
     guarantee set is genuinely smaller than `check` on a .aeth file. That
     is printed, not implied: a tool that quietly offers less than it looks
     like it offers is worse than one that offers less out loud."""
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__)))))
-    from tools.py_frontend import py_to_ir
+    # Relative, and no sys.path surgery: the frontend used to live in
+    # `tools/`, which `[tool.setuptools.packages.find]` does not package,
+    # so `check-py` raised ModuleNotFoundError in every pip-installed copy
+    # while working fine from a checkout. Library code the CLI depends on
+    # belongs in the library (BUG-007).
+    from .py_frontend import py_to_ir
     from .passes import analyze_flat
+    from .risk import rank
 
     strict = getattr(args, "strict", False)
     skip = _PY_SKIP_STAGES if strict else _PY_SKIP_STAGES + ("capability",)
 
-    src = _read(args.file)
-    ast, unprovable, meta = py_to_ir(src)
-    diags = analyze_flat(ast, skip=skip)
-    if not strict:
-        diags = [d for d in diags if d.code not in _PY_STRICT_ONLY_CODES]
+    targets = args.target
+    missing = [t for t in targets if not os.path.exists(t)]
+    if missing:
+        for t in missing:
+            sys.stderr.write(f"aether: no such file or directory: {t}\n")
+        return 2
+    if getattr(args, "sarif", False) and args.json:
+        sys.stderr.write("aether: --sarif and --json are two different "
+                         "output formats; pick one\n")
+        return 2
+    paths = sorted({p for t in targets for p in _py_files(t)})
+    # One explicit file keeps the original single-file output verbatim; a
+    # directory (or several targets) prefixes each file's findings with
+    # its path, because otherwise line numbers name nothing.
+    show_paths = not (len(targets) == 1 and os.path.isfile(targets[0]))
+
+    results, unreadable, crashed = [], [], []
+    for p in paths:
+        try:
+            src = _read(p)
+        except (OSError, UnicodeDecodeError) as e:
+            unreadable.append((p, type(e).__name__))
+            continue
+        try:
+            ast, unprovable, meta = py_to_ir(src)
+            diags = analyze_flat(ast, skip=skip)
+        except (SyntaxError, ValueError, RecursionError) as e:
+            # py2 sources, templates and test fixtures are normal in a real
+            # tree; they are counted, not fatal.
+            unreadable.append((p, type(e).__name__))
+            continue
+        except Exception as e:
+            # An analyzer crash is a BUG in Aether, not a property of the
+            # input. It must be loud and must fail the run — `passes/
+            # __init__.py` deliberately does not swallow exceptions.
+            crashed.append((p, f"{type(e).__name__}: {e}"))
+            continue
+        if not strict:
+            diags = [d for d in diags if d.code not in _PY_STRICT_ONLY_CODES]
+        # Worst-first, so the top of a long scan is the part worth reading.
+        # Line and code break ties so the order stays deterministic.
+        diags.sort(key=lambda d: (-rank(d.code), d.position.line, d.code))
+        results.append((p, diags, unprovable, meta))
+
+    n_find = sum(len(ds) for _, ds, _, _ in results)
+    n_func = sum(m["n_functions"] for _, _, _, m in results)
+    n_unp = sum(len(v) for _, _, unp, _ in results for v in unp.values())
+    n_unp_fns = sum(len(unp) for _, _, unp, _ in results)
+
+    # Crashes go to stderr in every output mode: SARIF and --json own
+    # stdout, and a detector that crashed must not be invisible just
+    # because the caller asked for machine-readable output.
+    for p, err in crashed:
+        sys.stderr.write(f"aether: ANALYZER ERROR on {p}: {err}\n"
+                         f"  this is a bug in Aether, not in your code — "
+                         f"please report it (see BUGS.md)\n")
+
+    if getattr(args, "sarif", False):
+        from .risk import risk_of
+        from .sarif import to_sarif
+        # Relative to the working directory, which under CI is the
+        # checkout root. Code Scanning silently drops a result whose
+        # artifactLocation is not relative to it.
+        print(json.dumps(to_sarif(
+            [{"path": p,
+              "findings": [{"code": d.code, "message": d.message,
+                            "line": d.position.line, "risk": risk_of(d.code)}
+                           for d in ds]}
+             for p, ds, _u, _m in results], base=os.getcwd()), indent=2))
+        return 2 if (n_find or crashed) else 0
 
     if args.json:
-        json.dump({"ok": not diags, "lang": "python",
-                   "diagnostics": [d.to_dict() for d in diags],
-                   "unprovable": unprovable, "meta": meta}, sys.stdout)
+        json.dump({"ok": not n_find and not crashed, "lang": "python",
+                   "files": [{"path": p.replace(os.sep, "/"),
+                              "diagnostics": [d.to_dict() for d in ds],
+                              "unprovable": unp, "meta": meta}
+                             for p, ds, unp, meta in results],
+                   "unreadable": [{"path": p.replace(os.sep, "/"),
+                                   "reason": why} for p, why in unreadable],
+                   "errors": [{"path": p.replace(os.sep, "/"), "error": e}
+                              for p, e in crashed]}, sys.stdout)
         sys.stdout.write("\n")
-        return 2 if diags else 0
+        return 2 if (n_find or crashed) else 0
 
-    for d in diags:
-        _emit_error(d, False)
-    n_unp = sum(len(v) for v in unprovable.values())
-    print(f"\n{len(diags)} finding(s) in {meta['n_functions']} function(s); "
-          f"{n_unp} unprovable region(s) in {len(unprovable)} function(s).")
+    for p, ds, _unp, _meta in results:
+        if not ds:
+            continue
+        if show_paths:
+            sys.stderr.write(f"{p.replace(os.sep, '/')}\n")
+        for d in ds:
+            _emit_error(d, False)
+    if unreadable and not show_paths:
+        p, why = unreadable[0]
+        sys.stderr.write(f"aether: could not parse {p}: {why}\n")
+        return 2
+
+    print()
+    if show_paths:
+        by_code = {}
+        for _, ds, _, _ in results:
+            for d in ds:
+                by_code[d.code] = by_code.get(d.code, 0) + 1
+        print(f"scanned {len(results)} file(s) · "
+              f"{sum(1 for _, ds, _, _ in results if ds)} with findings · "
+              f"{len(unreadable)} unparseable · {len(crashed)} analyzer error(s)")
+        if by_code:
+            print("findings by code: " + ", ".join(
+                f"{c}x{n}" for c, n in sorted(by_code.items())))
+    print(f"{n_find} finding(s) in {n_func} function(s); "
+          f"{n_unp} unprovable region(s) in {n_unp_fns} function(s).")
     print("NOT checked on Python (no declared effects clause, no marker "
           "types): E0801 effect composition, and the taint-marker family "
           "(E0712/E0715/E0716/E0717/E0724).")
@@ -296,7 +428,7 @@ def cmd_check_py(args) -> int:
               "filesystem paths, and the capability inventory (E0701). "
               "Held back by measurement, not taste - see "
               "bench/py_frontend/REPORT.md.")
-    return 2 if diags else 0
+    return 2 if (n_find or crashed) else 0
 
 
 def cmd_check(args) -> int:
@@ -553,15 +685,23 @@ def main(argv=None) -> int:
                     help="opt out of default-on multi-file import resolution")
 
     sp = sub.add_parser("check-py",
-                        help="run the language-independent detectors over a "
-                             "Python file (sinks + capability; no effect "
-                             "composition, no marker taint)")
-    sp.add_argument("file")
+                        help="run the language-independent detectors over "
+                             "Python files or directories (sinks + "
+                             "capability; no effect composition, no marker "
+                             "taint)")
+    sp.add_argument("target", nargs="+", metavar="PATH",
+                    help="Python file(s) and/or directory(ies); a directory "
+                         "is walked recursively for .py, skipping .git, "
+                         ".venv, node_modules, build and other vendored trees")
     sp.add_argument("--strict", action="store_true",
                     help="also report E0711 (dynamic filesystem paths) and "
                          "the capability inventory (E0701); both are held "
                          "back by default because they fire on ordinary "
                          "Python - see bench/py_frontend/REPORT.md")
+    sp.add_argument("--sarif", action="store_true",
+                    help="emit SARIF v2.1.0 on stdout for GitHub Code "
+                         "Scanning; paths are relative to the working "
+                         "directory, which under CI is the checkout root")
 
     sp = sub.add_parser("check", help="parse + emit (no execution)")
     sp.add_argument("file")

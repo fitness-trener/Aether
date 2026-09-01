@@ -253,6 +253,50 @@ end
     print("C.2 sdk.run: a failing program returns its code (E0301), not None")
 
 
+def test_run_works_without_bench_importable():
+    """BUG-008. `sdk.run` used to reach `bench.harness` for its runner, and
+    `bench/` is not in the wheel — so in every pip-installed copy the
+    ImportError was caught by the function's own `except Exception` and
+    returned as `RunResult(ok=False, ...)`. A working program reported as a
+    failed run is worse than a crash: it is exactly what a bad candidate
+    looks like, so a caller grading candidates saw them all fail.
+
+    Reproduces the installed layout: `transpiler/` on the path, repo root
+    NOT on it, so `bench` cannot be imported at all."""
+    import subprocess
+    prog = (
+        "import sys\n"
+        f"sys.path.insert(0, {os.path.join(ROOT, 'transpiler')!r})\n"
+        "import importlib.util\n"
+        "assert importlib.util.find_spec('bench') is None, "
+        "'bench must NOT be importable for this test to mean anything'\n"
+        "from aether import sdk\n"
+        "r = sdk.run('function main() returns Unit\\n"
+        "  effects log\\ndo\\n  print(\"hi\")\\nend\\n')\n"
+        "print(repr((r.ok, r.stdout.strip(), r.stderr.strip())))\n"
+    )
+    # cwd outside the repo so the root cannot sneak back in via sys.path[0].
+    r = subprocess.run([sys.executable, "-B", "-c", prog],
+                       cwd=os.path.dirname(ROOT),
+                       capture_output=True, text=True)
+    assert r.returncode == 0, f"sdk.run failed without bench: {r.stderr}"
+    ok, out, err = eval(r.stdout.strip())
+    assert ok, f"sdk.run must work without bench importable; stderr={err!r}"
+    assert out == "hi", f"stdout must survive the move: {out!r}"
+    print("C.2 sdk.run: works with bench/ absent, as in an installed copy")
+
+
+def test_run_reports_whether_the_timeout_was_actually_armed():
+    """`timeout_ms` is POSIX-only. A caller must be able to tell "no timeout
+    fired" from "this platform has no timer", instead of inferring it."""
+    import signal as _signal
+    r = sdk.run(_CLEAN)
+    assert r.timeout_enforced == hasattr(_signal, "SIGALRM"), (
+        f"timeout_enforced={r.timeout_enforced} disagrees with the platform")
+    print(f"C.2 sdk.run: timeout_enforced reported honestly "
+          f"({r.timeout_enforced})")
+
+
 if __name__ == "__main__":
     test_parse_clean()
     test_parse_recovers_with_partial_ast()
@@ -265,4 +309,6 @@ if __name__ == "__main__":
     test_Source_class_caches_parse()
     test_rehydrate_handles_every_harness_diagnostic_shape()
     test_run_of_failing_program_carries_a_code()
+    test_run_works_without_bench_importable()
+    test_run_reports_whether_the_timeout_was_actually_armed()
     print("C.2 ALL SDK TESTS PASS")

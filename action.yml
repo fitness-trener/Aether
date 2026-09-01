@@ -1,0 +1,170 @@
+name: 'Aether Python Security Scan'
+description: >-
+  Scan Python for SQL injection, command injection, insecure deserialization,
+  SSTI, XXE, open redirect and hardcoded credentials, and upload the findings
+  to GitHub Code Scanning as SARIF.
+author: 'Aether'
+
+branding:
+  icon: 'shield'
+  color: 'purple'
+
+# ---------------------------------------------------------------------------
+# The caller's workflow must grant:
+#
+#   permissions:
+#     contents: read
+#     security-events: write   # only if upload-sarif is true (the default)
+#
+# A composite action cannot grant its own permissions, and without
+# `security-events: write` the upload step fails with 403.
+# ---------------------------------------------------------------------------
+
+inputs:
+  path:
+    description: >-
+      Files and/or directories to scan, space-separated. Directories are
+      walked recursively for .py, skipping .git, .venv, node_modules,
+      __pycache__, build, dist and site-packages.
+    required: false
+    default: '.'
+  strict:
+    description: >-
+      Also report E0711 (dynamic filesystem paths) and the E0701 capability
+      inventory. Both are held back by default by measurement, not taste:
+      E0711 alone fired 476 times against 39 for the whole default set on
+      1.19M lines of PyPI code (bench/pypi_scan/REPORT.md).
+    required: false
+    default: 'false'
+  fail-on-findings:
+    description: >-
+      Fail the job when the scan reports a finding. An analyzer crash always
+      fails the job regardless — that is a bug in Aether, not a property of
+      your code, and it must not pass silently.
+    required: false
+    default: 'true'
+  upload-sarif:
+    description: 'Upload the SARIF report to GitHub Code Scanning.'
+    required: false
+    default: 'true'
+  sarif-file:
+    description: 'Where to write the SARIF report.'
+    required: false
+    default: 'aether.sarif'
+  category:
+    description: >-
+      Code Scanning category. Give each Aether run in a workflow its own
+      category, or the later upload replaces the earlier one's alerts.
+    required: false
+    default: 'aether'
+  setup-python:
+    description: >-
+      Install Python with actions/setup-python. Set to "false" if the job
+      already set up the interpreter you want Aether to run under.
+    required: false
+    default: 'true'
+  python-version:
+    description: 'Python version, when setup-python is true. Aether needs 3.10+.'
+    required: false
+    default: '3.12'
+
+outputs:
+  findings:
+    description: 'Number of findings in the SARIF report.'
+    value: ${{ steps.scan.outputs.findings }}
+  sarif-file:
+    description: 'Path to the SARIF report that was written.'
+    value: ${{ steps.scan.outputs.sarif-file }}
+  exit-code:
+    description: 'Raw `aether check-py` exit code: 0 clean, 2 findings or crash.'
+    value: ${{ steps.scan.outputs.exit-code }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      if: inputs.setup-python == 'true'
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install Aether
+      shell: bash
+      run: |
+        # From the action's own checkout, so the version is pinned by the
+        # `uses:` ref rather than by whatever is on PyPI today. Aether's
+        # core is stdlib-only, so this resolves nothing over the network.
+        python -m pip install --disable-pip-version-check --quiet "$GITHUB_ACTION_PATH"
+
+    - name: Run Aether
+      id: scan
+      shell: bash
+      # Inputs reach the shell as environment variables, never as template
+      # interpolation: `${{ inputs.path }}` spliced into a run: block is a
+      # script-injection sink, and shipping that in a security scanner would
+      # be its own headline.
+      env:
+        AETHER_PATH: ${{ inputs.path }}
+        AETHER_STRICT: ${{ inputs.strict }}
+        AETHER_SARIF: ${{ inputs.sarif-file }}
+      run: |
+        set -uo pipefail
+        # `${a[@]:+"${a[@]}"}` is the expansion that is safe for an EMPTY
+        # array under `set -u`; a bare "${a[@]}" is an unbound-variable
+        # error on older bash.
+        flags=()
+        if [ "$AETHER_STRICT" = "true" ]; then flags+=(--strict); fi
+
+        # Word-split AETHER_PATH on whitespace so several targets work, and
+        # reject anything that is not an existing path before it reaches the
+        # command line.
+        read -r -a targets <<< "$AETHER_PATH"
+        if [ "${#targets[@]}" -eq 0 ]; then
+          echo "::error::aether: the 'path' input is empty"
+          exit 1
+        fi
+        for t in "${targets[@]}"; do
+          if [ ! -e "$t" ]; then
+            echo "::error::aether: no such file or directory: $t"
+            exit 1
+          fi
+        done
+
+        aether check-py "${targets[@]}" ${flags[@]:+"${flags[@]}"} --sarif > "$AETHER_SARIF"
+        rc=$?
+
+        findings=$(python -c "import json,sys;print(len(json.load(open(sys.argv[1]))['runs'][0]['results']))" "$AETHER_SARIF")
+        {
+          echo "findings=$findings"
+          echo "sarif-file=$AETHER_SARIF"
+          echo "exit-code=$rc"
+        } >> "$GITHUB_OUTPUT"
+
+        # The human-readable report, in the log next to the diff that caused
+        # it. A second pass over the same tree is cheap: Aether is
+        # stdlib-only and does 230 files in about six seconds.
+        aether check-py "${targets[@]}" ${flags[@]:+"${flags[@]}"} || true
+
+        if [ "$rc" -eq 2 ] && [ "$findings" -eq 0 ]; then
+          echo "::error::Aether exited 2 with no findings — a detector crashed."
+          echo "That is a bug in Aether, not in your code. Please report it:"
+          echo "https://github.com/fitness-trener/Aether/issues"
+          exit 1
+        fi
+        echo "aether: $findings finding(s)"
+
+    - name: Upload SARIF to Code Scanning
+      if: ${{ always() && inputs.upload-sarif == 'true' }}
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ inputs.sarif-file }}
+        category: ${{ inputs.category }}
+
+    - name: Fail on findings
+      if: ${{ inputs.fail-on-findings == 'true' && steps.scan.outputs.findings != '0' }}
+      shell: bash
+      run: |
+        echo "::error::Aether reported ${{ steps.scan.outputs.findings }} finding(s)."
+        echo "Each is listed above with its code, file and line, and in the"
+        echo "Security -> Code Scanning tab ranked by security-severity."
+        exit 1

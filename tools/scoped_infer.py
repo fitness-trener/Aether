@@ -35,7 +35,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-from tools.py_frontend import (                       # noqa: E402
+from aether.py_frontend import (                       # noqa: E402
     _Imports, _classify_dotted, _module_root, _const_str,
     CAP_BY_MODULE, CAP_BY_QUALIFIED, CAP_BY_BUILTIN, PURE_BUILTINS,
     PURE_MODULES, DYNAMIC_BUILTINS, DYNAMIC_ATTR_BUILTINS,
