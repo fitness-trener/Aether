@@ -353,10 +353,9 @@ Verified in a clean venv: `transpiler` NOT importable, `from aether import
 sdk` works, `sdk.run` and `sdk.grade` return ok, and the `aether check-py`
 console script reports E0723 on the hardcoded-credential repro.
 
-### BUG-010  E0713 flags every SQLAlchemy ORM call, at 97% of all findings  [FIXED pending-commit]
+### BUG-010  E0713 flags every SQLAlchemy ORM call, at 97% of all findings  [FIXED 9b51716]
 test: tests/test_py_frontend_sinks.py
 
-NOTE: replace `pending-commit` with the real hash when this lands.
 
 Found 2026-09-01 by `bench/framework_scan/run_scan.py` over 15 AI-agent
 frameworks (4,946 files). Repro — the safest form of SQL in Python:
@@ -441,10 +440,9 @@ Benign corpus unchanged (E0711 11 · E0713 1 · E0720 1); ground truth 29 TP
 (97 hit / 14 miss). `bench/py_frontend/corpus/sqlalchemy_repro.py` pins 11
 safe and 10 vulnerable shapes.
 
-### BUG-011  an import under `try:` or inside a function was invisible, so its sinks were SILENT  [FIXED pending-commit]
+### BUG-011  an import under `try:` or inside a function was invisible, so its sinks were SILENT  [FIXED 9b51716]
 test: tests/test_py_frontend_sinks.py
 
-NOTE: replace `pending-commit` with the real hash when this lands.
 
 Found 2026-09-02 while fixing BUG-010: the first fix cleared only 43 of
 1,029 SQLAlchemy findings, and reading the survivors showed `select` was
