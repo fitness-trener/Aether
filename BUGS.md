@@ -352,3 +352,59 @@ starting with `transpiler` is in `include`.
 Verified in a clean venv: `transpiler` NOT importable, `from aether import
 sdk` works, `sdk.run` and `sdk.grade` return ok, and the `aether check-py`
 console script reports E0723 on the hardcoded-credential repro.
+
+### BUG-010  E0713 flags every SQLAlchemy ORM call, at 97% of all findings  [OPEN]
+
+Found 2026-09-01 by `bench/framework_scan/run_scan.py` over 15 AI-agent
+frameworks (4,946 files). Repro — the safest form of SQL in Python:
+
+```python
+from sqlalchemy import select, delete, text
+conn.execute(select(t.c.a).where(t.c.id == cid))   # -> E0713
+conn.execute(delete(t).where(t.c.expires < now))   # -> E0713
+conn.execute(text("SELECT 1"))                     # -> E0713
+```
+
+**1,029 of 1,055 findings in that scan are this shape.** `agno` alone
+produced 868 from 31 files; `langchain-community` 137.
+
+Root cause is two individually correct rules composing into a wrong
+answer. `execute` is a SQL sink matched by METHOD NAME — the over-flag
+`vault/wiki/questions/q5` sanctions, because the error direction is safe.
+`_SQL_RULE` then reads any non-literal argument as a dynamic query, and a
+`select(...)` call is a non-literal. So every ORM call site is a finding.
+
+The argument is not a string at all. A SQLAlchemy Core expression is
+compiled by the library with bound parameters; there is no concatenation
+for an attacker to reach. Flagging it is not conservative, it is wrong in
+a way that makes the row unusable: any Python backend that uses an ORM
+gets thousands of findings and turns the detector off.
+
+Precision, not soundness — Aether over-flags, it does not miss. But the
+E0711 precedent (`bench/py_frontend/REPORT.md` §2) is that a row this
+noisy does not ship default-on regardless of being correct-by-rule.
+
+Fix directions, cheapest first:
+
+1. **Recognise the safe constructors.** Treat a call to
+   `select`/`insert`/`update`/`delete`/`text`/`table` (SQLAlchemy's
+   expression builders) as a sanctioned query argument, the way
+   `sqlBind` is. Narrow, table-driven, matches the existing
+   `SINK_GUARDS` shape, and would remove ~all 1,029 without touching the
+   concatenation cases that matter.
+2. **Do not treat a bare call result as dynamic** for the SQL rule.
+   Weaker and broader than (1) — it would also clear
+   `execute(build_query(user_input))`, which is a real risk.
+3. Demote E0713 to `--strict` on Python. Last resort: it is the row with
+   the strongest cross-tool agreement (94.2% with bandit's B608 in
+   `bench/pypi_scan/RECALL.md`) and the one users most expect.
+
+(1) is the one to probe first. Confirm empirically that the concatenation
+repros in `bench/py_frontend/corpus/sqli_repro.py` still fire afterwards,
+and that the benign counts on `tools/py_corpus{,2}` do not move.
+
+Related, much smaller, same family: a `yaml.SafeLoader` **subclass** as a
+`Loader=` value is still refused (`haystack_ai/haystack/marshal/yaml.py:40`),
+because BUG-004's contract is that an unrecognized guard value means SINK.
+Correct by policy, wrong in fact; already listed as a known imprecision in
+`bench/py_frontend/REPORT.md` §4.
