@@ -8,7 +8,8 @@ version = "0.3.0"
 description = "A programming language designed for AI agents to write production code."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = { text = "BUSL-1.1" }
+license-files = ["LICENSE"]
 authors = [
     { name = "Aether contributors" },
 ]
@@ -19,7 +20,7 @@ keywords = [
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "License :: Other/Proprietary License",
     "Operating System :: POSIX",
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.10",

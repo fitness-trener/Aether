@@ -65,3 +65,15 @@ The CLI emits structured JSON on `--json` so an agent can consume it. The Python
 5. Errors are structured; suggestions are machine-readable.
 
 See `grammar/keywords.md`, `grammar/types.md`, `grammar/effects.md`, `grammar/grammar.ebnf`, `grammar/stdlib.md`.
+
+## License
+
+Business Source License 1.1 — see `LICENSE`. Source is public. Using Aether on
+your own code, in production and in CI, is free; so is research, teaching, and
+evaluation. Code you write in Aether and the Python the transpiler emits are
+yours and carry no obligation from this license.
+
+What the license reserves is selling Aether itself — offering a hosted,
+embedded, or paid product whose value derives substantially from the compiler,
+diagnostic suite, or scanner. That needs a commercial license until the Change
+Date (2030-07-19), when each released version converts to Apache-2.0.
