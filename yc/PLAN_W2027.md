@@ -1,8 +1,9 @@
-# YC Winter 2027 — deadline, honest state, and the 62-day plan
+# YC Winter 2027 — deadline, honest state, and the 61-day plan
 
-**Written:** 2026-09-01. **Supersedes** the gating analysis in
-`GO_NOGO_MEMO.md` (2026-05-21), which predates the Python frontend, the
-scanner, the 1.19M-line measurement and the recall oracle.
+**Written:** 2026-09-01. **Revised:** 2026-09-02, after two days of
+execution that finished week 1, pulled week 2 and week 3 forward, and
+invalidated three of this plan's own assumptions. Supersedes
+`GO_NOGO_MEMO.md` (2026-05-21).
 
 ---
 
@@ -15,257 +16,222 @@ scanner, the 1.19M-line measurement and the recall oracle.
 | Batch runs | Jan–Mar 2027, San Francisco | same |
 | Early Decision (Spring/Summer/Fall 2027) | rolling, no published date; select "A batch after Winter 2027" | [ycombinator.com/early-decision](https://www.ycombinator.com/early-decision) |
 
-**62 days from today.** YC reads applications on a rolling basis and does
-consider late ones, but the main selection round is the deadline. Treat
-Nov 2 as hard.
-
-Second fact worth knowing: an application costs nothing and a rejection
-does not burn the next batch. The Early Decision path means the same work
-converts into a Spring 2027 application if W2027 says no. So the question
-is not *whether* to apply — it is *what state the company is in on Nov 2*.
+**61 days from today.** Treat Nov 2 as hard; submit by Oct 31. An
+application costs nothing and a rejection does not burn the next batch —
+the same work converts into a Spring 2027 application via Early Decision.
 
 ---
 
-## 2. Where Aether actually is (2026-09-01)
+## 2. What the first two days changed
 
-### Strong — the technical substrate
+### 2.1 What was done (planned for weeks 1–3)
 
-- **Gate green.** `python -B scripts/run_all.py` exits 0, 27 suites, verified today.
-- **30 detectors / 54 diagnostic codes**, monotonic ratchet prevents regression.
-- **It runs on unmodified Python.** `aether check-py` via `tools/py_frontend.py`
-  — no port, no annotations, no `.aeth` file. This is the single biggest
-  change since the May application and the May docs do not reflect it.
-- **Measured on code nobody wrote for us:** 111 PyPI distributions,
-  5,588 files, **1,192,484 SLOC**, **0 parse failures, 0 analyzer crashes**,
-  39 non-test findings (0.033/KLOC). Triage published, including that
-  ~56% of them come from one documented over-flag rule
-  (`bench/pypi_scan/REPORT.md`).
-- **Recall against an independent oracle:** 86.8% agreement with bandit on
-  categories where both implement the same predicate (125 agreed / 19
-  candidate misses), and the exercise found **5 real false negatives that
-  were then fixed** (`bench/pypi_scan/RECALL.md`).
-- **9 named prospects, each with their own public CVE or incident, ported
-  and refused at check time** — Copilot, Cursor, Lovable, Replit, Vercel,
-  Atlassian, Ivanti, GitLab, crawl4ai (`outreach/CUSTOMER_EVIDENCE.md`).
-  **5 of the 9 are access-control cases (E0716/E0717) that mainstream SAST
-  does not cover at all.** That table is the most fundable artifact in the
-  repo.
-- **Two real upstream bugs found in third-party OSS** (`outreach/upstream/`:
-  humanize intword carry, croniter range expansion).
-- **SARIF + `security-severity`** → drops straight into GitHub Code Scanning.
-- 46 documented improvement-loop iterations with a stated residual each time.
-  As evidence of founder velocity this is unusually legible.
+| Planned | Done | Note |
+|---|---|---|
+| Claim `aether-lang` on PyPI | **2026-09-01** | 0.3.0 live, installable, page describes the scanner |
+| Push local main | done | 10 unpushed commits published; now 20 |
+| Repo description, topics, homepage | done | homepage → PyPI |
+| README leads with `check-py` | done | every command on it verified live |
+| Prune stale branches | done | main only |
+| GitHub Action (week 2) | done | `action.yml` on main; **Marketplace listing needs the v0.3.0 release, cut 2026-09-02** |
+| Quickstart + public reports (week 2) | done | |
+| Scan the agent frameworks (week 3) | done | 15 frameworks, 4,946 files; see 2.3 |
+| CI that proves the wheel works | not in plan | `gate.yml`: run_all on 3.10/3.12 + build/install/smoke |
 
-### Weak — everything downstream of the code
+### 2.2 What the plan did not know: the product was not installable
 
-| Signal | State |
-|---|---|
-| GitHub stars / forks / watchers | **0 / 0 / 0** |
-| GitHub repo description, homepage, topics, license field | **all empty** |
-| `origin/main` freshness | last push 2026-07-27 — **5 weeks behind local** |
-| PyPI `aether-lang` | **does not exist** — unclaimed, and squattable |
-| Outreach emails sent | **0 of 20 drafted** |
-| Users / design partners / pilots | **0** |
-| Revenue | **$0** |
-| Founders | **1** (co-founder question still `[FOUNDER]` in `interview_prep.md`) |
+Every bug below existed on 2026-09-01 and none was visible from the
+checkout every test ran in. `BUGS.md` 005–011, all fixed, all with a live
+regression test the ratchet enforces:
 
-**Read plainly:** the technology is genuinely differentiated and honestly
-measured. The company does not yet exist as a thing anyone outside this
-repo has touched. YC funds the second thing.
+- `pip install .` **failed outright** (setuptools ≥ 77 rejects the license
+  table form). The README's install instructions did not work.
+- `aether check-py` raised `ModuleNotFoundError` in **every installed
+  copy** — the Python frontend lived outside the wheel.
+- `sdk.run` reported every working program as a **failed run** in an
+  installed copy.
+- The wheel shipped `transpiler` as its top-level package, so the
+  documented `from aether import sdk` did not work installed.
+- A UTF-8 BOM made a file **silently** invisible to a directory scan.
+
+Then, on the agent-framework corpus: **97% of `check-py`'s output was one
+false-positive class** (SQLAlchemy expressions read as dynamic queries),
+and fixing it exposed a **false-negative class** underneath — imports
+under `try:` had never been registered, so a guarded `yaml.load(x)` was
+silent. Both fixed and measured: 1,055 → 411 findings on the same files;
+15 previously-silent pickle sinks surfaced on the PyPI corpus, confirmed
+by the bandit oracle.
+
+**Consequence for the plan:** the first backend developer who tried
+`check-py` on Sep 1 would have hit `ModuleNotFoundError`, and the second
+would have hit a thousand SQLAlchemy findings. The outreach in week 4
+would have burned every contact. The two days were not a detour; they
+were the prerequisite.
+
+### 2.3 What the framework scan actually produced — and did not
+
+The plan's week-3 target was "5 upstream issues filed, 2 acknowledged."
+The honest result:
+
+- **No security vulnerability** in any of the 15 frameworks. Expected for
+  widely-reviewed code.
+- **Two hardening notes** worth filing, both with verified repros: agno's
+  sitemap reader parses an attacker-choosable URL with stdlib
+  `ElementTree` (expanded a 10⁶-entity payload in 0.19s; `defusedxml`
+  refuses it); langchain-community's docugami loader uses lxml's default
+  parser, which only matters for users on lxml < 5 — low priority, and
+  the draft says so.
+- Two E0714 sites first read as "correctness bugs" (mcp, aider) were
+  re-read at source on 2026-09-02 and are not: one is a string run
+  through a shell by design, the other is a Windows-only path where a
+  list with `shell=True` works. Not filed.
+- The most valuable output was the two Aether bugs above.
+
+Revised week-3 target: **2 upstream reports drafted (done, in
+`outreach/upstream/`), posted by you, 1 acknowledged.** A merged
+hardening PR in langchain-community is worth more in the application
+than another detector — and it is the honest size of what the scan
+found.
+
+### 2.4 An assumption in this plan that was wrong
+
+The week-8 demo script said: *point `check-py` at a real OSS repo → it
+finds a real access-control issue → Semgrep finds nothing.* **That demo
+cannot be made on Python.** The access-control rows (`E0716`/`E0717`) need
+`Authorized<T>` markers and run on Aether source only; `check-py` runs the
+sink family (injection, deserialization, credentials, XXE). The plan's
+own author wrote a demo the product cannot perform.
+
+The corrected story has two halves, and the pitch must keep them
+distinct:
+
+1. **On the Python you already have:** `check-py` finds the sink family
+   and — the checkable contrast — does not flag the documented fix, where
+   bandit does. Runs in CI via the Action, lands in Code Scanning.
+2. **Where the access-control rows live:** the nine named-company CVEs
+   in `outreach/CUSTOMER_EVIDENCE.md`, ported to Aether and refused at
+   check time — five of them classes mainstream SAST does not cover.
+   That is the *why the language exists* half, and it is retrospective.
+
+The demo video shows half 1 live and half 2 as the evidence table. It
+does not blur them.
+
+### 2.5 Two process facts worth keeping
+
+- `bench/pypi_scan`'s corpus is whatever is installed; it had drifted
+  since July. Any before/after must be taken on one day from a
+  `git archive` of the baseline commit. Never stash across a long run.
+- The improvement loop *did* run this week (iteration 47) despite the
+  cap, because a real third-party scan surfaced the gap. That is the
+  exception the cap was written for. Iterations 48+ stay capped.
 
 ---
 
-## 3. The pitch has to change
+## 3. Where Aether is now (2026-09-02)
 
-`application_v8.md` pitches *a new programming language for AI agents*.
-That framing loses, for reasons a partner will state in under a minute:
-a new language is a decade-long adoption curve, has no wedge, and has no
-path to revenue that does not begin with "first, everyone rewrites."
+**Strong:** installable and proven so in CI · 4,946 + 5,588 third-party
+files parsed with zero crashes · 30 detectors / 54 codes, ratchet-held ·
+57 labelled ground-truth functions at 0 FN / 0 FP · 11 fixed bugs, each
+with a live regression test · Action on main, SARIF into Code Scanning ·
+nine named-prospect CVE ports.
 
-The repo has since built the thing that does win:
+**Still zero:** stars 0 · forks 0 · watchers 0 · outreach sent 0 of 20 ·
+users 0 · design partners 0 · revenue $0 · founders 1.
 
-> **Aether finds the vulnerability classes in AI-written Python that
-> existing scanners structurally cannot — access control chief among them —
-> and it runs on the Python your agents already emit.**
-
-The language stops being the product and becomes the **reason the product
-is possible**: detectors are designed against a type system with explicit
-markers (`Authorized<T>`, `Untrusted<T>`, `PII<T>`), then projected down
-onto plain Python. That is why Aether has an IDOR and missing-authz row
-and Semgrep/Bandit/CodeQL's default sets do not. The five "SAST also? **NO**"
-rows in `CUSTOMER_EVIDENCE.md` are the whole argument, and they are checkable.
-
-**Corollary for the next 62 days:** stop shipping detectors as the primary
-activity. The detector count is not the constraint. Distribution is.
+The technology is now something a stranger can install and run. Nobody
+outside this repo has done so yet.
 
 ---
 
-## 4. The 62-day plan
+## 4. The remaining 61 days
 
-Rule for every week: it ends with something a stranger can run, or a human
-who is not you has replied.
+Rule unchanged: every week ends with something a stranger can run, or a
+human who is not you has replied.
 
-### Week 1 — Sep 1–7 · Stop being invisible
-*Goal: the project is findable, installable, and current.*
+### This week — Sep 2–7 · Finish week 2, start week 4
+1. **Release.** `v0.3.0` is tagged at the exact commit PyPI's 0.3.0 was
+   built from, with release notes. In the GitHub release UI, tick
+   **"Publish this Action to the GitHub Marketplace"** — that toggle is
+   UI-only. Then `uses: fitness-trener/Aether@v0.3.0` pins.
+2. **0.3.1 to PyPI** — main is bumped to 0.3.1 and carries BUG-010/011.
+   `rm -rf build dist *.egg-info && python -m build && twine upload dist/*`.
+   Rotate the account-scoped token first; it reached a transcript.
+3. **Post the two upstream reports** from `outreach/upstream/`. Read each
+   draft, adjust tone to yours, post under your account. Each is a
+   one-line hardening a maintainer can merge in an afternoon; each names
+   the tool that found it.
+4. **Send outreach row 1** — the five access-control names (Lovable,
+   Replit, Vercel, Atlassian, Ivanti). The drafts have been ready since
+   June; the product they point at now works when installed.
 
-1. **Claim `aether-lang` on PyPI. Today.** 60 seconds, and it is the one
-   irreversible loss on this list — a squatter kills the demo permanently.
-   Upload the current 0.3.x even if the release is not "ready."
-2. **Push local `main` to `origin`.** Five weeks of the strongest work
-   (risk ratings, PyPI scan, recall oracle) is invisible to anyone reading
-   the public repo.
-3. **Fill the GitHub repo shell:** description, homepage, topics
-   (`static-analysis`, `sast`, `security`, `python`, `ai-generated-code`),
-   license field, social preview. Empty metadata reads as abandoned.
-4. **Rewrite `README.md` to lead with `check-py`.** Current README opens with
-   "a programming language" and buries the scanner. First screen must be:
-   what it finds that others don't → `pip install` → one command → sample
-   output. The language section moves below the fold.
-5. **Merge the stale feature branches** (`bench/pypi-scan`, `bench/recall-oracle`,
-   `feat/*`, `fix/*`) or delete them. Seven live branches on a solo repo
-   reads as abandoned work.
+### Sep 8–14 · Launch
+5. **Show HN**, on the measurement: *"I scanned 1.19M lines of PyPI and
+   15 AI-agent frameworks with a checker built on a typed IR — what it
+   found, what it missed, and the 97% of its own output it had to
+   fix."* The bug-hunt-on-itself is the credible angle; that audience
+   rewards it.
+6. r/netsec, Lobsters, the same day.
+7. Target: 300+ stars, 20+ installs, 3 inbound.
 
-### Week 2 — Sep 8–14 · Make it one command
-*Goal: zero-to-finding in under 60 seconds for a stranger.*
+### Sep 15–21 · Send the rest, convert the first
+8. Remaining 15 outreach drafts, personalised with anything the scan
+   said about their stack.
+9. Every reply → a call → a free scan with a written report → one ask:
+   permission to say "we run with `<company>`."
+10. Target: 20 sent, 4 replies, 2 calls, 1 verbal.
 
-6. **Ship the GitHub Action.** `aether-scan.yml` already exists internally
-   and already emits SARIF with `security-severity`. Publish it to the
-   GitHub Marketplace as a composite action. Code Scanning is the single
-   highest-leverage distribution channel that exists for this product, and
-   the SARIF work is already done.
-7. **`docs/SCANNING.md` becomes the quickstart**, linked from the README
-   first screen, with real terminal output pasted in.
-8. **Publish the two measurement reports as public artifacts** —
-   `bench/pypi_scan/REPORT.md` and `RECALL.md`. The honest headline
-   ("no vulnerability was discovered; here is the precision number anyway")
-   is a credibility asset, not a weakness. Lead with it.
+### Sep 22 – Oct 5 · Iterate on what users hit
+11. The loop resumes on **user-reported** gaps only. Expected first ones:
+    statements assembled in helpers (`stmt = self._base_query()`, ~100
+    of the remaining 381 E0713), other query builders, `def`s under
+    `try:` not analysed. Each gets the BUG-NNN treatment.
+12. Target: 1 written design partner, 3 verbal.
 
-### Week 3 — Sep 15–21 · Find real bugs in other people's code
-*Goal: evidence that is not retrospective.*
+### Oct 6–12 · Application v9
+13. **Full rewrite around the two-half story in 2.4.** The one-liner,
+    the demo, the traction section (with real numbers), the "why now"
+    bullet (real 2026 source or drop it).
+14. Resolve or delete all 13 `[TBD]`s. Fill every `[FILL]`/`[FOUNDER]`.
+    Decide the co-founder answer.
 
-9. **Scan the top ~200 most-downloaded PyPI packages and the top AI-agent
-   frameworks** (LangChain, LlamaIndex, CrewAI, AutoGPT, OpenHands, Aider,
-   and every Cursor/Copilot-adjacent OSS repo you can find). Agent-framework
-   code is the highest-yield target and the highest-relevance one for the pitch.
-10. **File every true positive upstream as a real issue or PR**, in the style
-    of `outreach/upstream/`. Target: **5 filed, 2 acknowledged.**
-    A merged security fix in LangChain is worth more in the application than
-    ten new detectors.
-11. Keep BUGS.md discipline: anything the scan finds in *Aether* gets an
-    entry and a fix in the same week.
+### Oct 13–19 · Video
+15. Script per 2.4: half 1 live — `pip install aether-lang`, `check-py`
+    on a recognisable repo, the fix not flagged, bandit flagging it;
+    half 2 — the CUSTOMER_EVIDENCE table on screen. Under 90 seconds.
 
-### Week 4 — Sep 22–28 · Send the emails
-*Goal: humans who are not you have replied.*
+### Oct 20–26 · Mock and cold-read
+16. Cold read of v9 by someone who has never seen the repo.
+17. `interview_prep.md` re-cut for the two-half story; T-team-1 under
+    25 seconds on a stopwatch.
 
-12. **Send all 20 drafts in `outreach/drafts/`.** They have been ready since
-    June. Weight the first wave to the five access-control names — Lovable,
-    Replit, Vercel, Atlassian, Ivanti — because those are the ones where the
-    opener is "your CVE, and here is the compiler refusing it."
-13. **Personalise with Week-3 output where it exists.** "I scanned your repo
-    and found X" converts at a different order of magnitude than a cold pitch.
-14. Update `outreach/log.md` counters honestly. Target: **20 sent, 4 replies,
-    2 calls booked.**
-
-### Week 5 — Sep 29–Oct 5 · Launch
-*Goal: an audience exists.*
-
-15. **Show HN + r/netsec + Lobsters**, on the measurement, not the language.
-    Working title: *"I scanned 1.19M lines of PyPI code with a checker built
-    on a typed IR — here's what it found and what it missed."* The 86.8%
-    oracle number and the published false-positive triage are exactly what
-    that audience rewards.
-16. **Target: 300+ stars, 20+ installs, 3 inbound conversations.** Stars are
-    a weak signal but zero stars is a loud one.
-
-### Week 6 — Oct 6–12 · Convert
-*Goal: one design partner in writing.*
-
-17. Run the Week-4 replies to a call. Offer a free scan of their codebase
-    with a written report. Ask for one thing only: permission to say
-    "we run with `<company>`."
-18. **Target: 1 written design partner, 3 verbal.** One named logo changes
-    the application materially.
-
-### Week 7 — Oct 13–19 · Write application v9
-*Goal: the application matches the company that now exists.*
-
-19. **Full rewrite around the scanner wedge**, not an edit of v8. What
-    changes: the one-liner, "what does your company do", the demo, the
-    traction section (which now has numbers), and the "why now" (AI-written
-    code volume — cite a real 2026 source or drop the bullet, per the
-    standing rule).
-20. **Resolve or delete every `[TBD]` in `market_sizing.md` and
-    `why_now.md`** — 13 of them. Real hyperlinked source or the sentence
-    comes out. No third option.
-21. **Fill every `[FILL]` and `[FOUNDER]` block.** Especially the co-founder
-    question: YC funds solo founders but asks hard about it. Decide before
-    Nov 2 whether you are recruiting one, and have a real answer either way.
-
-### Week 8 — Oct 20–26 · The video
-*Goal: 60 seconds a partner will not skip.*
-
-22. **Re-record per `yc/DEMO_NOTES.md`, but with a new script.** The demo is
-    no longer "here is a language." It is: point `check-py` at a real,
-    recognisable open-source repo → it finds a real access-control issue →
-    the same file in Semgrep/Bandit → nothing. That contrast is the product.
-23. Pre-record checklist from DEMO_NOTES (regenerate the live-fix transcript,
-    gate green) still applies.
-
-### Week 9 — Oct 27–Nov 2 · Submit
-24. Cold-read pass on v9 by someone who has never seen the repo.
-25. Mock interview against `interview_prep.md`, updated for the new wedge.
-    The T-team-1 answer ("why this team") on a stopwatch, under 25 seconds.
-26. Full `SUBMISSION_CHECKLIST.md` walk from a **fresh clone**.
-27. **Submit by Oct 31**, not Nov 2. The form breaks under deadline load and
-    submitting early has no downside.
+### Oct 27–31 · Submit
+18. `SUBMISSION_CHECKLIST.md` from a fresh clone. Submit **Oct 31**.
 
 ---
 
 ## 5. Division of labour
 
-**Only you can do these (and the plan dies without them):**
-PyPI claim · GitHub repo metadata · pressing send on 20 emails · every
-sales call · the founders block · the co-founder decision · the video ·
-clicking Submit.
+**Only you:** the Marketplace toggle · the 0.3.1 upload · posting the
+two upstream reports · pressing send on outreach · every call · the
+founders block · the video · Submit.
 
-**I can do these on request:**
-README rewrite · Marketplace action packaging · the top-200 scan and triage ·
-drafting upstream issue text · application v9 draft · resolving `[TBD]`
-sources · the Show HN post · mock interview.
+**Me, on request:** Show HN draft · the remaining outreach personalisation
+· application v9 · `[TBD]` sourcing · the user-reported bug loop · mock
+interview.
 
 ---
 
-## 6. What to cut
+## 6. Kill criterion (unchanged)
 
-The improvement loop is the moat and the LOOP_LOG is real evidence of
-velocity — but **iterations 47+ are not what gets you into YC.** Cap it at
-one iteration per fortnight during weeks 1–6, and only when a real scan
-surfaces the gap. A detector that fires on a repo someone else owns is
-worth ten that fire on a demo file.
+If by **Oct 6** there are zero replies from 20 sends and zero upstream
+reports acknowledged, do not spend Oct 6–26 on application polish. Submit
+a short, honest v9 in one day and put the rest into users. The company is
+the point; the batch is a financing event.
 
-Similarly deferred until after Nov 2: SMT expansion, the LSP, the
-playground deploy, v0.4 roadmap items. None of them is the constraint.
+## 7. Odds
 
----
-
-## 7. Honest odds, and the fallback
-
-**W2027 with the current state: low.** Zero users, zero sends, zero stars
-and a solo founder is a hard profile, however good the code is.
-
-**W2027 having executed §4: materially better but still not favourite.**
-What it buys is a real answer to "who uses this" — one design partner, five
-upstream fixes in named projects, and a launch. That is the difference
-between "impressive side project" and "early company."
-
-**The fallback is good, and it is the reason to run the plan regardless.**
-Every item in §4 is something the company needs whether or not YC says yes.
-If W2027 rejects, the identical body of work applies to Spring 2027 via
-Early Decision with two more months of usage data attached — a strictly
-stronger application. Nothing here is spent on YC alone.
-
-**Kill criterion for the application, not the company:** if by **Oct 13**
-(start of Week 7) there are zero replies from 20 sends and zero upstream
-issues acknowledged, do not spend Weeks 7–9 on application polish. Submit
-a short, honest v9 in one day and put the remaining three weeks into
-users. The company is the point; the batch is a financing event.
+**Two days ago:** low. **Now:** the product exists as an installable,
+CI-proven thing with a measured false-positive rate on the population it
+is for — which is what the outreach needed and did not have. Still not
+favourite: the zeros in §3 are the zeros that matter, and only sending
+things changes them. Nothing in §4 is spent on YC alone.

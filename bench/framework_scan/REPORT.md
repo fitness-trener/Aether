@@ -129,15 +129,19 @@ were silent on 2026-09-01:**
 
 | | site | what it is |
 |---|---|---|
-| `E0727` | `langchain_community/document_loaders/docugami.py:153` | `etree.parse(io.BytesIO(content))` — **lxml, whose default parser resolves external entities**, on content fetched from a remote API. `from lxml import etree` under `try:`. |
+| `E0727` | `langchain_community/document_loaders/docugami.py:153` | `etree.parse(io.BytesIO(content))` — lxml's default parser, `from lxml import etree` under `try:`. **Version-dependent:** lxml < 5 resolved external entities by default; lxml ≥ 5 does not, and libxml2 caps amplification (both verified here on 6.1.1). The package does not pin lxml. |
 | `E0727` | `langchain_community/document_loaders/docugami.py:277` | same, on `response.content` |
 | `E0727` | `smolagents/default_tools.py:443` | `ET.fromstring(response.text)` on a Bing RSS response — stdlib, so DoS-class rather than XXE |
 | `E0720` | `agno/utils/pickle.py:26` | `pickle.load(...)` with a function-local `import pickle`; a persistence helper, true by shape |
 
-The two docugami sites are the strongest finding of the whole exercise:
-lxml with entity resolution on, over bytes that arrived from the network.
-`etree.XMLParser(resolve_entities=False)` is the one-line remedy, and it is
-the E0727 hint.
+The two docugami sites looked like the strongest finding of the exercise
+when first read — lxml over bytes from the network — and verification cut
+them down: on current lxml the payload does not parse at all, and only a
+user pinned to lxml < 5 (2023) gets the old default. They are a
+low-priority hardening note, drafted as such. The verification also
+exposed a limit of E0727 itself: it flags `lxml.etree.parse` on an
+unconfigured parser because it cannot know which lxml is installed —
+**a version-dependent sink is a residual no static rule resolves.**
 
 The same fix, measured on the PyPI corpus the same day (before → after,
 same interpreter): E0720 **109 → 124**, and against the bandit oracle
@@ -168,12 +172,18 @@ the product.
 |---|---:|---|
 | `E0714` shell in agent runtimes / coding tools | 13 | true by shape, by-design context |
 | `E0720` pickle | 9 | 8 behind an explicit opt-in the maintainers wrote; 1 newly visible (agno, above) |
-| `E0727` XML on remote content | 6 | **3 worth an upstream note** — the two docugami lxml sites above, and `agno/knowledge/reader/sitemap_reader.py:123` (attacker-choosable sitemap URL, stdlib parser, DoS-class) |
+| `E0727` XML on remote content | 6 | **2 upstream notes drafted** (`outreach/upstream/`): `agno/knowledge/reader/sitemap_reader.py:123` — attacker-choosable sitemap URL into stdlib `ElementTree`, which expanded a 10⁶ entity payload to 3,000,000 chars here in 0.19s where `defusedxml` refuses it; and the docugami lxml sites, scoped to lxml < 5 |
 | `E0719` the framework's own Jinja templates | 2 | by design |
 
-Two correctness bugs, not security, remain worth filing:
-`mcp/cli/cli.py:48` and `aider/commands.py:964` both pass an argv list
-together with `shell=True`, which on POSIX runs only the first element.
+**A correction to the 2026-09-01 version of this section**, which called
+two of the E0714 sites "correctness bugs worth filing." Read again at
+source: `aider/commands.py:964` builds `args = "git " + args` — a
+*string*, the user's own `/git` command, run through a shell by design.
+Not a list-plus-`shell=True` bug. `mcp/cli/cli.py:48` and `:276` do pass
+a list with `shell=True`, but both sit inside `sys.platform == "win32"`
+guards, where `subprocess` joins the list into a command line and it
+works; the POSIX "runs only the first element" behaviour never applies.
+Fragile style, not a defect. Neither is filed.
 
 ## 6. What this run established
 
@@ -185,8 +195,9 @@ together with `shell=True`, which on POSIX runs only the first element.
   amount of reading the over-flags would have found — it took clearing
   them to see what was missing.
 - **No security vulnerability in any of the 15 frameworks.** The expected
-  outcome for widely-reviewed code; the docugami lxml sites are the
-  nearest thing, and they are a hardening note, not a CVE.
+  outcome for widely-reviewed code. The nearest thing is agno's sitemap
+  reader feeding an attacker-choosable URL to stdlib `ElementTree` — a
+  DoS-class hardening note with a verified repro, not a CVE.
 
 The honest one-line summary: **on the corpus Aether is aimed at, its
 best-covered detector produced 97% noise, fixing the noise exposed a

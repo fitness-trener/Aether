@@ -5,4 +5,4 @@ in submodules. The installed distribution is `aether-lang` (see
 `pyproject.toml`); the console script is `aether`.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
