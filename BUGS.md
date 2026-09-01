@@ -139,11 +139,9 @@ q5's rule ("never assume clean from a name") applied to values.
 Regression tests: `test_yaml_unsafe_loader_is_still_a_sink` and 5 siblings
 in tests/test_py_frontend_sinks.py.
 
-### BUG-005  a UTF-8 BOM made a file invisible to the scanner (silent false negative)  [FIXED pending-commit]
+### BUG-005  a UTF-8 BOM made a file invisible to the scanner (silent false negative)  [FIXED 70f0793]
 test: tests/test_py_frontend_sinks.py
 
-NOTE: replace `pending-commit` with the real hash when this lands; the
-ratchet only starts enforcing the `test:` line once the marker is a hash.
 
 Found 2026-09-01, while testing the new `check-py` directory walk against
 a tree written by PowerShell (which emits UTF-8 **with BOM** by default).
@@ -179,10 +177,9 @@ than folding it into the file total. Regression test:
 `test_unparseable_file_does_not_abort_the_walk` in
 tests/test_py_frontend_sinks.py.
 
-### BUG-006  `pip install .` failed outright on current setuptools  [FIXED pending-commit]
+### BUG-006  `pip install .` failed outright on current setuptools  [FIXED 70f0793]
 test: tests/test_packaging.py
 
-NOTE: replace `pending-commit` with the real hash when this lands.
 
 Found 2026-09-01, building a wheel to check BUG-007. Repro, setuptools
 84.0.0, a clean venv:
@@ -212,10 +209,9 @@ SIGALRM timeout, not to the package.
 Verified by building and installing the wheel into a fresh venv, not by
 re-reading the config.
 
-### BUG-007  `aether check-py` was broken in every installed copy  [FIXED pending-commit]
+### BUG-007  `aether check-py` was broken in every installed copy  [FIXED 70f0793]
 test: tests/test_packaging.py
 
-NOTE: replace `pending-commit` with the real hash when this lands.
 
 Found 2026-09-01, immediately after BUG-006 let a wheel build for the
 first time. Repro — install the wheel into a venv and run the headline
@@ -249,10 +245,9 @@ Verified end to end: `pip install .` into a clean venv, then
 `aether check-py` run from an unrelated working directory, reporting the
 two expected E0713 findings.
 
-### BUG-008  `sdk.run` / `sdk.grade` fail on every installed copy, and report it as your program failing  [FIXED pending-commit]
+### BUG-008  `sdk.run` / `sdk.grade` fail on every installed copy, and report it as your program failing  [FIXED 70f0793]
 test: tests/test_sdk.py
 
-NOTE: replace `pending-commit` with the real hash when this lands.
 
 Found 2026-09-01 by the regression test written for BUG-007
 (`test_the_package_never_imports_an_unpackaged_top_level_module`) — the
@@ -302,10 +297,9 @@ in tests/test_packaging.py now passes with no exemptions.
 Verified from a wheel installed into a clean venv, `bench` not importable:
 `sdk.run` returns ok=True with the program's stdout, `sdk.grade` ok=True.
 
-### BUG-009  the documented SDK import `from aether import sdk` does not work when installed  [FIXED pending-commit]
+### BUG-009  the documented SDK import `from aether import sdk` does not work when installed  [FIXED 70f0793]
 test: tests/test_packaging.py
 
-NOTE: replace `pending-commit` with the real hash when this lands.
 
 Found 2026-09-01, verifying the BUG-008 fix from an installed wheel. The
 wheel's top-level package is **`transpiler`** (`packages.find` has
