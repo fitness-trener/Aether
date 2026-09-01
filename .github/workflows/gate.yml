@@ -1,0 +1,150 @@
+# The gate — what `python -B scripts/run_all.py` proves, run on every push.
+#
+# ---------------------------------------------------------------------
+# Why this exists alongside aether-scan.yml
+# ---------------------------------------------------------------------
+# `aether-scan.yml` scans the `.aeth` corpus and gates on the diff from
+# each file's `// expect:` header. That is a real signal, and it is a
+# narrow one: it says the demo corpus still behaves as declared. It runs
+# nothing Python, builds no wheel, and never executes the 37-suite gate.
+#
+# Everything BUGS.md 005-009 records was invisible for exactly that
+# reason. `pip install .` failed outright on current setuptools; the
+# Python frontend raised ModuleNotFoundError in every installed copy;
+# `sdk.run` reported working programs as failures; the wheel shipped the
+# wrong top-level package. Each one passed every test, because every test
+# ran from a source checkout and no job ever built a wheel.
+#
+# So this workflow does the two things that were missing: run the gate,
+# and install the artifact a user actually installs.
+
+name: gate
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  suite:
+    name: run_all (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor and a current release. 3.10 is what `requires-python`
+        # claims and nothing tested; it is also the only version that
+        # exercises the hand-rolled TOML fallback in
+        # tests/test_packaging.py, since 3.11+ takes the tomllib path.
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # No dependencies to install: the core toolchain is stdlib-only.
+      # z3 is deliberately NOT installed, so this matches the local gate
+      # exactly (tests/test_smt.py skips cleanly without it). Installing
+      # the [smt] extra would exercise the --prove path, but it also
+      # flips --prove default-on, which changes what other suites check;
+      # that belongs in its own job, measured first.
+      - name: Run the gate
+        run: python -B scripts/run_all.py
+
+  wheel:
+    name: wheel installs and works
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build the wheel
+        run: |
+          # `build/` is cleared first on purpose. setuptools packs what it
+          # finds under build/lib, so a package removed from the config
+          # survives in every later wheel until that directory goes. This
+          # is not hypothetical: it made the BUG-009 fix ship BOTH
+          # `aether` and `transpiler`, two full copies of the same code.
+          rm -rf build dist *.egg-info
+          python -m pip install --upgrade --quiet build
+          python -m build --wheel
+
+      - name: The wheel ships `aether`, and only `aether`
+        run: |
+          python - <<'PY'
+          import glob, zipfile
+          whl = glob.glob("dist/*.whl")
+          assert len(whl) == 1, whl
+          tops = {n.split("/")[0] for n in zipfile.ZipFile(whl[0]).namelist()}
+          tops = {t for t in tops if not t.endswith(".dist-info")}
+          assert tops == {"aether"}, f"wheel ships {sorted(tops)}, expected ['aether']"
+          print(f"{whl[0]}: ships {sorted(tops)}")
+          PY
+
+      - name: Install it into a clean venv
+        run: |
+          python -m venv /tmp/venv
+          /tmp/venv/bin/python -m pip install --quiet dist/*.whl
+
+      # From /tmp, so the checkout's own `transpiler/` and `tools/`
+      # directories cannot shadow the installed package — which is the
+      # precise reason BUG-007 and BUG-008 stayed invisible.
+      - name: Import surface (BUG-007, BUG-008, BUG-009)
+        working-directory: /tmp
+        run: |
+          /tmp/venv/bin/python - <<'PY'
+          import importlib.util as u
+          assert u.find_spec("transpiler") is None, \
+              "the wheel must not ship a top-level `transpiler` (BUG-009)"
+          assert u.find_spec("aether") is not None, \
+              "`from aether import sdk` is the documented import (BUG-009)"
+
+          from aether import sdk
+          r = sdk.run('function main() returns Unit\n  effects log\n'
+                      'do\n  print("ok")\nend\n')
+          assert r.ok, f"sdk.run must work with bench/ absent (BUG-008): {r.stderr}"
+          assert r.stdout.strip() == "ok", repr(r.stdout)
+          print("sdk.run ok; timeout_enforced =", r.timeout_enforced)
+
+          from aether.py_frontend import py_to_ir     # BUG-007
+          print("py_frontend importable from the installed package")
+          PY
+
+      - name: The console script finds a real vulnerability
+        run: |
+          set +e
+          /tmp/venv/bin/aether check-py bench/py_frontend/corpus/sqli_repro.py
+          rc=$?
+          set -e
+          [ "$rc" -eq 2 ] || { echo "::error::a file with two E0713 must exit 2, got $rc"; exit 1; }
+
+          /tmp/venv/bin/aether check-py bench/py_frontend/corpus/sqli_repro.py --sarif > /tmp/out.sarif
+          python - <<'PY'
+          import json
+          d = json.load(open("/tmp/out.sarif"))
+          res = d["runs"][0]["results"]
+          codes = sorted(r["ruleId"] for r in res)
+          assert codes == ["E0713", "E0713"], codes
+          rule = d["runs"][0]["tool"]["driver"]["rules"][0]
+          assert rule["properties"]["security-severity"] == "9.0", rule
+          assert "security" in rule["properties"]["tags"], rule
+          print("SARIF:", codes, "security-severity", rule["properties"]["security-severity"])
+          PY
+
+      - name: A clean file exits 0
+        run: |
+          printf 'def add(a, b):\n    return a + b\n' > /tmp/clean.py
+          /tmp/venv/bin/aether check-py /tmp/clean.py
