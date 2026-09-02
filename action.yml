@@ -1,8 +1,6 @@
 name: 'Aether Python Security Scan'
-description: >-
-  Scan Python for SQL injection, command injection, insecure deserialization,
-  SSTI, XXE, open redirect and hardcoded credentials, and upload the findings
-  to GitHub Code Scanning as SARIF.
+# Marketplace caps this at 125 characters.
+description: 'Security scan for AI-written Python: injection, deserialization, SSTI, XXE, credentials. SARIF to Code Scanning.'
 author: 'Aether'
 
 branding:
