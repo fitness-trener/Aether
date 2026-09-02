@@ -4,9 +4,10 @@ This directory is the founder-facing handoff for Phase C of the
 final-sprint plan. Cowork drafts; the founder sends. Three files
 the founder works through in order:
 
-1. **`targets.md`** — 20 hand-picked design-partner targets across
-   three categories (AI-coding companies, AI-infra companies,
-   verification-focused teams). Each entry includes the
+1. **`targets.md`** — 24 hand-picked design-partner targets across
+   four categories (AI-coding companies, AI-infra companies,
+   verification-focused teams, and the four access-control CVE ports
+   added 2026-09-02). Each entry includes the
    personalisation hook.
 2. **`drafts/<A|B|C>_*/<id>_<company>.md`** — one personalised draft
    per target, under 150 words, with `[FILL]` placeholders for the

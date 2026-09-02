@@ -273,11 +273,12 @@ draft distribution:
 | A — AI-coding | 10 | Highest fit for "deploy in next 3 months" partnership. |
 | B — AI-infra  | 6  | Strong fit for integration-partner stories. |
 | C — Verification | 4 | Credibility quotes, not deployment partners. |
+| D — Access-control CVE ports | 4 | The retrospective half of the pitch: their own public incident, refused at compile time. Added 2026-09-02. |
 
 Realistic conversion expectations (informed by the cold-email base
 rate):
 
-- **20 sent → 4 responses** (20% reply rate is healthy for
+- **24 sent → 4–5 responses** (20% reply rate is healthy for
   technical cold outreach with this signal density).
 - **4 responses → 1 substantive conversation** (one 30-min call
   with a real engineer / founder).
@@ -296,3 +297,53 @@ What the YC application can credibly claim from this volume:
 
 The honesty bar from `application_v7.md` carries forward: claim
 exactly what's true, no more.
+
+
+---
+
+## D. Access-control CVE ports (added 2026-09-02)
+
+The four companies whose own public incident is an `E0716`/`E0717` class
+— the rows mainstream SAST does not cover — ported and refused at check
+time in `outreach/evidence/`. Drafts in `drafts/D_access_control/`.
+
+**Read before sending any of these:** the access-control rows run on
+Aether source only. `check-py` does not catch this class on Python. Every
+draft says so; do not soften it. The ask is a design conversation about
+where the authorization proof would live in their stack, which is a
+better question for these four teams than a pilot.
+
+### D1. Lovable
+
+- **What:** AI app generator; generated projects ship with a database.
+- **Why they care:** CVE-2025-48757 exposed data across 170 generated
+  apps because RLS didn't match the query. The port makes that
+  unrepresentable — the proof is bound to the row.
+- **How to contact:** Head of Security or platform-eng lead; they publish
+  security updates on their blog, which is the hook.
+
+### D2. Vercel (Next.js)
+
+- **What:** the framework whose middleware was the only wall.
+- **Why they care:** they wrote the CVE-2025-29927 postmortem; the
+  framing ("auth bound to the sink, not a skippable layer") is theirs.
+  Warmest of the four.
+- **How to contact:** the postmortem's author or the Next.js security
+  team on vercel.com/blog.
+
+### D3. Atlassian (Confluence)
+
+- **What:** CVE-2023-22515, unauthenticated admin creation, CVSS 10, KEV.
+- **Why they care:** thousands of handlers; the question "where does a
+  mutation's proof live so a scanner can require it" is theirs at scale.
+- **How to contact:** product security / AppSec via the advisory author
+  or the Atlassian Trust page. One meeting, one question.
+
+### D4. Ivanti (EPMM)
+
+- **What:** CVE-2023-35078, unauthenticated config mutation, CISA KEV.
+- **Why they care:** signed CISA's Secure by Design pledge; a
+  compile-time proof requirement on mutating endpoints is that pledge in
+  code.
+- **How to contact:** product security / security response team. One
+  meeting, one question, no pilot language.
