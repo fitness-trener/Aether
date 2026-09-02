@@ -75,3 +75,5 @@ Empty until real sends happen. Useful prompts:
 - Which categories converted? Which didn't?
 
 These notes feed the next batch of drafts before the YC interview.
+
+| 2026-09-02 | upstream/agno | agno-agi/agno maintainers (public issue) | sent | https://github.com/agno-agi/agno/issues/9920 — hardening note, SitemapReader/PubmedTools -> defusedxml; repro verified before posting |

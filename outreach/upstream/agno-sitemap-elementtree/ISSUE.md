@@ -83,3 +83,5 @@ except ImportError:
 
 Run with a memory limit; the stdlib call either exhausts memory or runs
 for a long time, and `defusedxml` raises `EntitiesForbidden` immediately.
+
+**POSTED 2026-09-02:** https://github.com/agno-agi/agno/issues/9920

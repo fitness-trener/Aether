@@ -235,3 +235,20 @@ CI-proven thing with a measured false-positive rate on the population it
 is for — which is what the outreach needed and did not have. Still not
 favourite: the zeros in §3 are the zeros that matter, and only sending
 things changes them. Nothing in §4 is spent on YC alone.
+
+---
+
+## Status 2026-09-02 (evening) — the queue after the revision
+
+| item | state |
+|---|---|
+| PyPI token rotated to project scope | **you — confirm** |
+| 2FA on the GitHub account | done (Marketplace required it) |
+| `Aether Python Security Scan` on the GitHub Marketplace | **done** |
+| 0.3.1 on PyPI + tag `v0.3.1` + release | **done** |
+| agno hardening note posted | **done** — [agno#9920](https://github.com/agno-agi/agno/issues/9920) |
+| docugami note | not posted: `langchain-ai/langchain-community` is archived; draft kept as the record |
+| outreach row 1 | **open** — A1 Cursor and A3 Replit first; Lovable/Vercel/Atlassian/Ivanti still need email drafts written from their `evidence/*/pitch.md` |
+
+Signals at close of day: stars 0, PyPI downloads unknown (pypistats lags a
+day). The next number that matters is a reply.
