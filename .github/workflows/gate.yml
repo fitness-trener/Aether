@@ -192,5 +192,13 @@ jobs:
         working-directory: /tmp
         run: |
           cp "$GITHUB_WORKSPACE/demos/payment_workflow/broken.aeth" /tmp/broken.aeth
-          /tmp/venv/bin/aether fix-loop /tmp/broken.aeth --out-source /tmp/fixed.aeth --out-transcript /tmp/fix.json --quiet
-          /tmp/venv/bin/aether check /tmp/fixed.aeth
+          # broken.aeth's only repairs widen a declaration, so the loop must
+          # refuse them (exit 1, not_repaired); --allow-widen applies them
+          # (still exit 1) and the widened program then checks clean.
+          rc=0; /tmp/venv/bin/aether fix-loop /tmp/broken.aeth --out-source /tmp/fixed.aeth --out-transcript /tmp/fix.json --quiet || rc=$?
+          test "$rc" = 1
+          grep -q '"status": "not_repaired"' /tmp/fix.json
+          rc=0; /tmp/venv/bin/aether fix-loop /tmp/broken.aeth --allow-widen --out-source /tmp/widened.aeth --out-transcript /tmp/widen.json --quiet || rc=$?
+          test "$rc" = 1
+          grep -q '"weakens_constraint": true' /tmp/widen.json
+          /tmp/venv/bin/aether check /tmp/widened.aeth

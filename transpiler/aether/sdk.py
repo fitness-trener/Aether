@@ -13,7 +13,7 @@ Public API (everything below is the supported surface):
         deterministic=False)                     -> RunResult
     grade(source, expected_stdout, stdin="",
           timeout_ms=5000, deterministic=False)  -> GradeResult
-    pretty(ast)                                  -> str
+    pretty(ast, source=None)                     -> str
     edit(source, transform)                      -> str
 
 `source` is always a `str` containing Aether source. The SDK is
@@ -45,6 +45,7 @@ from .pretty import pretty as _pretty
 from .runtime import build_namespace, set_deterministic
 from .runner import compile_and_run as _compile_and_run, TIMEOUT_ENFORCED
 from .passes import analyze_flat
+from .passes.imports import load_program
 from .diagnostics import Diagnostic, Position, AetherError
 
 
@@ -122,7 +123,7 @@ class Source:
 
     @classmethod
     def from_path(cls, path: str) -> "Source":
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8-sig") as f:
             return cls(text=f.read(), filename=path)
 
     def parse(self) -> ParseResult:
@@ -148,21 +149,25 @@ def parse(source: str, filename: str = "<sdk>") -> ParseResult:
 
 
 def check(source_or_ast, filename: str = "<sdk>") -> CheckResult:
-    """Parse + run every default-on static pass.
+    """Parse + resolve imports + run every default-on static pass.
 
-    Accepts either a source string or an already-parsed AST dict.
-    Returns every diagnostic gathered across parse (C.6 recovery) and
-    every stage of the analysis registry — effects, security, semantic,
-    capability, modules — all in one shot, ordered by stage. Same
-    membership the CLI runs, which is what makes the LSP's claim to show
-    "the same diagnostics a CLI run would produce" true.
+    Accepts either a source string or an already-parsed AST dict. Loading
+    is `passes.imports.load_program`, the same loader `aether check`
+    uses, so an `import` resolves here exactly as it does on the CLI
+    (against the directory of `filename`; the working directory for a
+    pseudo-name like `<sdk>`). Never raises for bad source: a lex error
+    comes back as its diagnostic with `ast=None`.
+
+    Returns the diagnostics of parse (C.6 recovery — a partial AST is
+    still analysed) and of EVERY stage of the analysis registry, in stage
+    order. That is what `aether --json check` prints; plain-text `check`
+    prints only the first stage that has diagnostics (and says how many
+    it held back). An import error (E0705/E0706, or a parse error in an
+    imported file) stops before analysis, as it does on the CLI.
     """
-    if isinstance(source_or_ast, str):
-        ast, diags = parse_collect(source_or_ast, filename)
-        all_diags: List[Diagnostic] = list(diags)
-    else:
-        ast = source_or_ast
-        all_diags = []
+    ast, all_diags, import_diags = load_program(source_or_ast, filename)
+    if import_diags:
+        return CheckResult(ast=ast, diagnostics=all_diags + import_diags)
     if ast is not None and ast.get("decls"):
         all_diags.extend(analyze_flat(ast))
     return CheckResult(ast=ast, diagnostics=all_diags)
@@ -267,9 +272,10 @@ def grade(source: str, expected_stdout: str, stdin: str = "",
     )
 
 
-def pretty(ast: Dict[str, Any]) -> str:
-    """Re-export of the C.1 canonical pretty-printer."""
-    return _pretty(ast)
+def pretty(ast: Dict[str, Any], source: Optional[str] = None) -> str:
+    """Re-export of the C.1 canonical pretty-printer. Pass `source` to
+    keep its full-line comments."""
+    return _pretty(ast, source)
 
 
 def edit(source: str, transform: Callable[[Dict[str, Any]], Dict[str, Any]],
@@ -286,7 +292,9 @@ def edit(source: str, transform: Callable[[Dict[str, Any]], Dict[str, Any]],
     new_ast = transform(ast)
     if new_ast is None:
         new_ast = ast       # transforms that mutate in place may return None
-    return _pretty(new_ast)
+    # `source` keeps its full-line comments (a `// expect:` header among
+    # them) — see `pretty`.
+    return _pretty(new_ast, source)
 
 
 __all__ = [

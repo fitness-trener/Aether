@@ -23,11 +23,11 @@ from typing import Any, Dict
 
 from .diagnostics import AetherError, Diagnostic
 from .lexer import tokenize
-from .parser import parse, parse_collect
+from .parser import parse
 from .emitter import emit
 from .pretty import pretty
 from .passes import analyze
-from .passes.imports import resolve_imports
+from .passes.imports import load_program
 from .runtime import build_namespace, set_effect_strict, set_deterministic
 
 
@@ -35,9 +35,12 @@ from .runtime import build_namespace, set_effect_strict, set_deterministic
 # Helpers
 # ----------------------------------------------------------------------
 
-def _emit_error(diag: Diagnostic, as_json: bool):
+def _emit_error(diag: Diagnostic, as_json: bool, stage: str = None):
     if as_json:
-        json.dump({"ok": False, "diagnostic": diag.to_dict()}, sys.stderr)
+        d = diag.to_dict()
+        if stage is not None:
+            d["stage"] = stage      # which STAGES entry produced it (D4)
+        json.dump({"ok": False, "diagnostic": d}, sys.stderr)
         sys.stderr.write("\n")
     else:
         sys.stderr.write(
@@ -73,33 +76,18 @@ def _read_py(path: str) -> str:
         return f.read()
 
 
-def _has_imports(ast: Dict[str, Any]) -> bool:
-    """True if the AST contains any top-level ImportDecl."""
-    for d in ast.get("decls", []) or []:
-        if d.get("kind") == "ImportDecl":
-            return True
-    return False
-
-
-def _maybe_resolve_imports(ast: Dict[str, Any], source_path: str, args) -> tuple:
-    """H.E.3 multi-file resolution gate.
-
-    If the parsed AST contains at least one ImportDecl and the user has not
-    opted out via --no-import-resolution, run resolve_imports and surface
-    any diagnostics. Returns (combined_ast, exit_code). When exit_code != 0
-    the caller should bail. When ImportDecls are absent or resolution is
-    disabled, returns the original AST and exit_code=0.
-    """
-    if getattr(args, "no_import_resolution", False):
-        return ast, 0
-    if not _has_imports(ast):
-        return ast, 0
-    combined, diags = resolve_imports(ast, source_path)
-    if diags:
-        for d in diags:
-            _emit_error(d, args.json)
-        return combined, 2
-    return combined, 0
+def _load(src: str, source_path: str, args, collect: bool = False) -> tuple:
+    """Parse + H.E.3 import resolution through `load_program`, the one
+    loader the SDK, LSP, fix-loop and `tools/scan.py` also use (audit
+    2026-09-24 D2). `--no-import-resolution` opts out. Emits every
+    diagnostic and returns (ast, 2) when the program did not load, else
+    (ast, 0)."""
+    ast, parse_diags, import_diags = load_program(
+        src, source_path, collect=collect,
+        resolve=not getattr(args, "no_import_resolution", False))
+    for d in parse_diags + import_diags:
+        _emit_error(d, args.json)
+    return ast, (2 if parse_diags or import_diags else 0)
 
 
 # ----------------------------------------------------------------------
@@ -115,8 +103,7 @@ def cmd_parse(args) -> int:
 
 def cmd_emit(args) -> int:
     src = _read(args.file)
-    ast = parse(src, args.file)
-    ast, rc = _maybe_resolve_imports(ast, args.file, args)
+    ast, rc = _load(src, args.file, args)
     if rc != 0:
         return rc
     py = emit(ast, release=getattr(args, "release", False))
@@ -129,8 +116,7 @@ def cmd_pack(args) -> int:
     boundary (formalizes the bench-harness interop pattern)."""
     from .runtime import mangle
     src = _read(args.file)
-    ast = parse(src, args.file)
-    ast, rc = _maybe_resolve_imports(ast, args.file, args)
+    ast, rc = _load(src, args.file, args)
     if rc != 0:
         return rc
     py = emit(ast)
@@ -175,7 +161,9 @@ def cmd_fmt(args) -> int:
     """
     src = _read(args.file)
     ast = parse(src, args.file)
-    formatted = pretty(ast)
+    # With the source, full-line comments survive — a `// expect:` header
+    # among them (D7; what is still lost is listed on `pretty`).
+    formatted = pretty(ast, src)
     if getattr(args, "check", False):
         if src == formatted:
             return 0
@@ -186,7 +174,7 @@ def cmd_fmt(args) -> int:
             sys.stderr.write("\n")
         return 1
     if getattr(args, "write", False):
-        with open(args.file, "w", encoding="utf-8") as f:
+        with open(args.file, "w", encoding="utf-8", newline="\n") as f:
             f.write(formatted)
         if not args.json:
             print(f"formatted: {args.file}")
@@ -207,17 +195,35 @@ _STAGE_OPT_OUT = {
 
 
 def _run_analysis(ast, args) -> int:
-    """Run the static-analysis registry in stage order. Prints the first
-    stage that produced diagnostics and returns 2; 0 if every stage is
-    clean. Short-circuiting per stage is the pre-registry behaviour."""
+    """Run the static-analysis registry in stage order; 2 if any stage
+    produced diagnostics, else 0.
+
+    `--json` prints EVERY stage's diagnostics, each tagged with its
+    `stage` — the same set `sdk.check`, the LSP and `tools/scan.py`
+    report. It used to stop at the first non-empty stage, so an E0801
+    hid an E0713 in the same file and an agent needed one round-trip per
+    stage (audit 2026-09-24 D4). Text mode keeps the short-circuit for a
+    human reader, and says what it held back."""
     skip = {stage for stage, flag in _STAGE_OPT_OUT.items()
             if getattr(args, flag, False)}
-    for _stage, diags in analyze(ast, skip=skip):
-        if diags:
+    found = [(stage, diags) for stage, diags in analyze(ast, skip=skip)
+             if diags]
+    if not found:
+        return 0
+    if args.json:
+        for stage, diags in found:
             for d in diags:
-                _emit_error(d, args.json)
-            return 2
-    return 0
+                _emit_error(d, True, stage=stage)
+        return 2
+    for d in found[0][1]:
+        _emit_error(d, False)
+    if len(found) > 1:
+        n = sum(len(diags) for _stage, diags in found[1:])
+        sys.stderr.write(
+            f"({n} more diagnostic(s) from later stages not shown: "
+            + ", ".join(f"{stage} {len(diags)}" for stage, diags in found[1:])
+            + "; run with --json to see every stage)\n")
+    return 2
 
 
 def _run_smt_check(ast, as_json, timeout_ms):
@@ -568,22 +574,21 @@ def cmd_check_py(args) -> int:
 
 def cmd_check(args) -> int:
     src = _read(args.file)
-    if getattr(args, "collect_errors", False):
+    collect = getattr(args, "collect_errors", False)
+    if collect:
         # C.6 multi-error parser recovery: surface every recoverable
         # parse error in one pass, instead of bailing on the first.
-        ast, parse_diags = parse_collect(src, args.file)
-        for d in parse_diags:
-            _emit_error(d, args.json)
+        _ast, parse_diags, _ = load_program(src, args.file, resolve=False)
         if parse_diags:
+            for d in parse_diags:
+                _emit_error(d, args.json)
             if args.json:
                 json.dump({"ok": False, "diagnostics": [d.to_dict() for d in parse_diags]},
                           sys.stdout)
                 sys.stdout.write("\n")
             return 2
-    else:
-        ast = parse(src, args.file)
     # H.E.3 multi-file resolution (default-on when ImportDecls present).
-    ast, rc = _maybe_resolve_imports(ast, args.file, args)
+    ast, rc = _load(src, args.file, args, collect=collect)
     if rc != 0:
         return rc
     py = emit(ast)
@@ -631,9 +636,8 @@ def cmd_run(args) -> int:
         seed = int(os.environ.get("AETHER_SEED", "0"))
         set_deterministic(seed)
     src = _read(args.file)
-    ast = parse(src, args.file)
     # H.E.3 multi-file resolution (default-on when ImportDecls present).
-    ast, rc = _maybe_resolve_imports(ast, args.file, args)
+    ast, rc = _load(src, args.file, args)
     if rc != 0:
         return rc
     # Default-on static analysis — the same registry `check` runs, so a
@@ -672,14 +676,10 @@ def cmd_test(args) -> int:
     src = _read(src_path)
     expected = _read(exp_path) if os.path.isfile(exp_path) else ""
     try:
-        ast = parse(src, src_path)
         # H.E.3 multi-file resolution (default-on when ImportDecls present).
-        if _has_imports(ast) and not getattr(args, "no_import_resolution", False):
-            ast, diags = resolve_imports(ast, src_path)
-            if diags:
-                for d in diags:
-                    _emit_error(d, args.json)
-                return 2
+        ast, rc = _load(src, src_path, args)
+        if rc != 0:
+            return rc
         py = emit(ast)
         code = compile(py, src_path + ".py", "exec")
         g = build_namespace()
@@ -768,9 +768,17 @@ def cmd_fix_loop(args) -> int:
                 "  runs from a source checkout only. The deterministic path\n"
                 "  (without --live) works in an installed copy.\n")
             return 2
-        transcript = args.out_transcript or args.file.replace(
-            ".aeth", ".live.transcript.json")
-        return _do_live(args.file, transcript, label=f"cli ({args.file})")
+        from pathlib import Path
+        transcript = args.out_transcript or str(
+            Path(args.file).with_suffix(".live.transcript.json"))
+        if os.path.abspath(transcript) == os.path.abspath(args.file):
+            sys.stderr.write("aether fix-loop --live: --out-transcript "
+                             "must not be the input file\n")
+            return 2
+        rc = _do_live(args.file, transcript, label=f"cli ({args.file})")
+        if rc != 0:
+            return rc
+        return _judge_live_fix(transcript, args)
 
     # Deterministic path (default) — part of the package, so it works in
     # a pip-installed copy. It used to be imported from demos/, which no
@@ -783,7 +791,38 @@ def cmd_fix_loop(args) -> int:
         argv += ["--out-transcript", args.out_transcript]
     if args.quiet:
         argv += ["--quiet"]
+    if args.allow_widen:
+        argv += ["--allow-widen"]
     return deterministic_main(argv)
+
+
+def _judge_live_fix(transcript_path: str, args) -> int:
+    """The live path's verdict used to be `sdk.check(fixed).ok` alone, so
+    a model that "fixed" an E0801 by widening the effects clause passed
+    (audit 2026-09-24 D1). Hold its output to the deterministic loop's
+    rule: a fix that declares more effects/capabilities than the input is
+    rejected (exit 1) and tagged `weakens_constraint` in the transcript;
+    `--allow-widen` keeps it, with a warning, and still exits 1."""
+    from .fix_loop import source_widening
+    with open(transcript_path, encoding="utf-8") as f:
+        tr = json.load(f)
+    widen = source_widening(tr["input"]["source"], tr["fixed_source"],
+                            args.file)
+    if not widen:
+        return 0
+    tr["weakens_constraint"] = True
+    tr["widens"] = widen
+    if not args.allow_widen:
+        tr["rejected"] = "the fix widens declared effects/capabilities"
+    with open(transcript_path, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(tr, f, indent=2)
+    verdict = ("WARNING: kept under --allow-widen" if args.allow_widen
+               else "REJECTED")
+    sys.stderr.write(
+        f"aether fix-loop --live: {verdict}: the model's fix widens declared "
+        f"effects/capabilities ({'; '.join(widen)}); remove or replace the "
+        "offending call instead\n")
+    return 1
 
 
 # ----------------------------------------------------------------------
@@ -931,7 +970,10 @@ def main(argv=None) -> int:
         description=(
             "Aether agent fix-loop. "
             "Default (deterministic): reproducible AST rewrites for E0801 "
-            "(effect not covered) and E0701 (capability not declared). Used "
+            "(effect not covered) and E0701 (capability not declared). Both "
+            "repairs WIDEN a declaration, so by default they are not applied: "
+            "the loop reports 'not_repaired' with the call to remove or "
+            "replace, and exits non-zero (--allow-widen applies them). Used "
             "in CI. NOT 'AI-driven'. "
             "--live: calls Anthropic for arbitrary errors including logic "
             "errors (E0301/E0302/E0304/E0305). Requires ANTHROPIC_API_KEY. "
@@ -947,6 +989,12 @@ def main(argv=None) -> int:
                     help="where to write the fixed .aeth")
     sp.add_argument("--out-transcript", default=None,
                     help="where to write the fix transcript JSON")
+    sp.add_argument("--allow-widen", action="store_true",
+                    help="apply (or, with --live, keep) a repair that widens "
+                         "a declared effects clause or module capability "
+                         "list. Off by default: widening is what Aether "
+                         "refuses. Each such step is tagged "
+                         "weakens_constraint and the exit stays non-zero.")
     sp.add_argument("--quiet", action="store_true",
                     help="suppress progress output")
 
