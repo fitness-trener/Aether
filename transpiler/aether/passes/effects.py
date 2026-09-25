@@ -2164,7 +2164,8 @@ def check_effects(ast: Dict[str, Any]) -> List[Diagnostic]:
         cx = context_names(d, prog)
 
         def e0801(what: str, callee: str, eff: EffectEntry,
-                  via: Optional[str], extra: Dict[str, Any]) -> Diagnostic:
+                  via: Optional[str], extra: Dict[str, Any],
+                  at: Dict[str, Any]) -> Diagnostic:
             missing_pretty = _format_effect(eff)
             # Removal first: widening the clause silences E0801 without
             # removing the effect (audit 2026-09-24, Wave 3 D1).
@@ -2184,7 +2185,8 @@ def check_effects(ast: Dict[str, Any]) -> List[Diagnostic]:
                 severity="error",
                 message=(f"function {caller_name!r} (effects "
                          f"{_format_effect_list(caller_effects)}) " + what),
-                position=Position(pos.get("line", 0), pos.get("column", 0)),
+                # At the offending call (audit D10); the decl if unpositioned.
+                position=Position(at.get("line", 0), at.get("column", 0)),
                 suggestion=hint,
                 confidence=1.0,
                 extra={"caller": caller_name, "callee": callee,
@@ -2195,6 +2197,7 @@ def check_effects(ast: Dict[str, Any]) -> List[Diagnostic]:
 
         for call in fn_calls(d):
             name = callee_name(call)
+            at = call.get("pos") or pos
             targets, unknown = resolve_call(call, cx, prog)
             for callee, as_value in targets:
                 callee_effects = prog["user_effects"].get(callee)
@@ -2216,7 +2219,7 @@ def check_effects(ast: Dict[str, Any]) -> List[Diagnostic]:
                                 f"{missing_pretty} not covered by the caller")
                     diags.append(e0801(what, callee, callee_eff,
                                        "function_value" if as_value is not None
-                                       else None, {}))
+                                       else None, {}, at))
             if unknown is None:
                 continue
             for fn, eff in bound:
@@ -2228,5 +2231,6 @@ def check_effects(ast: Dict[str, Any]) -> List[Diagnostic]:
                         f"{fn!r} has effect {_format_effect(eff)} not covered by "
                         f"the caller")
                 diags.append(e0801(what, fn, eff, "unknown_callee",
-                                   {"candidates": candidates, "shape": unknown}))
+                                   {"candidates": candidates, "shape": unknown},
+                                   at))
     return diags

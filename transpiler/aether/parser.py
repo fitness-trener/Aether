@@ -372,10 +372,21 @@ class Parser:
         return {"name": n, "type": ty}
 
     def parse_effect_list(self) -> List[Dict[str, Any]]:
+        starts = [self.peek().pos]
         out = [self.parse_effect()]
         while self.at_sym(","):
             self.advance()
+            starts.append(self.peek().pos)
             out.append(self.parse_effect())
+        if len(out) > 1:
+            for at, e in zip(starts, out):
+                if e["path"] == ["pure"]:
+                    # `pure` is the empty set: `pure, log` read as {log}
+                    # statically and as pure at runtime (audit A11).
+                    raise self.err(
+                        "'pure' declares no effects and cannot be combined "
+                        "with other effects", at,
+                        suggestion="drop 'pure', or drop the other effects")
         return out
 
     def parse_effect(self) -> Dict[str, Any]:
@@ -468,7 +479,8 @@ class Parser:
             return {"kind": "Assign", "target": name, "value": value, "pos": t.pos.to_dict()}
         # otherwise, expression statement
         e = self.parse_expr()
-        return {"kind": "ExprStmt", "expr": e}
+        # Positioned (audit D10): E0204 anchors on a dead statement.
+        return {"kind": "ExprStmt", "expr": e, "pos": t.pos.to_dict()}
 
     def _let_or_var(self, which: str) -> Dict[str, Any]:
         kw = self.advance()
@@ -672,6 +684,7 @@ class Parser:
         return self._parse_postfix()
 
     def _parse_postfix(self) -> Dict[str, Any]:
+        start = self.peek().pos
         e = self._parse_primary()
         while True:
             if self.at_sym("("):
@@ -683,7 +696,10 @@ class Parser:
                         self.advance()
                         args.append(self.parse_expr())
                 self.expect_sym(")")
-                e = {"kind": "Call", "func": e, "args": args}
+                # Positioned at the start of the callee expression (audit
+                # D10): a finding about a call is reported at the call.
+                e = {"kind": "Call", "func": e, "args": args,
+                     "pos": start.to_dict()}
             elif self.at_sym("."):
                 self.advance()
                 fname = self.expect_ident().value
