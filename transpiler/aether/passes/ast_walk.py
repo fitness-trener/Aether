@@ -32,15 +32,21 @@ from typing import Any, Dict, Iterator, List, NamedTuple, Optional
 
 def walk(node: Any, *kinds: str) -> Iterator[Dict[str, Any]]:
     """Yield every dict node reachable from `node` whose `kind` is in
-    `kinds` (every dict node if `kinds` is empty)."""
-    if isinstance(node, dict):
-        if not kinds or node.get("kind") in kinds:
-            yield node
-        for v in node.values():
-            yield from walk(v, *kinds)
-    elif isinstance(node, list):
-        for x in node:
-            yield from walk(x, *kinds)
+    `kinds` (every dict node if `kinds` is empty).
+
+    Iterative (an explicit stack, children pushed in reverse so the order
+    stays pre-order / insertion order): the recursive form hit Python's
+    recursion limit on a 500-term `1 + 1 + ...` chain, which the parser
+    accepts (audit 2026-09-24 A10)."""
+    stack = [node]
+    while stack:
+        n = stack.pop()
+        if isinstance(n, dict):
+            if not kinds or n.get("kind") in kinds:
+                yield n
+            stack.extend(reversed(list(n.values())))
+        elif isinstance(n, list):
+            stack.extend(reversed(n))
 
 
 def fn_exprs(decl: Dict[str, Any]) -> List[Any]:

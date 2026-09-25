@@ -799,6 +799,48 @@ end
 """)
     assert (out, code) == ("6\n", None), (out, code)
 
+# ----------------------------------------------------------------------
+# A10 — deep input is a structured diagnostic, never a traceback
+# ----------------------------------------------------------------------
+
+def _parse_code(src: str):
+    try:
+        parse(src, "<w2>")
+    except AetherError as e:
+        return e.diag.code
+    return None
+
+
+def _ret(expr: str) -> str:
+    return ("function f() returns Int\n  effects pure\ndo\n  return "
+            + expr + "\nend\n")
+
+
+def test_a10_deep_parens_and_long_chains_are_e0201():
+    assert _parse_code(_ret("(" * 150 + "1" + ")" * 150)) == "E0201"
+    assert _parse_code(_ret(" + ".join(["1"] * 500))) == "E0201"
+
+
+def test_a10_bounded_depth_still_analyzes_and_runs():
+    src = _ret(" + ".join(["1"] * 190)) + """
+function main() returns Unit
+  effects log
+do
+  print(intToString(f()))
+end
+"""
+    assert codes(src) == []
+    assert run(src) == ("190\n", None)
+
+
+def test_a10_unemittable_construct_is_e9001():
+    try:
+        emit(parse("const X: Int = old(1)\n", "<w2>"))
+        got = None
+    except AetherError as e:
+        got = e.diag.code
+    assert got == "E9001"
+
 if __name__ == "__main__":
     n = 0
     for name, fn in sorted(globals().items()):
