@@ -331,8 +331,14 @@ def test_xxe_python_text_names_the_callee_and_a_python_fix():
     ds = {d.extra["function"]: d
           for d in analyze_flat(ast_dict, skip=PY_SKIP_STAGES) if d.code == "E0727"}
     assert set(ds) == set("abcdefghijk"), sorted(ds)
-    assert all(d.confidence == confidence_of("qualified") for d in ds.values()), \
+    # Same codes. The stdlib parses with no parser argument rate below
+    # lxml's (`stdlib_xml`, audit 2026-09-24 C7): their own text says no
+    # XXE, only the Expat DoS clause. Until Wave 5a all rated `qualified`.
+    want = {k: confidence_of("qualified" if k in "ej" else "stdlib_xml") for k in ds}
+    assert {k: d.confidence for k, d in ds.items()} == want, \
         {k: d.confidence for k, d in ds.items()}
+    assert all(d.extra["match"] == ("qualified" if k in "ej" else "stdlib_xml")
+               for k, d in ds.items())
     for fn, callee, fix in [
         ("a", "xml.etree.ElementTree.fromstring", "defusedxml.ElementTree.fromstring"),
         ("b", "xml.dom.minidom.parseString", "defusedxml.minidom.parseString"),
@@ -489,7 +495,11 @@ def test_xxe_elementtree_text_is_scoped_to_calls_without_a_parser():
     ds = {d.extra["function"]: d
           for d in analyze_flat(ast_dict, skip=PY_SKIP_STAGES) if d.code == "E0727"}
     assert sorted(ds) == list("abcdefgh"), sorted(ds)
-    assert all(d.extra["match"] == "qualified" for d in ds.values()), \
+    # A caller's parser (a, b, c) and lxml (f) stay `qualified`; a stdlib
+    # parse with no parser argument rates `stdlib_xml` (audit C7 — until
+    # Wave 5a every one of these was `qualified`).
+    assert {k: d.extra["match"] for k, d in ds.items()} == \
+        {k: "qualified" if k in "abcf" else "stdlib_xml" for k in ds}, \
         {k: d.extra for k, d in ds.items()}
     for fn, callee in [("a", "xml.etree.ElementTree.fromstring"),
                        ("b", "xml.etree.ElementTree.parse"),
@@ -1444,6 +1454,7 @@ def test_match_kind_reaches_extra_for_every_sink_match():
         "builtin": ("def f(s):\n    exec(s)\n", "E0731"),
         "builtin_compile": ("def f(s):\n    compile(s, '<s>', 'exec')\n", "E0731"),
         "method": ("def f(cur, x):\n    cur.execute('SELECT ' + x)\n", "E0713"),
+        "stdlib_xml": ("import xml.etree.ElementTree as ET\ndef f(s):\n    ET.fromstring(s)\n", "E0727"),
     }
     assert sorted(shapes) == sorted(SINK_MATCH_KINDS), (
         f"every match kind the frontend publishes needs a shape here: "

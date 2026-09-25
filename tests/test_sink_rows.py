@@ -95,27 +95,23 @@ GUARDS = {
 }
 # wrapper -> (rows, the documented-fix snippet using `{san}`)
 SANITIZERS = {
-    "shellArg": (("shlex.quote", "pipes.quote"),
+    "shellArg": (("shlex.quote", "pipes.quote", "shlex.join"),
                  "import os\ndef f(x):\n    return os.system('ls ' + {san}(x))\n"),
     "schemaDecode": (("yaml.safe_load", "yaml.safe_load_all", "json.loads", "json.load"),
                      "def f(x):\n    return {san}(x)\n"),
-    "safeJoin": (("werkzeug.utils.secure_filename",),
+    "safeJoin": (("werkzeug.utils.secure_filename", "werkzeug.utils.safe_join",
+                  "werkzeug.security.safe_join"),
                  "def f(x):\n    return open({san}(x))\n"),
+    # Own-origin URL builders (audit C2): the redirect the E0718 hint names.
+    "safeRedirect": (("flask.url_for", "quart.url_for", "django.urls.reverse",
+                      "django.urls.reverse_lazy"),
+                     "import flask\ndef f(x):\n    return flask.redirect({san}(x))\n"),
     "htmlEscape": (("html.escape", "markupsafe.escape"),
                    "def f(x):\n    return {san}(x)\n"),
 }
 
 # Rows a snippet cannot exercise: none today. An entry needs a reason.
 UNEXERCISABLE: dict = {}
-
-# Sanitizer rows whose documented fix is STILL flagged — a known defect,
-# not a pass. The assertion is inverted rather than dropped: the day the
-# fix goes clean this test goes red, so the entry cannot outlive the bug.
-#   shlex.quote / pipes.quote: `"ls " + shlex.quote(x)` fires E0714 at
-#   0.95 — the fix the hint names is flagged (audit 2026-09-24 C1,
-#   Wave 5). `os.system(shlex.quote(x))` alone fires too, correctly: the
-#   input still picks the program (py_whole).
-KNOWN_FLAGGED_FIX = {"shlex.quote": ["E0714"], "pipes.quote": ["E0714"]}
 
 
 def _codes(src: str) -> list:
@@ -204,16 +200,14 @@ def test_every_sanitizer_maps_and_its_fix_is_clean():
             if wrapper not in {callee_name(c) for c in walk(ir, "Call")}:
                 bad.append(f"{row}: not translated to {wrapper}")
             got = _codes(_import(row) + template.format(san=row))
-            want = KNOWN_FLAGGED_FIX.get(row, [])
-            if got != want:
-                bad.append(f"{row}: documented fix gives {got}, want {want}"
-                           + (" — the known defect is fixed; drop its "
-                              "KNOWN_FLAGGED_FIX entry" if row in KNOWN_FLAGGED_FIX else ""))
+            # Every documented fix is clean. `"ls " + shlex.quote(x)` was
+            # pinned here as a known-flagged fix until audit C1 (Wave 5a).
+            if got != []:
+                bad.append(f"{row}: documented fix gives {got}, want clean")
     # The one sanitizer with a Python sink it clears: prove it clears.
     assert _codes("def f(x):\n    return open(x)\n") == ["E0711"]
     assert not bad, "sanitizer rows:\n  " + "\n  ".join(bad)
-    print(f"rows: {n} sanitizer rows map to their wrapper; fixes clean "
-          f"({len(KNOWN_FLAGGED_FIX)} known-flagged, audit C1)")
+    print(f"rows: {n} sanitizer rows map to their wrapper; every documented fix is clean")
 
 
 if __name__ == "__main__":

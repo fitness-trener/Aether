@@ -35,7 +35,8 @@ the modeled surface, and are not a soundness proof. Recorded residuals:
 """
 
 from __future__ import annotations
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from ..confidence import confidence_of
@@ -496,6 +497,13 @@ class ArgRule:
     fixpoint: bool = True
     pin: Optional[str] = None
     py_whole: Optional[str] = None
+    # `pieces` decides a `+` concatenation that holds a frontend wrapper
+    # call as a PIECE (`"ls -l " + shlex.quote(p)`): it gets the literal
+    # texts in order, None standing for each non-literal piece, and says
+    # whether the composition is sound. None: a wrapper is never accepted
+    # inside a concatenation (a concatenation of literals and safe names
+    # is folded for every rule — it IS a literal).
+    pieces: Optional[Callable[[List[Optional[str]]], bool]] = None
 
 
 @dataclass(frozen=True)
@@ -660,6 +668,69 @@ _SQL_RULE = ArgRule(
     pin="sqlBind template is not a fixed literal - binding cannot parameterize the query text itself",
 )
 
+# Programs that run an ARGUMENT as code or as the next program: a quoted
+# word handed to one of these is still an injection (`"sh -c " +
+# shlex.quote(cmd)`, `"sudo " + shlex.quote(prog)`). A literal word of
+# the command equal to one of these (by basename) refuses the whole
+# composition. Over-flag direction: `ls env` is refused too. Not a
+# complete list of argument-interpreting programs (q1 residual).
+_CODE_TAKING_PROGRAMS = frozenset({
+    "sh", "bash", "zsh", "dash", "ksh", "csh", "tcsh", "fish", "cmd",
+    "cmd.exe", "powershell", "pwsh", "eval", "exec", "source", "env",
+    "xargs", "sudo", "su", "doas", "ssh", "nohup", "timeout", "nice",
+    "python", "python3", "perl", "ruby", "node", "php", "awk", "find",
+})
+_SHELL_WORD = re.compile(r"[^\s;&|()<>`'\"\\$]+")
+
+
+def _shell_pieces_ok(texts: List[Optional[str]]) -> bool:
+    """Is `lit + quoted + lit ...` one shell command whose program is a
+    fixed literal and whose every quoted piece lands as a whole word?
+    `texts` holds each literal's text in order and None for each piece.
+
+      * the first piece is a literal that ends its first word — the
+        program is `ls` in `"ls -l " + q`, but `"ls" + q` lets the input
+        extend the program's name;
+      * no literal word is a program that runs its argument
+        (`_CODE_TAKING_PROGRAMS`);
+      * every piece starts outside quotes and not after `\\` or `$`:
+        `"ls '" + shlex.quote(x) + "'"` puts the quoted text back
+        outside quotes (`''a; rm -rf /''`)."""
+    lead = ""
+    for t in texts:
+        if t is None:
+            break
+        lead += t
+    if not texts or texts[0] is None or not re.match(r"\s*[^\s]+\s", lead):
+        return False
+    words = _SHELL_WORD.findall(" ".join(t for t in texts if t is not None))
+    if any(w.rsplit("/", 1)[-1] in _CODE_TAKING_PROGRAMS for w in words):
+        return False
+    state, prev = "", ""            # "", "'" or '"'; the char before
+    for t in texts:
+        if t is None:
+            if state or prev in ("\\", "$"):
+                return False
+            prev = "x"
+            continue
+        i = 0
+        while i < len(t):
+            c = t[i]
+            if state != "'" and c == "\\":
+                if i + 1 < len(t):  # an escaped char is a plain char
+                    prev, i = "x", i + 2
+                    continue
+                prev = c            # dangling: escapes what follows
+            else:
+                if state == "":
+                    state = c if c in "'\"" else ""
+                elif c == state:
+                    state = ""
+                prev = c
+            i += 1
+    return state == ""
+
+
 _SHELL_RULE = ArgRule(
     wrappers=("shellArg",),
     not_a_node="command is not a fixed literal",
@@ -668,6 +739,7 @@ _SHELL_RULE = ArgRule(
     default="command is a dynamic expression - use shellArg(template, value)",
     pin="shellArg template is not a fixed literal - quoting cannot protect the command line itself",
     py_whole="the whole command is one quoted word - the input still chooses the program; pass an argv list",
+    pieces=_shell_pieces_ok,
 )
 
 _REDIRECT_RULE = ArgRule(
@@ -990,6 +1062,82 @@ LITERAL_OR_WRAPPER_SPECS: Tuple[LiteralOrWrapperSpec, ...] = (
 )
 
 
+# Python wording per row (audit 2026-09-24 C6): a Python finding names
+# the Python call it matched (`{callee}`) and the Python fix, never an
+# Aether wrapper a Python user cannot call. Appended to each row's
+# `callee_text` as its catch-all (prefix "" matches every Python callee;
+# an Aether-source finding has none and keeps the row's own text). Every
+# fix named first here is a spelling the frontend clears —
+# `tests/test_python_hints.py` applies each one and checks it is clean.
+# `{{` / `}}` are literal braces (the text is `.format`ted).
+_PY_TEXT: Dict[str, Tuple[str, str]] = {
+    "E0711": (
+        "function {fn!r} opens a path built from input via {callee} ({reason}); "
+        "a path traversal here can read or overwrite arbitrary files",
+        "join the untrusted part onto a fixed base with "
+        "werkzeug.utils.safe_join(BASE_DIR, name), which returns None for a path "
+        "that escapes BASE_DIR, or reduce it to one file name with "
+        "werkzeug.utils.secure_filename(name) (os.path.join(BASE_DIR, "
+        "secure_filename(name)) is accepted); an os.path.realpath(...) check "
+        "that the result starts with BASE_DIR is sound too, but this rule does "
+        "not model the check and keeps reporting it"),
+    "E0713": (
+        "function {fn!r} builds a SQL query for {callee} unsafely ({reason}); "
+        "untrusted input concatenated into a query is an injection",
+        "keep the query text fixed and pass the values separately: "
+        "cursor.execute(\"SELECT * FROM t WHERE id = %s\", (value,)) (the "
+        "placeholder is the driver's: %s, ? or :name), or SQLAlchemy "
+        "text(\"SELECT * FROM t WHERE id = :id\").bindparams(id=value) / "
+        "select(t).where(t.c.id == value); a table or column name goes through "
+        "psycopg's sql.SQL(\"... {{}}\").format(sql.Identifier(name))"),
+    "E0714": (
+        "function {fn!r} builds a shell command for {callee} unsafely "
+        "({reason}); untrusted input in a shell command line is a command "
+        "injection",
+        "pass an argv list and no shell: subprocess.run([\"ls\", \"-l\", path]); "
+        "if a shell is unavoidable, keep the program a fixed literal and quote "
+        "each untrusted argument: \"ls -l \" + shlex.quote(path) (or "
+        "shlex.join(args) for a list of arguments)"),
+    "E0718": (
+        "function {fn!r} redirects to an untrusted target via {callee} "
+        "({reason}); an open redirect sends users to an attacker-controlled "
+        "site from a trusted link",
+        "redirect to one of your own routes, flask.url_for(\"endpoint\") or "
+        "django.urls.reverse(\"name\"), or check a user-supplied target first: "
+        "if not url_has_allowed_host_and_scheme(target, "
+        "allowed_hosts={{request.get_host()}}): target = \"/\" "
+        "(django.utils.http)"),
+    "E0719": (
+        "function {fn!r} renders a dynamic template via {callee} ({reason}); "
+        "untrusted input in the template is server-side template injection "
+        "(RCE)",
+        "keep the template text fixed (a literal or a template file) and pass "
+        "untrusted values as data: Template(\"Hello {{{{ name }}}}\")"
+        ".render(name=value); a template users author goes through "
+        "jinja2.sandbox.SandboxedEnvironment().from_string(src)"),
+    "E0720": (
+        "function {fn!r} deserializes untrusted data via {callee} ({reason}); "
+        "an unrestricted decoder on attacker-controlled bytes is remote code "
+        "execution",
+        "decode a data format instead: json.loads(data), yaml.safe_load(data) "
+        "(or yaml.load(data, Loader=yaml.SafeLoader)), or a schema-validated "
+        "one such as a pydantic Model.model_validate_json(data); for "
+        "torch.load pass weights_only=True; never unpickle bytes an attacker "
+        "can reach"),
+    "E0731": (
+        "function {fn!r} executes dynamic code via {callee} ({reason}); an "
+        "interpreter fed attacker-authored source is arbitrary code execution "
+        "(code injection)",
+        "do not execute code built from input: read a Python literal with "
+        "ast.literal_eval(text) and data with json.loads(text); code that ships "
+        "with the application stays a fixed literal"),
+}
+LITERAL_OR_WRAPPER_SPECS = tuple(
+    replace(s, callee_text=s.callee_text + (CalleeText("", *_PY_TEXT[s.code]),))
+    if s.code in _PY_TEXT else s
+    for s in LITERAL_OR_WRAPPER_SPECS)
+
+
 # Sanctioned unwrappers a marker-flow row does NOT own. `trusted(...)`
 # clears Untrusted<T> at a call-site boundary as well, so E0729/E0730
 # must honour it; it is nobody's row sanitizer, so it is declared rather
@@ -1130,9 +1278,90 @@ def _arg_reason(node: Any, safe_names: Set[str], rule: ArgRule) -> Optional[str]
         return rule.call if rule.call is not None else rule.default
     if kind == "Ident" and node.get("name") in safe_names:
         return None
-    if kind == "BinOp" and node.get("op") == "+" and rule.concat is not None:
-        return rule.concat
+    if kind == "BinOp" and node.get("op") == "+":
+        folded = _concat_reason(node, safe_names, rule)
+        if folded is not _UNFOLDED:
+            return folded
+        if rule.concat is not None:
+            return rule.concat
     return rule.default
+
+
+_UNFOLDED = object()
+
+
+def _concat_leaves(node: Dict[str, Any]) -> List[Any]:
+    """The operands of a `+` tree, left to right."""
+    out, stack = [], [node]
+    while stack:
+        x = stack.pop()
+        if isinstance(x, dict) and x.get("kind") == "BinOp" and x.get("op") == "+":
+            stack += [x.get("right"), x.get("left")]
+        else:
+            out.append(x)
+    return out
+
+
+def _concat_reason(node: Dict[str, Any], safe_names: Set[str],
+                   rule: ArgRule) -> Any:
+    """A `+` concatenation that is safe by its parts (audit 2026-09-24 C1/
+    C3). Every operand a literal or a name proven to hold one is a
+    literal — `"SELECT * FROM " + TABLE`, `"a " + "b"` — for every rule,
+    with the rule's literal bans read over each run of adjacent literals.
+    A frontend wrapper call as one operand (`"ls -l " + shlex.quote(p)`)
+    is accepted only by a rule with a `pieces` check, which judges the
+    composition. None if accepted, a ban reason, or `_UNFOLDED`."""
+    texts: List[Optional[str]] = []
+    for leaf in _concat_leaves(node):
+        k = leaf.get("kind") if isinstance(leaf, dict) else None
+        if k == "StringLit":
+            texts.append(leaf.get("value") or "")
+        elif k == "Ident" and leaf.get("name") in safe_names:
+            texts.append(None)
+        elif k == "Call" and leaf.get("py") and rule.pieces is not None \
+                and callee_name(leaf) in rule.wrappers:
+            texts.append(None)
+        else:
+            return _UNFOLDED
+    run: List[str] = []
+    for t in texts + [None]:
+        if t is not None:
+            run.append(t)
+            continue
+        for banned, why in rule.literal_bans:
+            if banned in "".join(run):
+                return why
+        run = []
+    if rule.pieces is not None and None in texts and not rule.pieces(texts):
+        return rule.concat or rule.default
+    return None
+
+
+# The wrapper names the Python frontend emits for a sanctioned call
+# (`SANITIZER_BY_QUALIFIED`'s values, plus `sqlBind` for a SQL
+# expression); `tests/test_confidence.py` keeps the two equal.
+PY_SANITIZER_NAMES = frozenset({"shellArg", "schemaDecode", "safeJoin",
+                                "htmlEscape", "safeRedirect", "sqlBind"})
+
+
+def _holds_sanitizer(node: Any) -> bool:
+    """True if a judged argument contains a frontend-named sanitizer call or
+    an own-origin URL builder — the argument-shape demotion (confidence.py).
+    Anywhere inside it, carried parts included: `os.system(shlex.quote(c))`
+    and `redirect(request.url_for("home"))` alike."""
+    return any((c.get("py") and callee_name(c) in PY_SANITIZER_NAMES)
+               or c.get("own_origin")
+               for c in walk(node, "Call"))
+
+
+_AETHER_REMEDY = re.compile(
+    r" - (?:use|route it through) (?:sqlBind|shellArg|safeRedirect|safeJoin)\(.*$")
+
+
+def _py_reason(reason: str) -> str:
+    """A rule reason without its Aether remedy (`- use sqlBind(...)`): a
+    Python finding names the Python fix in its own suggestion."""
+    return _AETHER_REMEDY.sub("", reason)
 
 
 def _safe_names(fn_decl: Dict[str, Any], rule: ArgRule) -> Set[str]:
@@ -1197,22 +1426,30 @@ def literal_or_wrapper(spec: LiteralOrWrapperSpec) -> Callable[[Dict[str, Any]],
                 # wording (`callee_text`) and nothing else.
                 callee = call.get("callee")
                 message, suggestion = spec.text_for(callee)
+                if callee:
+                    reason = _py_reason(reason)
                 parts = (callee or "").split(".")
                 words = {"fn": fn, "reason": reason, "callee": callee,
                          "callee_tail": ".".join(parts[-2:]),
                          "callee_leaf": parts[-1]}
+                # Output-only (confidence.py): an argument shaped like the
+                # fix rates at the floor; the finding itself stands.
+                demoted = bool(match) and _holds_sanitizer(args[spec.arg_index])
                 for sink in targets:
                     diags.append(Diagnostic(
                         code=spec.code,
-                        category="capability",
+                        # A Python finding is a security finding; there is
+                        # no capability clause in Python to refer to.
+                        category="security" if match else "capability",
                         severity="error",
                         message=message.format(sink=sink, **words),
                         position=Position(pos.get("line", 0), pos.get("column", 0)),
                         suggestion=suggestion.format(sink=sink, **words),
-                        confidence=confidence_of(match),
+                        confidence=confidence_of(match, demoted),
                         extra=({"function": fn, "sink": sink, "reason": reason}
                                | ({"match": match} if match else {})
-                               | ({"callee": callee} if callee else {})),
+                               | ({"callee": callee} if callee else {})
+                               | ({"demoted": "argument_shape"} if demoted else {})),
                     ))
         return diags
 

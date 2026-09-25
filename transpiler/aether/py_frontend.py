@@ -34,6 +34,8 @@ Output of `py_to_ir(source)`:
 """
 from __future__ import annotations
 import ast as _pyast
+import re
+import shlex
 from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 
 PYMAP_VERSION = "py-cap-map/0.2"
@@ -371,8 +373,13 @@ SINK_BY_METHOD: Dict[str, str] = {
     # jinja2 `Environment.from_string(src)` — the prompt-template SSTI
     # shape agent frameworks actually use: 24 non-literal corpus sites
     # (haystack PromptBuilder, semantic-kernel, langchain). A non-jinja
-    # `.from_string` over-flags (q5 direction). SandboxedEnvironment is
-    # NOT a sanctioned exit: CVE-2024-22195/-56201/-56326 are escapes.
+    # `.from_string` over-flags (q5 direction), except on a class this
+    # file defines with its own `from_string` (`_own_class_method`). A
+    # `jinja2.sandbox.SandboxedEnvironment` receiver is Jinja's documented
+    # control for user-authored templates and clears it (audit C4); the
+    # sandbox has had breakouts (CVE-2024-56326 among them, fixed in later
+    # 3.1.x releases) — the row clears the documented control, not a
+    # version, the q1 residual torch's `weights_only` also carries.
     "from_string": "renderTemplate",
     # paramiko `client.exec_command(cmd)` runs `cmd` through the remote
     # shell. 0 corpus sites.
@@ -412,6 +419,7 @@ SINK_MATCH_KINDS: Tuple[str, ...] = (
     "builtin_compile",  # `compile` — builds a code object, runs nothing
     "method",           # method name only, receiver unresolved (q5)
     "argv",             # literal ["bash", "-c", cmd]
+    "stdlib_xml",       # stdlib XML parse with no parser argument: no XXE, DoS clause
 )
 
 # `["bash", "-c", cmd]` handed to a subprocess runner: the argv exit the
@@ -428,9 +436,26 @@ _ARGV_SHELL_FLAGS = frozenset({"-c", "/c"})
 # call site reads as clean instead of as an unknown call.
 SANITIZER_BY_QUALIFIED: Dict[str, str] = {
     "shlex.quote": "shellArg", "pipes.quote": "shellArg",
+    # `shlex.join(args)` quotes every element — the argv list as one
+    # command line. A PIECE of a command (`"git " + shlex.join(args)`);
+    # as the whole command the input still picks the program (py_whole),
+    # except a literal list display whose program is a literal, which
+    # `_shlex_join_expr` spells element by element (audit C1).
+    "shlex.join": "shellArg",
     "yaml.safe_load": "schemaDecode", "yaml.safe_load_all": "schemaDecode",
     "json.loads": "schemaDecode", "json.load": "schemaDecode",
     "werkzeug.utils.secure_filename": "safeJoin",
+    # `safe_join(base, *parts)` returns None for a result outside `base`
+    # (Werkzeug's docstring; `security.safe_join` is the pre-2.1
+    # spelling), so what reaches `open` is under `base` or not a path.
+    "werkzeug.utils.safe_join": "safeJoin", "werkzeug.security.safe_join": "safeJoin",
+    # Own-origin URL builders (E0718, audit C2): each returns a URL of
+    # the app's own routes — a path, or with `_external=True` the
+    # request's own host — whatever the endpoint and values are, so it
+    # cannot send the user off-site. `django.shortcuts.resolve_url` is
+    # deliberately absent: it returns an absolute URL passed to it as is.
+    "flask.url_for": "safeRedirect", "quart.url_for": "safeRedirect",
+    "django.urls.reverse": "safeRedirect", "django.urls.reverse_lazy": "safeRedirect",
     # HTML escaping is HTML-context-specific: Aether's `htmlEscape`, which
     # clears only the HTML sink. No Python call maps onto `trusted` — that
     # is the one exit of the template, code and deserialization rules, and
@@ -541,6 +566,13 @@ class _FnScope:
         # same for module-level names bound once in the whole module.
         self.values: Dict[str, Any] = values or {}
         self.module = module
+        # Set by `translate` (audit 2026-09-24 §C): parameters annotated
+        # as a framework Request (`_url_builder`), the redirect targets a
+        # dominating Django check guards (`_redirect_guards`), and the
+        # enclosing class's literal attributes (`self.Q`, `_class_lits`).
+        self.request_params: frozenset = frozenset()
+        self.redirect_guards: List[Tuple[str, int, int]] = []
+        self.class_lits: Dict[str, Tuple[str, int]] = {}
         self.depth = 0            # current `_expr` nesting (see _MAX_EXPR_DEPTH)
         self.too_deep = False     # set when the cap was hit in this scope
 
@@ -565,9 +597,13 @@ class _ModuleFacts:
     level, by a single-name assignment: `values` maps each to its value
     expression, `consts` to its dotted spelling where `_dotted_of` can
     name one."""
-    def __init__(self, values: Dict[str, Any], consts: Dict[str, str]):
+    def __init__(self, values: Dict[str, Any], consts: Dict[str, str],
+                 class_methods: Optional[Dict[str, Set[str]]] = None):
         self.values = values
         self.consts = consts
+        # class name -> its own `def` names, for top-level classes the
+        # module binds once (`_own_class_method`).
+        self.class_methods: Dict[str, Set[str]] = class_methods or {}
 
 
 # ----------------------------------------------------------------------
@@ -794,11 +830,14 @@ def _is_sql_expression(node: _pyast.Call, imp: "_Imports",
     rf = root.func
     ok = _sql_builder_of(rf, imp) in _SQL_EXPR_BUILDERS
     if not ok and isinstance(rf, _pyast.Attribute) \
-            and isinstance(rf.value, _pyast.Name):
-        recv = rf.value.id
-        if recv in sql_names or recv == self_name:
+            and isinstance(rf.value, (_pyast.Name, _pyast.Attribute)):
+        recv = rf.value.id if isinstance(rf.value, _pyast.Name) else None
+        if recv is not None and (recv in sql_names or recv == self_name):
             ok = True
         elif rf.attr in _SQL_TABLE_METHODS and not root.args:
+            # A Table held in an attribute (`self.table.delete()`) is the
+            # same argument-free form (audit C3); the rule never read the
+            # receiver's name, only the absence of a raw argument.
             ok = True
     if not ok:
         return False
@@ -862,6 +901,10 @@ def _is_str_shaped(node: Any) -> bool:
         and isinstance(node.func, _pyast.Attribute) \
         and node.func.attr in ("format", "join") \
         and _const_str(node.func.value) is not None
+
+
+# One `%` conversion in a format literal (`%s`, `%(name)r`, `%-10d`, `%%`).
+_PCT_CONV = re.compile(r"%(?:\([^)]*\))?[-#0 +]*(?:\*|\d+)?(?:\.(?:\*|\d+))?[hlL]?[a-zA-Z%]")
 
 
 # Argument shapes that cannot be SQL text: `draw.text((x, y), s)`.
@@ -1117,6 +1160,14 @@ def _const_str(node: Any) -> Optional[str]:
     return None
 
 
+def _scalar_text(node: Any) -> Optional[str]:
+    """The text a str/int/float literal renders as (`LIMIT = 10` is "10"
+    in an f-string), or None. bytes and None are not text."""
+    if isinstance(node, _pyast.Constant) and isinstance(node.value, (str, int, float)):
+        return node.value if isinstance(node.value, str) else str(node.value)
+    return None
+
+
 # ----------------------------------------------------------------------
 # EXPRESSION TRANSLATION
 # ----------------------------------------------------------------------
@@ -1169,6 +1220,21 @@ def _dedupe_bound_raw_entries(stmts: List[Dict[str, Any]]):
     for s in stmts:
         if s.get("kind") == "Let" and s.get("name") in executed:
             _demote_raw_entries(s.get("value"))
+
+
+def _rerate_bound_compiles(stmts: List[Dict[str, Any]]):
+    """`code = compile(src, ...)` then `exec(code)`: `_sink_match` drops the
+    exec (`_bound_compile`), so the compile() is the one finding — and its
+    result IS executed, so it rates `builtin`, as `exec(compile(...))`
+    does (BUG-030), not the floor of a compile() nobody runs."""
+    ran = {c["args"][0]["name"] for c in _translated_calls(stmts)
+           if c["func"]["name"] in ("py:exec", "py:eval") and c.get("args")
+           and c["args"][0].get("kind") == "Ident"}
+    for s in stmts:
+        if s.get("kind") == "Let" and s.get("name") in ran:
+            v = s.get("value") or {}
+            if v.get("kind") == "Call" and v.get("match") == "builtin_compile":
+                v["match"] = "builtin"
 
 
 def _concat(parts: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -1236,6 +1302,16 @@ def _expr_inner(node: Any, imp: "_Imports",
                 and node.id not in getattr(resolver, "local_names", ()):
             return {"kind": "StringLit", "value": lits[node.id][0],
                     "pos": _pos(node), "synthetic": True}
+        # The same for a module-level name bound once to a sanctioned
+        # call — `Q = text("... :id")`, `Q = sql.SQL("...").format(...)`:
+        # it reads as that wrapper, argument-free (audit C3). The call
+        # itself is judged once, where it is written.
+        mod = getattr(resolver, "module", None)
+        if mod is not None and node.id in mod.values \
+                and node.id not in getattr(resolver, "local_names", ()):
+            w = _sanctioned_value(mod.values[node.id], imp)
+            if w is not None:
+                return _py_wrapper(w, [], node)
         return {"kind": "Ident", "name": node.id}
     if isinstance(node, _pyast.Await):
         # `await conn.execute(q)` IS the call — 603 sink calls in
@@ -1257,7 +1333,13 @@ def _expr_inner(node: Any, imp: "_Imports",
             return {"kind": "BinOp", "op": "+",
                     "left": _expr(node.left, imp, safe_xml, resolver), "right": _expr(node.right, imp, safe_xml, resolver)}
         if isinstance(node.op, _pyast.Mod) and _const_str(node.left) is not None:
-            return _concat([_expr(node.left, imp, safe_xml, resolver), _expr(node.right, imp, safe_xml, resolver)])
+            right = _expr(node.right, imp, safe_xml, resolver)
+            if any(c not in ("%s", "%%") for c in _PCT_CONV.findall(node.left.value)):
+                # `"ls %r" % shlex.quote(x)`: a conversion other than %s
+                # re-renders the value (repr adds quotes the shell reads),
+                # so it is not the value as a piece — opaque, carried.
+                right = {"kind": "PyExpr", "py": "ModArg", "parts": [right]}
+            return _concat([_expr(node.left, imp, safe_xml, resolver), right])
         return {"kind": "PyExpr", "py": "BinOp"}
     if isinstance(node, _pyast.JoinedStr):
         # f-string. With >=1 FormattedValue it is a dynamic string — the
@@ -1268,7 +1350,13 @@ def _expr_inner(node: Any, imp: "_Imports",
         for v in node.values:
             if isinstance(v, _pyast.FormattedValue):
                 dynamic = True
-                parts.append(_expr(v.value, imp, safe_xml, resolver))
+                part = _expr(v.value, imp, safe_xml, resolver)
+                if v.conversion != -1 or v.format_spec is not None:
+                    # `{q!r}` / `{q:>10}` renders something other than the
+                    # value itself (repr re-quotes it), so the value is not
+                    # a piece a rule may accept — opaque, still carried.
+                    part = {"kind": "PyExpr", "py": "FormattedValue", "parts": [part]}
+                parts.append(part)
             elif isinstance(v, _pyast.Constant) and isinstance(v.value, str):
                 # Positioned: E0723 inside an f-string reported line 0
                 # (audit B10). Python < 3.12 gives each part the
@@ -1287,6 +1375,14 @@ def _expr_inner(node: Any, imp: "_Imports",
     if isinstance(node, _pyast.Call):
         return _call_expr(node, imp, safe_xml, resolver)
     if isinstance(node, _pyast.Attribute):
+        # `self.Q` / `cls.Q` where the enclosing class binds `Q` once to a
+        # literal and nothing in the file assigns an attribute `Q`: that
+        # literal, like a module-level constant (audit C3).
+        clits = getattr(resolver, "class_lits", None)
+        if clits and isinstance(node.value, _pyast.Name) \
+                and node.value.id in ("self", "cls") and node.attr in clits:
+            return {"kind": "StringLit", "value": clits[node.attr][0],
+                    "pos": _pos(node), "synthetic": True}
         # `subprocess.run(...).returncode`, `requests.get(u).text` — an
         # attribute READ of a call result. Not a call itself, so it used
         # to translate to a bare PyExpr and the call inside it vanished:
@@ -1513,7 +1609,11 @@ def _sink_match(call: _pyast.Call, imp: "_Imports",
             if kw.arg == "parser" and isinstance(kw.value, _pyast.Name) \
                     and kw.value.id in safe:
                 return None
-        return sink, "qualified"
+        # A stdlib parser handed no parser argument never expands an
+        # external entity (E0727's own callee text); what remains is the
+        # Expat-version DoS clause, rated below lxml (audit C7).
+        return sink, ("stdlib_xml" if _stdlib_xml_no_parser(dotted, call)
+                      else "qualified")
     if sink is not None:
         return sink, "qualified"
     # A non-literal raw SQL string entering the expression language is the
@@ -1550,6 +1650,16 @@ def _sink_match(call: _pyast.Call, imp: "_Imports",
                 and isinstance(call.args[0], _pyast.Call) \
                 and _sink_name(call.args[0], imp, safe_xml, resolver) == "evalCode":
             return None
+        # `code = compile(src, ...)` then `exec(code)`: the same flow bound
+        # through a local name — reported once, at the compile(), which
+        # `_rerate_bound_compiles` rates as executed (audit C7).
+        if builtin in ("exec", "eval") and call.args \
+                and _bound_compile(call.args[0], imp, safe_xml, resolver) is not None:
+            return None
+        # `compile(src, fn, "exec", ast.PyCF_ONLY_AST)` returns an AST, not
+        # code — the same as `ast.parse`, which is no sink (audit C7).
+        if builtin == "compile" and _only_ast(call):
+            return None
         # `compile` gets its own kind: it builds a code object and runs
         # nothing, and 4 of the 8 measured corpus sites call it without
         # running the result — three syntax-checking linters and a
@@ -1569,8 +1679,83 @@ def _sink_match(call: _pyast.Call, imp: "_Imports",
     if attr is not None and attr in SINK_BY_METHOD:
         if attr == "extra" and _extra_sql_arg(call, resolver) is None:
             return None          # every spliced string is a literal
+        if _own_class_method(call.func, attr, resolver):
+            return None          # this file's own class's method (audit C4)
+        if attr == "from_string" and _sandboxed_env(call.func, imp, resolver):
+            return None          # Jinja's documented control (audit C4)
         return SINK_BY_METHOD[attr], "method"
     return None
+
+
+def _stdlib_xml_no_parser(dotted: str, call: _pyast.Call) -> bool:
+    """A stdlib XML parse that CANNOT be handed a parser: `xml.sax.*` and
+    `expatbuilder` take none; ElementTree, minidom and pulldom take one as
+    the second positional or `parser=`, and have none here. A `*`/`**`
+    splat may carry one, so it does not count as none."""
+    if dotted.startswith(("xml.sax.", "xml.dom.expatbuilder.")):
+        return True
+    if not dotted.startswith(("xml.etree.", "xml.dom.minidom.", "xml.dom.pulldom.")):
+        return False
+    return len(call.args) < 2 \
+        and not any(isinstance(a, _pyast.Starred) for a in call.args) \
+        and not any(kw.arg in (None, "parser") for kw in call.keywords or [])
+
+
+def _only_ast(call: _pyast.Call) -> bool:
+    """`compile(...)` whose flags name `PyCF_ONLY_AST` (4th positional or
+    `flags=`): whatever else is OR-ed in, the result is an AST."""
+    flags = call.args[3] if len(call.args) > 3 else next(
+        (kw.value for kw in call.keywords or [] if kw.arg == "flags"), None)
+    return flags is not None and any(
+        (isinstance(n, _pyast.Attribute) and n.attr == "PyCF_ONLY_AST")
+        or (isinstance(n, _pyast.Name) and n.id == "PyCF_ONLY_AST")
+        for n in _pyast.walk(flags))
+
+
+def _bound_compile(arg: Any, imp: "_Imports", safe_xml: Optional[Set[str]],
+                   resolver: Any) -> Optional[_pyast.Call]:
+    """The `compile(...)` sink call a LOCAL name is bound to once, or None."""
+    if not isinstance(arg, _pyast.Name) \
+            or arg.id not in getattr(resolver, "local_names", ()):
+        return None
+    v = getattr(resolver, "value_of", lambda _n: None)(arg.id)
+    if isinstance(v, _pyast.Call):
+        m = _sink_match(v, imp, safe_xml, resolver)
+        if m is not None and m[1] == "builtin_compile":
+            return v
+    return None
+
+
+def _own_class_method(func: Any, attr: str, resolver: Any) -> bool:
+    """`Cls.attr(...)` or `Cls(...).attr(...)` (directly or through a name
+    bound once) where `Cls` is a class this file defines, once, with its
+    own `def attr` — that method is the callee, and its body is judged
+    where it is defined. Not `self.attr`: a subclass may override it."""
+    if not isinstance(func, _pyast.Attribute):
+        return False
+    methods = getattr(getattr(resolver, "module", None), "class_methods", {})
+    recv: Any = func.value
+    if isinstance(recv, _pyast.Name) and recv.id in methods \
+            and recv.id not in getattr(resolver, "local_names", ()):
+        return attr in methods[recv.id]
+    ctor = _instance_ctor(func, resolver)
+    return ctor is not None and isinstance(ctor.func, _pyast.Name) \
+        and ctor.func.id in methods \
+        and ctor.func.id not in getattr(resolver, "local_names", ()) \
+        and attr in methods[ctor.func.id]
+
+
+# Jinja's sandbox (`jinja2.sandbox`): its documented way to render a
+# template a user authored.
+_SANDBOXED_ENVS = frozenset({"jinja2.sandbox.SandboxedEnvironment",
+                             "jinja2.sandbox.ImmutableSandboxedEnvironment"})
+
+
+def _sandboxed_env(func: Any, imp: "_Imports", resolver: Any) -> bool:
+    """`.from_string` on a SandboxedEnvironment constructed right there or
+    bound once to a name."""
+    ctor = _instance_ctor(func, resolver)
+    return ctor is not None and _callee_spelling(ctor.func, imp, resolver) in _SANDBOXED_ENVS
 
 
 def _method_name(func: Any, resolver: Optional[Any] = None) -> Optional[str]:
@@ -1612,13 +1797,22 @@ def _call_expr(node: _pyast.Call, imp: "_Imports",
     auditable-surface design exists to prevent."""
     node = _unwrap_indirect(node, imp, resolver, safe_xml)
     dotted = _callee_spelling(node.func, imp, resolver)
+    joined = _join_expr(node, dotted, imp, safe_xml, resolver)
+    if joined is not None:
+        return joined
     sink = _sink_match(node, imp, safe_xml, resolver)
+    origin = _url_builder(node, dotted, resolver)
     name = ((sink[0] if sink else None)
             or SANITIZER_BY_QUALIFIED.get(dotted or "")
             # A SQLAlchemy expression is a parameterized query by
             # construction; naming it as E0713's wrapper is the same move
             # SANITIZER_BY_QUALIFIED makes for `shlex.quote` (BUG-010).
-            or ("sqlBind" if _is_sql_expression(node, imp, resolver) else None)
+            # psycopg's `sql` composition is the same (audit C3).
+            or ("sqlBind" if _is_sql_expression(node, imp, resolver)
+                or _psycopg_composed(node, imp, resolver) else None)
+            # `os.path.join(base, secure_filename(name))` (BUG-039).
+            or ("safeJoin" if _sanitized_path_join(node, dotted, imp, resolver) else None)
+            or ("safeRedirect" if origin == "resolved" else None)
             or ("py:" + dotted if dotted else "<expr>"))
     args = list(node.args)
     kws = list(node.keywords or [])
@@ -1663,6 +1857,16 @@ def _call_expr(node: _pyast.Call, imp: "_Imports",
                            "func": {"kind": "Ident", "name": name},
                            "args": [_expr(a, imp, safe_xml, resolver) for a in args],
                            "pos": _pos(node), "py": True}
+    if origin == "unresolved":
+        # `request.url_for(...)` on a receiver no import names: an own-
+        # origin builder by its method name only. Not cleared (a name
+        # clears nothing, q5); the confidence axis rates a finding whose
+        # argument holds one at the floor (`argument_shape_demoted`).
+        out["own_origin"] = True
+    if name == "redirect" and args and isinstance(args[0], _pyast.Name) \
+            and _redirect_guarded(resolver, args[0].id, getattr(node, "lineno", 0)):
+        # Django's documented check dominates this redirect (audit C2).
+        out["args"][0] = _py_wrapper("safeRedirect", [out["args"][0]], args[0])
     if sink is not None:
         # How this call was named a sink, for the confidence axis. Only
         # a sink carries it — a wrapper or a `py:` spelling matched
@@ -1960,6 +2164,283 @@ def _extra_sql_arg(call: _pyast.Call, scope: Any = None) -> Optional[Any]:
     return next((a for a in call.args if isinstance(a, _pyast.Starred)), None)
 
 
+# ----------------------------------------------------------------------
+# COMPOSED SANITIZED VALUES — precision rows of audit 2026-09-24 §C
+# ----------------------------------------------------------------------
+
+def _py_wrapper(name: str, args: List[Dict[str, Any]], at: Any) -> Dict[str, Any]:
+    """A frontend-emitted wrapper call (`py`), as `_call_expr` builds for
+    a SANITIZER_BY_QUALIFIED row."""
+    return {"kind": "Call", "func": {"kind": "Ident", "name": name},
+            "args": args, "pos": _pos(at), "py": True}
+
+
+def _join_elements(arg: Any) -> Optional[Tuple[List[Any], List[Any]]]:
+    """`(elements, carried)` of the iterable a `sep.join(...)` joins, when
+    its elements can be named: a list/tuple display, a comprehension's
+    element expression (once — every element has its shape), or a display
+    / str literal repeated by `*` (`["%s"] * n`, `"?" * len(ids)`). The
+    iterables, conditions and repeat counts are `carried`: translated so a
+    call inside them is still found, never judged. None for anything else."""
+    if isinstance(arg, (_pyast.List, _pyast.Tuple)):
+        if any(isinstance(e, _pyast.Starred) for e in arg.elts):
+            return None
+        return list(arg.elts), []
+    if isinstance(arg, (_pyast.GeneratorExp, _pyast.ListComp, _pyast.SetComp)):
+        carried = [x for g in arg.generators for x in [g.iter] + list(g.ifs)]
+        return [arg.elt], carried
+    if isinstance(arg, _pyast.BinOp) and isinstance(arg.op, _pyast.Mult):
+        for rep, count in ((arg.left, arg.right), (arg.right, arg.left)):
+            if _const_str(rep) is not None:
+                return [rep], [count]     # joining a str joins its characters
+            if isinstance(rep, (_pyast.List, _pyast.Tuple)) \
+                    and not any(isinstance(e, _pyast.Starred) for e in rep.elts):
+                return list(rep.elts), [count]
+    return None
+
+
+def _interleave(pieces: List[Dict[str, Any]], sep: str, at: Any) -> Dict[str, Any]:
+    """`p0 + sep + p1 + ...` — what `sep.join([p0, p1, ...])` builds. The
+    separator is written once in the source, so only its first copy is a
+    literal E0723 reports; the rest are `synthetic`."""
+    parts: List[Dict[str, Any]] = []
+    for i, p in enumerate(pieces):
+        if i:
+            lit = {"kind": "StringLit", "value": sep, "pos": _pos(at)}
+            if i > 1:
+                lit["synthetic"] = True
+            parts.append(lit)
+        parts.append(p)
+    return _concat(parts)
+
+
+def _join_expr(node: _pyast.Call, dotted: Optional[str], imp: "_Imports",
+               safe_xml: Optional[Set[str]], resolver: Any) -> Optional[Dict[str, Any]]:
+    """A string JOIN spelled as the concatenation it builds, so the rules
+    judge its parts (audit C1/C3):
+
+      * `" ".join(shlex.quote(a) for a in args)` is one quoted piece
+        (`shellArg`) — accepted inside a command, refused as a whole one;
+      * `",".join("?" * len(ids))` / `", ".join(["%s"] * n)` is literal
+        text, so the IN-list placeholder string is a literal;
+      * `shlex.join([<lit>, ..., *args])` is each literal element quoted
+        as written and each other element a quoted piece — so a literal
+        program is visible to the command rule. Any other `shlex.join`
+        argument stays the `shellArg` row.
+
+    None: not one of these shapes, translated as an ordinary call."""
+    if node.keywords or len(node.args) != 1 \
+            or isinstance(node.args[0], _pyast.Starred):
+        return None
+    arg = node.args[0]
+
+    def e(x):
+        return _expr(x, imp, safe_xml, resolver)
+    if dotted == "shlex.join":
+        if not isinstance(arg, (_pyast.List, _pyast.Tuple)) or not arg.elts:
+            return None
+        pieces = []
+        for el in arg.elts:
+            s = _const_str(el)
+            if s is not None:
+                pieces.append({"kind": "StringLit", "value": shlex.quote(s),
+                               "pos": _pos(el)})
+            else:
+                inner = el.value if isinstance(el, _pyast.Starred) else el
+                pieces.append(_py_wrapper("shellArg", [e(inner)], el))
+        return _interleave(pieces, " ", node)
+    func = node.func
+    if not (isinstance(func, _pyast.Attribute) and func.attr == "join"):
+        return None
+    sep = _const_str(func.value)
+    found = _join_elements(arg) if sep is not None else None
+    if found is None or not found[0]:
+        return None
+    elems, carried = found
+    out = _interleave([e(x) for x in elems], sep, func.value)
+    if carried:
+        out["carried"] = [e(c) for c in carried]
+    return out
+
+
+def _sanitized_path_join(node: _pyast.Call, dotted: Optional[str],
+                         imp: "_Imports", resolver: Any) -> bool:
+    """`os.path.join(<any>..., <safeJoin row call>)`: the last component is
+    already a single safe name (`secure_filename` strips separators and
+    `..`), so the result stays under the base — BUG-039. The base is the
+    program's, the same judgement `_PATH_RULE` makes for `safeJoin(base,
+    rel)`. A plain `os.path.join(base, user)` is not this."""
+    if dotted not in ("os.path.join", "posixpath.join", "ntpath.join") \
+            or len(node.args) < 2 or node.keywords \
+            or any(isinstance(a, _pyast.Starred) for a in node.args):
+        return False
+    last = node.args[-1]
+    return isinstance(last, _pyast.Call) and SANITIZER_BY_QUALIFIED.get(
+        _callee_spelling(last.func, imp, resolver) or "") == "safeJoin"
+
+
+# `request.url_for(name)` builds a URL on the request's own origin
+# (Starlette/FastAPI). Resolved only when the receiver is a parameter
+# annotated with one of these classes, through the imports.
+_REQUEST_TYPES = frozenset({"fastapi.Request", "fastapi.requests.Request",
+                            "starlette.requests.Request"})
+_URL_BUILDER_METHODS = frozenset({"url_for", "url_path_for"})
+
+
+def _url_builder(node: _pyast.Call, dotted: Optional[str],
+                 resolver: Any) -> Optional[str]:
+    """"resolved" for `request.url_for(...)` on a parameter annotated as a
+    framework Request; "unresolved" for any other `.url_for(...)` /
+    `.url_path_for(...)`, or a bare `url_for(...)` no import names; else
+    None. Only "resolved" clears (it is named `safeRedirect`)."""
+    func = node.func
+    if isinstance(func, _pyast.Attribute) and func.attr in _URL_BUILDER_METHODS:
+        if func.attr == "url_for" and isinstance(func.value, _pyast.Name) \
+                and func.value.id in getattr(resolver, "request_params", ()):
+            return "resolved"
+        return "unresolved"
+    if isinstance(func, _pyast.Name) and dotted == "url_for":
+        return "unresolved"
+    return None
+
+
+# Django's documented redirect check (django.utils.http). `is_safe_url`
+# is its pre-4.0 name.
+_REDIRECT_CHECKS = frozenset({"django.utils.http.url_has_allowed_host_and_scheme",
+                              "django.utils.http.is_safe_url"})
+
+
+def _redirect_guards(fn_node: Any, imp: "_Imports",
+                     resolver: Any) -> List[Tuple[str, int, int]]:
+    """`(name, first line, last line)`: a redirect to `name` within those
+    lines is dominated by Django's allow-list check on `name`. Two shapes,
+    both at the function's own statement level:
+
+      * `if url_has_allowed_host_and_scheme(x, ...): ... redirect(x)` —
+        the body of the passing branch;
+      * `if not url_has_allowed_host_and_scheme(x, ...):` whose body ends
+        in `return` / `raise` / `abort(...)`, or rebinds `x` only to str
+        literals — every statement after it.
+
+    Either way `x` may not be rebound where it is guarded; a check that
+    only an `elif`, a loop or a nested block reaches guards nothing."""
+    body = getattr(fn_node, "body", None) or []
+    binds = [(n, ln) for n, _v, ln in _bindings_of(fn_node)]
+    end = getattr(fn_node, "end_lineno", None) or 10 ** 9
+    out: List[Tuple[str, int, int]] = []
+
+    def checked(test: Any) -> Optional[str]:
+        if not (isinstance(test, _pyast.Call)
+                and _callee_spelling(test.func, imp, resolver) in _REDIRECT_CHECKS):
+            return None
+        target = test.args[0] if test.args else next(
+            (k.value for k in test.keywords or [] if k.arg == "url"), None)
+        return target.id if isinstance(target, _pyast.Name) else None
+
+    def rebound(name: str, lo: int, hi: int, skip: Any = None) -> bool:
+        lits = {getattr(s, "lineno", 0) for s in _pyast.walk(skip)
+                if isinstance(s, _pyast.Assign) and _const_str(s.value) is not None} \
+            if skip is not None else set()
+        return any(n == name and lo <= ln <= hi and ln not in lits for n, ln in binds)
+
+    for st in body:
+        if not isinstance(st, _pyast.If) or not st.body:
+            continue
+        lo, hi = st.body[0].lineno, getattr(st.body[-1], "end_lineno", st.body[-1].lineno)
+        name = checked(st.test)
+        if name is not None and not rebound(name, lo, hi):
+            out.append((name, lo, hi))
+            continue
+        neg = st.test.operand if isinstance(st.test, _pyast.UnaryOp) \
+            and isinstance(st.test.op, _pyast.Not) else None
+        name = checked(neg)
+        if name is None:
+            continue
+        last = st.body[-1]
+        exits = isinstance(last, (_pyast.Return, _pyast.Raise)) or (
+            isinstance(last, _pyast.Expr) and isinstance(last.value, _pyast.Call)
+            and (_callee_spelling(last.value.func, imp, resolver) or "")
+            .rpartition(".")[2] == "abort")
+        resets = any(isinstance(s, _pyast.Assign) and len(s.targets) == 1
+                     and isinstance(s.targets[0], _pyast.Name)
+                     and s.targets[0].id == name for s in st.body)
+        after = getattr(st, "end_lineno", st.lineno) + 1
+        if (exits or resets) and not rebound(name, st.lineno, end, skip=st):
+            out.append((name, after, end))
+    return out
+
+
+def _annotation_of(args: Any, name: str, imp: "_Imports") -> Optional[str]:
+    """The dotted spelling of parameter `name`'s annotation, or None."""
+    for a in [x for f in _PARAM_FIELDS for x in getattr(args, f, None) or []]:
+        if a.arg == name and a.annotation is not None:
+            return _dotted_of(a.annotation, imp)
+    return None
+
+
+def _redirect_guarded(resolver: Any, name: str, line: int) -> bool:
+    return any(n == name and lo <= line <= hi
+               for n, lo, hi in getattr(resolver, "redirect_guards", ()))
+
+
+# psycopg's `sql` module (psycopg 3 and psycopg2 alike): composable SQL
+# whose only raw text is `sql.SQL(<literal>)`; identifiers and values are
+# quoted by the driver (`Identifier`, `Literal`, `Placeholder`).
+_PSYCOPG_SQL_MODULES = ("psycopg2.sql.", "psycopg.sql.")
+_PSYCOPG_QUOTED = frozenset({"Identifier", "Literal", "Placeholder"})
+
+
+def _psycopg_composed(node: Any, imp: "_Imports", resolver: Any = None) -> bool:
+    """True if `node` is a psycopg `sql` composition carrying no raw
+    string: `sql.SQL("... {} ...").format(sql.Identifier(t), ...)`,
+    `sql.SQL(", ").join(sql.Identifier(c) for c in cols)`, or one of the
+    quoting constructors. `sql.SQL(x)` with a non-literal `x` anywhere
+    makes the whole thing raw, and a format argument that is not itself
+    such a composition (a plain value, a name) sanctions nothing."""
+    if not isinstance(node, _pyast.Call):
+        return False
+    spelled = _callee_spelling(node.func, imp, resolver) or ""
+    if spelled.startswith(_PSYCOPG_SQL_MODULES):
+        leaf = spelled.rpartition(".")[2]
+        if leaf in _PSYCOPG_QUOTED:
+            return True
+        if leaf == "SQL":
+            return len(node.args) == 1 and not node.keywords \
+                and _raw_literal(node.args[0], resolver)
+        if leaf == "Composed":
+            return len(node.args) == 1 and _psycopg_parts(node.args[0], imp, resolver)
+        return False
+    func = node.func
+    if isinstance(func, _pyast.Attribute) and func.attr in ("format", "join") \
+            and _psycopg_composed(func.value, imp, resolver):
+        if func.attr == "join":
+            return len(node.args) == 1 and not node.keywords \
+                and _psycopg_parts(node.args[0], imp, resolver)
+        return all(_psycopg_composed(v, imp, resolver)
+                   for v in list(node.args) + [k.value for k in node.keywords or []])
+    return False
+
+
+def _sanctioned_value(v: Any, imp: "_Imports") -> Optional[str]:
+    """The wrapper a module-level VALUE stands for — a sanitizer row call,
+    a SQLAlchemy expression or a psycopg composition, judged with no
+    local names (a module-level expression has none) — or None."""
+    if not isinstance(v, _pyast.Call):
+        return None
+    w = SANITIZER_BY_QUALIFIED.get(_callee_spelling(v.func, imp) or "")
+    if w is not None:
+        return w
+    if _is_sql_expression(v, imp) or _psycopg_composed(v, imp):
+        return "sqlBind"
+    return None
+
+
+def _psycopg_parts(arg: Any, imp: "_Imports", resolver: Any) -> bool:
+    found = _join_elements(arg)
+    return found is not None and bool(found[0]) \
+        and all(_psycopg_composed(x, imp, resolver) for x in found[0])
+
+
 def _classify_dotted(dotted: str) -> Optional[Tuple[str, str]]:
     """Return (capability, verb) for a dotted call path, or None if not a
     known capability. Checks exact qualified entry, then module root, then
@@ -2136,6 +2617,14 @@ class _FnVisitor:
                 self._walrus_lets(stmt.value)
                 self.stmts.append({"kind": "Return", "value": self._e(stmt.value),
                                    "pos": _pos(stmt, self.fn_line)})
+            return
+        if isinstance(stmt, _pyast.Expr) and _const_str(stmt.value) is not None:
+            # A bare string statement — a docstring — is prose, never a
+            # value the program uses. E0723 still reads it and rates a
+            # credential shape there below one in code (audit C7).
+            lit = self._e(stmt.value)
+            lit["docstring"] = True
+            self.stmts.append(lit)
             return
         # Every other statement — `Expr` (any value, not only a call),
         # `for`/`if`/`while` tests and iterables, `assert`, `raise`,
@@ -2335,10 +2824,59 @@ def py_to_ir(source: str) -> Tuple[Dict[str, Any], Dict[str, List[Dict[str, Any]
     for s in scope_stmts(tree.body):
         if isinstance(s, _pyast.Assign) and len(s.targets) == 1 \
                 and isinstance(s.targets[0], _pyast.Name) \
-                and _const_str(s.value) is not None \
+                and _scalar_text(s.value) is not None \
                 and mod_binds.get(s.targets[0].id) == 1:
-            module_lits[s.targets[0].id] = (_const_str(s.value),
+            module_lits[s.targets[0].id] = (_scalar_text(s.value),
                                             getattr(s, "lineno", 0))
+    # Attribute names anything in the file assigns (`self.Q = ...`,
+    # `obj.Q += 1`, `setattr(x, "Q", v)`): a class attribute of that name
+    # is not a constant.
+    attr_assigned: Set[str] = set()
+    for n in _pyast.walk(tree):
+        tgts = (n.targets if isinstance(n, _pyast.Assign)
+                else [n.target] if isinstance(n, (_pyast.AugAssign, _pyast.AnnAssign))
+                else [])
+        for t in tgts:
+            attr_assigned |= {a.attr for a in _pyast.walk(t)
+                              if isinstance(a, _pyast.Attribute)}
+        if isinstance(n, _pyast.Call) and isinstance(n.func, _pyast.Name) \
+                and n.func.id in ("setattr", "delattr"):
+            attr_assigned.add((_const_str(n.args[1]) if len(n.args) > 1 else None) or "*")
+    # Class-level literal constants (audit C3), per class: an UPPER_CASE
+    # name (PEP 8's constant spelling) the class body binds exactly once,
+    # to a literal, that no other class in the file binds (a subclass here
+    # could override it) and no attribute assignment anywhere names.
+    # `self.Q` / `cls.Q` in its methods reads it. The case rule is what
+    # keeps a placeholder a subclass elsewhere fills in (`prompt = ''`,
+    # openhands' MicroAgent, measured on the framework corpus) a name; a
+    # subclass in another file overriding an UPPER_CASE constant with a
+    # computed value is the residual (q1).
+    class_binds: Dict[str, List[Tuple[str, Any, int]]] = {}
+    body_names: Dict[str, int] = {}
+    for q, c in class_nodes:
+        rows = []
+        for s in scope_stmts(c.body):
+            if isinstance(s, (_pyast.Assign, _pyast.AnnAssign, _pyast.AugAssign)):
+                for t in (s.targets if isinstance(s, _pyast.Assign) else [s.target]):
+                    for nm in _target_names(t):
+                        v = s.value if isinstance(s, (_pyast.Assign, _pyast.AnnAssign)) \
+                            and isinstance(t, _pyast.Name) else None
+                        rows.append((nm, v, getattr(s, "lineno", 0)))
+            elif isinstance(s, (_pyast.FunctionDef, _pyast.AsyncFunctionDef, _pyast.ClassDef)):
+                rows.append((s.name, None, getattr(s, "lineno", 0)))
+        class_binds[q] = rows
+        for nm in {r[0] for r in rows}:
+            body_names[nm] = body_names.get(nm, 0) + 1
+    class_lits: Dict[str, Dict[str, Tuple[str, int]]] = {}
+    for q, rows in class_binds.items():
+        per: Dict[str, Tuple[str, int]] = {}
+        for nm in {r[0] for r in rows}:
+            mine = [r for r in rows if r[0] == nm]
+            if len(mine) == 1 and body_names[nm] == 1 and nm not in attr_assigned \
+                    and nm.isupper() \
+                    and _scalar_text(mine[0][1]) is not None:
+                per[nm] = (_scalar_text(mine[0][1]), mine[0][2])
+        class_lits[q] = per if "*" not in attr_assigned else {}
     # The same bar for any value, for aliases (audit B8): `system =
     # os.system`, `evaluate = eval`, `sh = functools.partial(...)`,
     # `HANDLERS = {"sh": os.system}`, `interp = code.InteractiveConsole()`.
@@ -2352,7 +2890,10 @@ def py_to_ir(source: str) -> Tuple[Dict[str, Any], Dict[str, List[Dict[str, Any]
     mod_scope = _NameScope(mod_binds)
     module = _ModuleFacts(mod_values, {
         n: d for n, v in mod_values.items()
-        if (d := _dotted_of(v, imports, mod_scope)) is not None})
+        if (d := _dotted_of(v, imports, mod_scope)) is not None},
+        {q: {s.name for s in c.body
+             if isinstance(s, (_pyast.FunctionDef, _pyast.AsyncFunctionDef))}
+         for q, c in class_nodes if "." not in q and mod_binds.get(q) == 1})
 
     decls: List[Dict[str, Any]] = []
     unprovable_map: Dict[str, List[Dict[str, Any]]] = {}
@@ -2375,6 +2916,13 @@ def py_to_ir(source: str) -> Tuple[Dict[str, Any], Dict[str, List[Dict[str, Any]
                            {n: val for n, val, _l in binds
                             if counts[n] == 1 and val is not None},
                            module)
+            v.scope.class_lits = class_lits.get(qual.rpartition(".")[0], {})
+            fargs = getattr(node, "args", None)
+            v.scope.request_params = frozenset(
+                n for n in (_param_names(fargs) if isinstance(fargs, _pyast.arguments) else [])
+                if counts.get(n) == 1
+                and _annotation_of(fargs, n, imports) in _REQUEST_TYPES)
+            v.scope.redirect_guards = _redirect_guards(node, imports, v.scope)
             # Two separate walks, deliberately. `visit_call` drives the
             # untouched capability/UNPROVABLE analysis over EVERY call
             # anywhere in the function (including inside comprehensions
@@ -2394,6 +2942,7 @@ def py_to_ir(source: str) -> Tuple[Dict[str, Any], Dict[str, List[Dict[str, Any]
                 if isinstance(sub, _pyast.stmt):
                     v.visit_stmt(sub)
             _dedupe_bound_raw_entries(v.stmts)
+            _rerate_bound_compiles(v.stmts)
             if v.scope.too_deep:
                 v._add_unprovable("too_deep", qual,
                                   f"an expression in this scope is nested deeper "
@@ -2472,7 +3021,9 @@ def py_to_ir(source: str) -> Tuple[Dict[str, Any], Dict[str, List[Dict[str, Any]
         "pos": {"line": 1, "column": 1},
     })
 
-    ast_dict = {"kind": "Program", "decls": decls}
+    # `lang` lets a rule that is not a frontend call row (E0723's literal
+    # scan) word its Python finding in Python.
+    ast_dict = {"kind": "Program", "decls": decls, "lang": "python"}
     meta = {"lang": "python", "module": module_name,
             "n_functions": len(func_nodes), "n_scopes": n_scopes,
             "pymap_version": PYMAP_VERSION, "mode": "sound"}

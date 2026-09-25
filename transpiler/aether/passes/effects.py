@@ -38,6 +38,7 @@ import ipaddress
 import re
 from typing import Any, Dict, List, Set, Tuple, Iterable, Optional
 
+from ..confidence import FLOOR
 from ..diagnostics import Diagnostic, Position
 from .ast_walk import walk, callee_name, binders, fn_exprs, contexts
 from .detector_specs import (
@@ -1859,6 +1860,15 @@ def check_hardcoded_secret(ast: Dict[str, Any]) -> List[Diagnostic]:
     """Return E0723 diagnostics for string literals that match a known
     provider-credential shape (a hardcoded secret, CWE-798)."""
     diags: List[Diagnostic] = []
+    # A Python finding speaks Python (audit 2026-09-24 C6): there is no
+    # `getEnv` there, and no capability clause the category could name.
+    py = ast.get("lang") == "python"
+    fix = ("read it at runtime from the environment (os.environ[\"NAME\"]) or "
+           "a secrets manager, never a string literal; rotate the committed "
+           "value" if py else
+           "load the secret at runtime from the environment or "
+           "a secret manager (e.g. getEnv(\"...\")), never a "
+           "string literal")
     for lit in walk(ast, "StringLit"):
         val = lit.get("value")
         if not isinstance(val, str):
@@ -1871,9 +1881,12 @@ def check_hardcoded_secret(ast: Dict[str, Any]) -> List[Diagnostic]:
         for pat, label in _CREDENTIAL_PATTERNS:
             if pat.search(val):
                 pos = lit.get("pos") or {"line": 0, "column": 0}
+                # Output-only (confidence.py): a credential shape in a
+                # docstring is prose — AWS's own example key, mostly.
+                doc = bool(lit.get("docstring"))
                 diags.append(Diagnostic(
                     code="E0723",
-                    category="capability",
+                    category="security" if py else "capability",
                     severity="error",
                     message=(
                         f"string literal contains a hardcoded {label}; a "
@@ -1881,13 +1894,10 @@ def check_hardcoded_secret(ast: Dict[str, Any]) -> List[Diagnostic]:
                         f"control and shipped in every build"
                     ),
                     position=Position(pos.get("line", 0), pos.get("column", 0)),
-                    suggestion=(
-                        "load the secret at runtime from the environment or "
-                        "a secret manager (e.g. getEnv(\"...\")), never a "
-                        "string literal"
-                    ),
-                    confidence=1.0,
-                    extra={"credential_kind": label},
+                    suggestion=fix,
+                    confidence=FLOOR if doc else 1.0,
+                    extra={"credential_kind": label}
+                    | ({"demoted": "docstring"} if doc else {}),
                 ))
                 break  # one diagnostic per literal
     return diags

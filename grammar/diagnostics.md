@@ -357,7 +357,11 @@ shipped in every build. The patterns are deliberately narrow so false
 positives are near zero (a demo password like `"hunter2"` does not match;
 a real `AKIA…` key does; a PEM header quoted in an error message without
 a base64 body does not). Fix: load the secret at runtime from the
-environment / a secret manager. Same `--no-scope-check` opt-out.
+environment / a secret manager. Same `--no-scope-check` opt-out. On
+Python the hint names `os.environ["NAME"]` and the category is
+`security`; a shape inside a bare string statement (a docstring) keeps
+its finding and rates confidence 0.6 (`extra.demoted: "docstring"`),
+one in code 1.0.
 
 E0724 introduces the taint-SOURCE marker `Untrusted<T>` — the sound,
 explicit dual of provenance inference. A value crossing a trust boundary
@@ -418,6 +422,31 @@ method name when the receiver is a plain variable — `execute` for
 `self.conn.execute` — and the resolved dotted path when the receiver is
 an imported name). Only these rows carry `callee` on Python; `E0723`,
 `E0701` and the sink rows on Aether source do not.
+
+On Python these rows (and E0723) speak Python (audit 2026-09-24 C6): the
+message names the resolved `callee` instead of the Aether sink, the
+reason drops its Aether remedy (`- use sqlBind(...)`), the suggestion
+names a Python fix the frontend clears — E0711 `werkzeug.utils.safe_join`
+/ `os.path.join(base, secure_filename(name))`; E0713 a parameterized
+`cursor.execute(q, params)`, SQLAlchemy `text(...).bindparams(...)`,
+psycopg `sql.Identifier`; E0714 an argv list, or `shlex.quote` per
+argument after a literal program; E0718 `flask.url_for` /
+`django.urls.reverse` or a `url_has_allowed_host_and_scheme` check;
+E0719 a fixed template rendered with data, or `SandboxedEnvironment`;
+E0720 `json.loads` / `yaml.safe_load` / a schema-validated format; E0731
+`ast.literal_eval` — and `category` is `security`
+(`tests/test_python_hints.py` applies each named fix and checks it is
+clean). An Aether-source finding keeps the Aether wording and
+`capability`.
+
+`confidence` is per-match-kind and OUTPUT-ONLY (`confidence.py`); a
+stdlib XML parse with no parser argument rates `stdlib_xml` (0.6, no
+XXE by its own text), and two demotions rate a finding 0.6 without
+changing whether it exists: **argument shape** — the judged argument
+holds a sanitizer call or an own-origin URL builder
+(`os.system(shlex.quote(cmd))`, `RedirectResponse(request.url_for(...))`
+on an unannotated receiver), `extra.demoted: "argument_shape"` — and
+**docstring** (E0723, above).
 
 E0728 is the fourth `Untrusted<T>` sink (CWE-1236) and the first in a
 NON-HTTP context — proving the marker generalizes past web output. A CSV
