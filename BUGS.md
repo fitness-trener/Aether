@@ -1369,6 +1369,165 @@ call>)` as the last argument ≡ `safeJoin`. Precision, strict-only row
 (E0711 is held back by default), so deferred to the precision wave
 (Wave 5, next to C1).
 
+### BUG-040  the deterministic fix-loop "repaired" by widening the declared constraint and reported `final state: clean`  [OPEN]
+test: tests/test_fix_loop_cli.py (`::test_attack_demos_end_not_repaired`,
+`::test_fix_loop_never_widens_any_repo_file`, `::test_widening_is_structural`,
+`::test_patch_target_E0801_is_the_call_site`, `::test_live_verdict_rejects_a_widening_fix`);
+tests/test_fix_loop_demo.py (`::test_fix_loop_refuses_to_widen_broken_candidate`,
+`::test_allow_widen_applies_flags_and_never_says_clean`)
+
+Found 2026-09-24 by the whole-repo audit (D1, P0). Repro on `52f04aa`:
+`aether fix-loop demos/capability-firewall/log_formatter.aeth` adds
+`net.fetch("http://127.0.0.1:9999/*")` to `log_formatter` and `requires
+capability net` to the module, and prints `final state: clean` — it grants
+the exfiltration the demo exists to block. Same shape on
+`03_B2_url_discipline`, `10_pii_telemetry_violation`,
+`demo_02_net_glob_mismatch`, `payment_workflow/broken.aeth` (`pure` → `log`)
+and `log4shell/aether/vulnerable.aeth` (adds `ldap://*`; ended `stuck` on
+E0710 only after widening). Over all 417 non-generated `.aeth` files in the
+repo, the `52f04aa` loop's output widened the input's declarations on 31,
+and on 28 of them reported `clean`.
+
+Root cause: both transformers (`fix_E0801` appends the missing effect /
+drops `pure`; `fix_E0701` appends the capability) widen by construction,
+and nothing compared the result with the input. `patch_target` offered only
+the declaration (`effects` / `capabilities` field) as the E0801 target, so
+widening was the only mechanical repair on offer. `--live` accepted any
+model fix that `sdk.check` passed.
+
+Fix (`177a173`): `fix_loop.widening(before, after)` — structural: a
+function effect not covered (`_effect_covered`) by its old clause, a new
+function's effect not declared anywhere in the input, or a new module
+capability. Every candidate edit is judged by it, whichever transformer
+produced it. Default: a widening edit is not applied; the loop ends
+`not_repaired` with, per blocked diagnostic, `would_widen`, a `reason`
+("not repaired: fixing this would widen <fn>'s declared effects (...);
+remove or replace the call to '<callee>'") and the call-site
+`patch_target`; exit 1. `--allow-widen` (fix_loop.py and `aether
+fix-loop`) applies it, tags the step `"weakens_constraint": true` +
+`widens`, prints a WARNING, ends `widened` (never `clean`), exits 1.
+`aether fix-loop --live` runs the same rule over the model's
+`fixed_source` (`cli._judge_live_fix`): widening → transcript tagged
+`weakens_constraint`, `rejected`, exit 1 (kept but still exit 1 under
+`--allow-widen`). E0801's patch target is now the offending `Call` in the
+caller's body (first call to `extra.callee`, else first call passing it as
+a value; falls back to the effects clause).
+
+Measurement: over the same 417 files, default loop at `177a173` — 0
+widened outputs; statuses clean 287 / not_repaired 32 / stuck 98 (was
+clean 315 / stuck 99 / crash 3). `--allow-widen` widens 32 files, every
+widening step tagged, none ends `clean`.
+
+### BUG-041  SDK, LSP, fix-loop and tools/scan.py never resolved imports; a cross-file E0801 and an unresolved-import E0705 were "clean" everywhere except `check`  [OPEN]
+test: tests/test_surfaces_agree.py (`::test_cross_file_E0801_on_every_surface`,
+`::test_unresolved_import_E0705_on_every_surface`)
+
+Found 2026-09-24 by the audit (D2, P0). Repro (`tool\mf\prog.aeth` imports
+`lib.aeth`, whose `exfil` declares `net.fetch("https://evil.example/*")`;
+`tool\imp.aeth` imports a file that does not exist): on `52f04aa`
+`aether check` → E0801 / E0705; `sdk.check`, the LSP, `tools/scan.py` and
+the fix-loop → no diagnostics. `sdk.check`'s docstring claimed "same
+membership the CLI runs".
+
+Root cause: only `cli.py` called `resolve_imports`; every other surface
+parsed a single file.
+
+Fix (`177a173`): `passes.imports.load_program(source_or_ast, filename, *,
+collect, resolve)` → `(ast, parse_diags, import_diags)`, never raising for
+lex/parse errors. It is the only loader: CLI `check`/`run`/`emit`/`pack`/
+`test` (via `cli._load`), `sdk.check` (so the LSP and the fix-loop), and
+`tools/scan.py`. An import error stops before analysis on every surface,
+as `check` always did. LSP `uri_to_path` now maps `file:///C:/x%20y.aeth`
+to a real path (it sliced `file://` off, leaving `/C:/...` on Windows);
+`interFileDependencies` is now advertised true. Both repros now give
+E0801 / E0705 on all five surfaces. `sdk.check` docstring rewritten.
+
+### BUG-042  tools/scan.py exited 0 when every file failed to parse, and read a UTF-8 BOM as E0101  [OPEN]
+test: tests/test_surfaces_agree.py (`::test_scan_reads_bom_and_fails_on_parse_errors`)
+
+Found 2026-09-24 by the audit (D3, P0). Repro (`tool\scandir\`: a BOM'd file
+`check` rejects for E0801, and an unterminated string): on `52f04aa`
+`python tools/scan.py tool/scandir --json` → `files_with_findings: 0,
+parse_errors: 2`, exit 0; the BOM file's "parse error" is `[E0101]
+unexpected character '\ufeff'`.
+
+Root cause: `scan_file` opened with `utf-8`; `main` counted `parse_errs`
+but `failed` ignored them; `parse_error` was prose.
+
+Fix (`177a173`): `utf-8-sig`; load through `load_program`; `parse_error` is
+`{code, message, line, column}`; a parse error fails the run (exit 1)
+unless `--allow-parse-errors`, in plain and `--expect` mode; parse errors
+become SARIF tool-execution notifications; `path` is forward-slashed.
+
+### BUG-043  `--json check` stopped at the first non-empty stage, so surfaces disagreed and an agent needed one round-trip per stage  [OPEN]
+test: tests/test_surfaces_agree.py (`::test_json_check_reports_every_stage_tagged`)
+
+Found by the audit (D4). Repro (`tool\mix.aeth`): `aether --json check` →
+E0801 ×2 only; `sdk.check`/LSP/scan → E0801 ×2 + E0713.
+
+Fix (`177a173`): `--json` emits every stage's diagnostics, each tagged
+`"stage"` (`effects`, `security`, ...); text mode keeps the short-circuit
+and prints `(N more diagnostic(s) from later stages not shown: security 1;
+run with --json to see every stage)`. Exit codes unchanged.
+
+### BUG-044  `fmt --write` and the fix-loop deleted every comment, the `// expect:` header included  [OPEN]
+test: tests/test_surfaces_agree.py (`::test_fmt_keeps_comments`,
+`::test_fmt_check_passes_on_commented_corpus_files`,
+`::test_fix_loop_keeps_expect_header_when_it_edits`);
+tests/test_pretty_roundtrip.py (`::test_roundtrip_full_corpus`)
+
+Found by the audit (D7). The lexer drops comments and `pretty` printed the
+AST only.
+
+Fix (`cdf1b02`, `177a173`): `pretty(ast, source)` re-attaches each run of
+full-line `//` comments above the declaration or statement that followed
+it (matched by first `pos.line`, so an AST edited in place keeps them) and
+keeps the tail block. `fmt` and `sdk.edit` (the fix-loop's edit primitive)
+pass the source; the fix-loop writes the input verbatim when it applied
+nothing. Still lost (documented on `pretty`): a comment above a `case`
+arm, a clause line or inside a multi-line expression, one right before a
+block's `end`, trailing `code // comment`, `/* */` blocks. Measured: `fmt
+--check` passes on 112 of the 407 parseable `.aeth` files (57 before); 3
+still fail only because of such comments.
+
+### BUG-045  the fix-loop overwrote its input with the transcript when the path lacked `.aeth`, and wrote cp1252/CRLF on Windows  [OPEN]
+test: tests/test_fix_loop_cli.py (`::test_outputs_never_overwrite_the_input`)
+
+Found by the audit (D8). `out_tr = args.source.replace(".aeth",
+".transcript.json")` is a no-op on `noext`, so the transcript replaced the
+input; `open(..., "w")` used the platform encoding and newline.
+
+Fix (`177a173`): `Path.with_suffix`; input, `--out-source` and
+`--out-transcript` must be three different files (exit 2 otherwise);
+outputs written `encoding="utf-8", newline="\n"`; input read `utf-8-sig`.
+`--live`'s default transcript path uses `with_suffix` too and refuses the
+input path.
+
+### BUG-046  a lex error made `sdk.check` raise, and the LSP published nothing for the document  [OPEN]
+test: tests/test_surfaces_agree.py (`::test_lex_error_is_a_diagnostic_on_sdk_and_lsp`)
+
+Found by the audit (D9). Repro (`tool\lex.aeth`, unterminated string):
+`sdk.check` raised `AetherError`; LSP `didOpen` hit the request boundary's
+`except`, logged it and published no diagnostics — the file showed clean.
+
+Fix (`177a173`): `load_program` returns lex errors as diagnostics with
+`ast=None`; `sdk.check` keeps its return type and returns `[E0103]`; the
+LSP publishes it (and `aether_check_payload` lost its now-dead `except`).
+
+### BUG-047  `fmt` and the fix-loop crashed on every function type (`KeyError: 'ret'`)  [OPEN]
+test: tests/test_pretty_roundtrip.py (`::test_function_types_print_as_parsed`,
+`::test_roundtrip_full_corpus`)
+
+Found by the audit (A9). `aether --json fmt --check
+playground/examples/32_function_typed_param.aeth` → traceback. `pretty`
+read `args`/`ret`; the parser emits `params`/`returns`. The round-trip
+test sampled 3 directories and missed the file.
+
+Fix (`cdf1b02`): prints `function(<params>) returns <T>`. The round-trip
+test now walks every `.aeth` in the repository that parses (407; the 11
+that do not are malformed-input fixtures), with and without comment
+keeping, and checks idempotence.
+
 ### BUG-050  `remove` on a `Set` raises a Python `TypeError`; stdlib.md documents it for `Set<T>`  [OPEN]
 test: none yet (runtime fix is outside Wave 6's file ownership; the doc now states the defect)
 

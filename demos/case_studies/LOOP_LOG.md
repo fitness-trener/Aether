@@ -2380,6 +2380,44 @@ State carried forward: the full gate suite must stay green
 - **Suite:** exit 0: 41 PASS suites; `smt` reported SKIP (z3 not installed
   locally), no longer counted as PASS.
 
+## Iteration 56 — Wave 3 of the 2026-09-24 audit: the fix-loop never weakens a constraint; every surface sees the same program (no new detector)
+
+- **Target:** not a backlog row. Plan Wave 3 (D1, D2, D3, D4, D7, D8) plus
+  D9 and A9: the agent-facing toolchain could tell an agent "clean" when
+  it was not.
+- **Probe-confirmed first (on `52f04aa`):**
+  - The fix-loop granted `net` to `log_formatter` and said `clean`; 28 of
+    417 repo files ended "clean" only by widening. BUG-040.
+  - Cross-file E0801 / unresolved E0705 invisible to SDK, LSP, scan,
+    fix-loop. BUG-041.
+  - `tools/scan.py` exit 0 with every file unparsed; BOM = E0101. BUG-042.
+  - `--json check` hid E0713 behind E0801. BUG-043.
+  - `fmt --write` / fix-loop dropped `// expect:` headers. BUG-044.
+  - fix-loop overwrote an extension-less input. BUG-045.
+  - LSP showed a lex-error file as clean. BUG-046.
+  - `fmt` crashed on function types. BUG-047.
+- **Fixes (each once, where every caller routes through):**
+  - `fix_loop.widening()` judges every edit (deterministic and `--live`);
+    widening is refused by default, `--allow-widen` tags it and still
+    exits 1; E0801 patch target = the call.
+  - `passes.imports.load_program` is the one loader for CLI, SDK (→ LSP,
+    fix-loop) and scan.
+  - `--json check` = all stages, tagged; scan fails on parse errors.
+  - `pretty(ast, source)` keeps full-line comments; function types print.
+- **Measured non-breaking:** no detector, frontend table or stage changed;
+  check-py output is untouched by construction (no file on its path
+  changed). Corpus expect-headers unchanged (`test_corpus` 93/93,
+  `scan --expect` green).
+- **Residuals (pushed to q1):** see q1 rows below.
+- **TYPE gap surfaced for next iter:** the fix-loop now stops at
+  `not_repaired` with a call-site target but applies no non-widening
+  repair itself; a sound mechanical one (delete a debug `print` whose
+  value is unused) needs the call position in E0801's `extra` (D10,
+  Wave 5) and an owner decision on whether deleting code is "repair".
+- **Suite:** exit 0 (`smt` SKIP, z3 not installed locally).
+
+---
+
 ## Iteration 57 — Wave 6 of the 2026-09-24 audit: the spec says what is checked (no new detector)
 
 - **Target:** not a backlog row. Plan Wave 6 docs half (E3–E7, E9–E11):

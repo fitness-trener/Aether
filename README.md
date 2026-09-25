@@ -349,7 +349,8 @@ Working with the language directly:
     aether check demos/payment_workflow/aether/main.aeth
     aether run   demos/payment_workflow/aether/main.aeth
     aether fmt   demos/payment_workflow/aether/main.aeth
-    aether fix-loop demos/payment_workflow/broken.aeth       # deterministic AST repair
+    aether fix-loop demos/payment_workflow/broken.aeth       # deterministic repair; refuses to widen a declaration (ends not_repaired, exit 1)
+    aether fix-loop demos/payment_workflow/broken.aeth --allow-widen # applies widening repairs, tags each one, still exits 1
     aether fix-loop demos/payment_workflow/broken.aeth --live # LLM repair: source checkout + ANTHROPIC_API_KEY
 
 `aether --json <command> ...` (the flag goes before the command) emits
