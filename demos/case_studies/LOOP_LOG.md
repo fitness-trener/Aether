@@ -2380,6 +2380,67 @@ State carried forward: the full gate suite must stay green
 - **Suite:** exit 0: 41 PASS suites; `smt` reported SKIP (z3 not installed
   locally), no longer counted as PASS.
 
+## Iteration 57 — Wave 6 of the 2026-09-24 audit: the spec says what is checked (no new detector)
+
+- **Target:** not a backlog row. Plan Wave 6 docs half (E3–E7, E9–E11):
+  the spec and the top-level docs claimed things the code does not do,
+  and nothing tested the spec against the code.
+- **Probe-confirmed first (on `99f09cc`, again on `52f04aa`):**
+  - No type checker, no name resolution: `returns Int` / `return "x"`,
+    `let x: Int = "s"`, `f("str")` for `f(a: Int)` pass `check` and `run`;
+    `f(1, 2, 3)` and `frobnicate(1)` pass `check` and die at `run` with a
+    Python `TypeError` / `NameError`. `types.md` said "everything else is
+    checked statically".
+  - `stdlib.md` documented `plus(Instant, Duration)` / `minus(Instant,
+    Instant)`; `run` → `NameError: _ae_plus`. Every other documented name
+    exists (115), and every public runtime name is documented.
+  - `effects.md` listed `db.read`/`db.write` (the code uses `db.query`/
+    `db.exec`), omitted `exec.run`/`net.redirect` and the `exec`
+    capability, and said glob subsumption and static capability checks
+    were "parked for v0.2" (both are static today: E0801, E0701).
+  - `keywords.md`: "47 reserved words, locked"; the lexer has 56 (missing
+    `capability`, `band`, `bor`, `bxor`, `shl`, `shr`; listed `_`, which is
+    an identifier). `trait` was both "reserved" and "not reserved"
+    (`let trait = 1` is `E0201`). `empty?` returning `Int`, a `pure` `go!`
+    and a function named `Main` all pass `check`: the `?`/`!`/case rules
+    are conventions, not checks.
+  - `is` on a refinement type is always false (`5 is Pos` → false); `is`
+    narrows nothing. A List as a Map key raises `unhashable` at runtime
+    (types.md said List is hashable). `1 + 2.5` and `xs.length()` pass
+    `check` (types.md listed both as "disallowed").
+  - SECURITY_POSTURE said "14 classes", stopped at E0723, pointed at
+    `tools/py_frontend.py`, and counted 31 FP programs / 8 defenses (now
+    37 / 9). SCANNING.md said "nothing to install", ".aeth firewall", that
+    aether-scan.yml "fails if anything is found" (it is the `--expect` diff
+    gate), and gave 86.8% without "comparable categories" (raw 34.2%).
+  - The framework figures were undated and `run_scan.py` downloaded
+    unpinned latest; `_work/wheels` holds two versions of six dists, and
+    the old `extract()` would pick browser_use 0.13.10 on a fresh tree,
+    not the 0.13.8 that was scanned.
+- **Fixes:** types.md opens with a static / runtime-only / not-checked
+  split; effects.md's stdlib-effect table and capability list are the
+  code's; keywords.md is lexer.KEYWORDS; Instant arithmetic removed from
+  stdlib.md; `tests/test_spec_docs.py` fails on any difference in either
+  direction (names via `runtime.mangle`, so an injective mangling change
+  in Wave 2 does not break it) and on the return of any retracted phrase —
+  red on the old docs in 5 of 6 tests. SECURITY_POSTURE / SCANNING
+  rewritten against the README; one positioning paragraph in README,
+  CLAUDE.md, SCANNING.md; figures dated (676 and 628-of-676: 2026-09-11
+  re-scan at 0.4.0; 241 s → 69 s: 2026-09-03, iteration 52);
+  `bench/framework_scan/frameworks.lock.txt` pins version + sha256, pip
+  `--require-hashes`; 13 root reports moved to `docs/history/` with a
+  dated index; SPEC_ISSUES header, S-002/S-008 out of Open, S-020/S-021.
+- **Found on the way:** BUG-050 (`remove` on a Set raises `TypeError`).
+- **TYPE gap surfaced for next iter:** the spec test checks names, effects
+  and keyword sets, not signatures — a documented parameter list or return
+  type can still drift from the runtime (`_ae_remove` shows the class).
+  And A8 stands: with no name resolution, a misspelt stdlib call passes
+  `check`; the spec now says so, the language decision is open.
+- **Suite:** exit 0, 42 PASS suites (the new `spec_docs` is one); `smt`
+  SKIP (z3 not installed locally).
+
+---
+
 ---
 
 ## Next-iteration checklist (for the loop)

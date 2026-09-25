@@ -1368,3 +1368,32 @@ fix — mapping `os.path.join` to `safeJoin` would be wrong (`join(base,
 call>)` as the last argument ≡ `safeJoin`. Precision, strict-only row
 (E0711 is held back by default), so deferred to the precision wave
 (Wave 5, next to C1).
+
+### BUG-050  `remove` on a `Set` raises a Python `TypeError`; stdlib.md documents it for `Set<T>`  [OPEN]
+test: none yet (runtime fix is outside Wave 6's file ownership; the doc now states the defect)
+
+Found 2026-09-24 while writing `tests/test_spec_docs.py` (E4, reading every
+documented stdlib signature against `runtime.py`). `grammar/stdlib.md`
+documents `remove<T>(s: Set<T>, x: T) returns Set<T>` beside
+`remove<K, V>(m: Map<K, V>, k: K)`. The runtime has one `_ae_remove(m, k)`
+that does `new = dict(m)` — written for a Map. Repro on `99f09cc` and
+`52f04aa`:
+
+    function main() returns Int effects pure do
+      let s: Set<Int> = setUnion([1], [2])
+      let t = remove(s, 1)
+      return size(t)
+    end
+
+`check` exit 0; `run` → `TypeError: cannot convert dictionary update
+sequence element #0 to a sequence`. (A Set can only be obtained from
+`setUnion`/`setIntersection`/`setDifference`/`add`; there is no Set
+literal — `{1, 2}` is `E0201`.)
+
+Root cause: `_ae_remove` in `transpiler/aether/runtime.py` handles only
+`dict`. Proposed fix (for the wave that owns runtime.py): branch on
+`isinstance(m, (set, frozenset))` → `frozenset(m) - {k}`; regression test
+in `tests/test_stdlib_d1.py` asserting `remove(setUnion([1],[2]), 1)` has
+size 1. Measurement: none needed (no detector touches `remove`).
+`grammar/stdlib.md` "Set<T>" now carries a "Known defect" note — delete it
+with the fix.

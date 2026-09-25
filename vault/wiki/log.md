@@ -1,5 +1,17 @@
 # Operation Log (append-only — newest on top)
 
+## [2026-09-25] Corrections + q1 residuals | iteration 57: the spec says what is checked
+- **Retracted in the vault:** the type-system cluster's v0.1 claim of a working
+  type checker (a correction row now follows it); the index and the keywords
+  source page now say 56 reserved words; q7's census citation names a script
+  that was never kept and now says so.
+- **Two q1 rows:** the new spec-vs-code test covers names, effects and
+  keyword sets but not signatures (BUG-050 is that class), and there is no
+  name resolution, so a misspelt sink passes `check` with no finding.
+- **Lesson carried:** the v0.1 claim had been quoted as a key claim for
+  months because nothing compared it with the code. A spec sentence needs
+  a test, or it expires silently.
+
 ## [2026-09-25] Q1 residuals added | iteration 55: the gate can see what matters
 - **Two q1 rows.** The first says what the new recall floor does not
   measure: it counts claimed corpus findings and table rows, and each row
