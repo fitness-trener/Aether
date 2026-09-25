@@ -187,6 +187,15 @@ def check_capabilities(ast: Dict[str, Any]) -> List[Diagnostic]:
             n = callee_name(call)
             if n is not None:
                 callees.add(n)
+            if call.get("py"):
+                # Translated Python keeps the pre-A2 edges (callee +
+                # aliases). The closed-world bound needs Aether's "no
+                # lambdas, one file" world, and the frontend reports an
+                # unresolved callee as `unprovable` instead. Measured:
+                # without this, `check-py --strict` gained 39 E0701 on
+                # the framework corpus (audit wave 2 record).
+                callees |= cx["al"].get(n, set())
+                continue
             targets, unknown = resolve_call(call, cx, prog)
             callees |= {t for t, _as_value in targets}
             if unknown is not None:

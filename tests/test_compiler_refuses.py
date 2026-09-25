@@ -422,6 +422,274 @@ end
 """) == []
 
 
+# ----------------------------------------------------------------------
+# A4 — injective mangling; runtime helpers outside the user namespace
+# ----------------------------------------------------------------------
+
+import io                                            # noqa: E402
+import itertools                                     # noqa: E402
+from contextlib import redirect_stdout               # noqa: E402
+from aether.emitter import emit                      # noqa: E402
+from aether import runtime as _rt                    # noqa: E402
+from aether.diagnostics import AetherError           # noqa: E402
+
+
+def run(src: str):
+    """(stdout, diagnostic code or None) of running `src`."""
+    code = compile(emit(parse(src, "<w2>")), "<w2>", "exec")
+    g = _rt.build_namespace()
+    g["__name__"] = "__main__"
+    buf = io.StringIO()
+    try:
+        with redirect_stdout(buf):
+            exec(code, g)
+    except AetherError as e:
+        return buf.getvalue(), e.diag.code
+    return buf.getvalue(), None
+
+
+def test_a4_user_function_cannot_replace_contract_checker():
+    out, code = run("""
+function assert_contract(c: Bool, k: String, e: String, f: String) returns Unit
+  effects pure
+do
+  return
+end
+function withdraw(balance: Int, amount: Int) returns Int
+  requires amount > 0
+  effects pure
+do
+  return balance - amount
+end
+function main() returns Unit
+  effects log
+do
+  print(intToString(withdraw(10, 0 - 1000)))
+end
+""")
+    assert (out, code) == ("", "E0301"), (out, code)
+
+
+def test_a4_user_function_cannot_replace_refinement_checker():
+    out, code = run("""
+type PositiveInt = Int where self > 0
+function check_refinement(v: Int, p: Int, t: String, b: String, x: String) returns Int
+  effects pure
+do
+  return v
+end
+function need(n: PositiveInt) returns Int
+  effects pure
+do
+  return n
+end
+function main() returns Unit
+  effects log
+do
+  print(intToString(need(0 - 9)))
+end
+""")
+    assert (out, code) == ("", "E0302"), (out, code)
+
+
+def test_a4_question_suffix_does_not_collide():
+    out, code = run("""
+function valid?(s: String) returns Bool
+  effects pure
+do
+  return true
+end
+function valid_q(s: String) returns Bool
+  effects log
+do
+  print("wrong function ran")
+  return false
+end
+function main() returns Unit
+  effects log
+do
+  if valid?("x") then
+    print("done")
+  end
+end
+""")
+    assert (out, code) == ("done\n", None), (out, code)
+
+
+def test_a4_temporaries_do_not_collide():
+    out, _ = run("""
+function main() returns Unit
+  effects log
+do
+  let scrut1 = 7
+  match Some(1) do
+    case Some(v) do
+      print(intToString(scrut1 + v))
+    end
+    case None() do
+      print("none")
+    end
+  end
+end
+""")
+    assert out == "8\n", out
+
+
+def test_a4_mangle_is_injective():
+    alphabet = ["a", "q", "e", "_", "1"]
+    seen = {}
+    for n in range(1, 6):
+        for base in map("".join, itertools.product(alphabet, repeat=n)):
+            if base[0].isdigit():
+                continue
+            for name in (base, base + "?", base + "!"):
+                m = _rt.mangle(name)
+                assert m.isidentifier(), m
+                assert seen.setdefault(m, name) == name, (name, seen[m], m)
+                assert _rt.unmangle(m) == name, (name, m)
+    assert _rt.mangle("valid?") != _rt.mangle("valid_q")
+
+
+def test_a4_runtime_helpers_unreachable_from_user_names():
+    # Every name the namespace exposes is either a stdlib function that
+    # its Aether name mangles to, or unreachable from ANY identifier.
+    helpers = []
+    for name in _rt.build_namespace():
+        aeth = _rt.unmangle(name)
+        if aeth is None:
+            helpers.append(name)
+        else:
+            assert _rt.mangle(aeth) == name
+    assert "_aert_assert_contract" in helpers and "_aert_check_refinement" in helpers
+    for h in helpers + ["_aert_refn_T", "_aert_scrut", "_aert_tmp1",
+                        "_aert_matchexpr1", "_aert_old1"]:
+        assert _rt.unmangle(h) is None, h
+    # and no emitted helper spelling is left in the user namespace
+    py = emit(parse("""
+type P = Int where self > 0
+function f(x: P) returns Int
+  requires x < 10
+  ensures result > old(x) - 1
+  effects pure
+do
+  return match Some(x) do
+    case Some(v) do v
+    end
+    case None() do 0
+    end
+  end
+end
+""", "<w2>"))
+    import re
+    for tok in set(re.findall(r"\b_ae\w*", py)):
+        assert tok.startswith("_aert_") or _rt.unmangle(tok) is not None, tok
+
+
+# ----------------------------------------------------------------------
+# A3 — runtime capability grant (a RUNTIME guarantee, not a static proof)
+# ----------------------------------------------------------------------
+
+LAUNDER_UNDER_LOG = """
+module Reporter
+  requires capability log
+  exports main
+end
+function launder(s: String) returns Unit
+  effects pure
+do
+  let _r = writeFile("wave2_must_not_exist.txt", s)
+end
+function main() returns Unit
+  effects log
+do
+  launder("x")
+end
+"""
+
+
+def _no_file():
+    p = os.path.join(os.getcwd(), "wave2_must_not_exist.txt")
+    if os.path.exists(p):
+        os.remove(p)
+        return False
+    return True
+
+
+def test_a3_effect_outside_grant_fails_at_runtime():
+    # `run()` never runs the static passes: this is what
+    # `aether run --no-static-effects --no-capability-check` executes.
+    out, code = run(LAUNDER_UNDER_LOG)
+    assert code == "E0701", (out, code)
+    assert _no_file(), "the write happened before the check"
+
+
+def test_a3_release_mode_enforces_too():
+    code_obj = compile(emit(parse(LAUNDER_UNDER_LOG, "<w2>"), release=True),
+                       "<w2>", "exec")
+    g = _rt.build_namespace()
+    g["__name__"] = "__main__"
+    try:
+        exec(code_obj, g)
+        raised = None
+    except AetherError as e:
+        raised = e.diag.code
+    assert raised == "E0701" and _no_file()
+
+
+def test_a3_const_initializer_under_module():
+    out, code = run("""
+module M
+  requires capability log
+  exports main
+end
+const X: Bool = isOk?(writeFile("wave2_must_not_exist.txt", "x"))
+function main() returns Unit
+  effects log
+do
+  print("hello")
+end
+""")
+    assert (out, code) == ("", "E0701") and _no_file(), (out, code)
+
+
+def test_a3_granted_and_moduleless_programs_run():
+    assert run("""
+module M
+  requires capability log
+  exports main
+end
+function main() returns Unit
+  effects log
+do
+  print("ok")
+end
+""") == ("ok\n", None)
+    # A program without a module keeps the implicit all-grant, and a
+    # previous program's grant does not leak into it.
+    run(LAUNDER_UNDER_LOG)
+    assert run("""
+function main() returns Unit
+  effects time.now, log
+do
+  let _t = now()
+  print("free")
+end
+""") == ("free\n", None)
+
+
+def test_bug050_remove_on_set():
+    out, code = run("""
+function main() returns Unit
+  effects log
+do
+  let s: Set<Int> = setUnion([1], [2])
+  let t = remove(s, 1)
+  print(intToString(size(t)))
+end
+""")
+    assert (out, code) == ("1\n", None), (out, code)
+
+
 if __name__ == "__main__":
     n = 0
     for name, fn in sorted(globals().items()):

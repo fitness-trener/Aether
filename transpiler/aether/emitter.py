@@ -9,7 +9,7 @@ helper in `scripts/run_emitted.py`.
 from __future__ import annotations
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from .runtime import mangle
+from .runtime import mangle, HELPER_PREFIX as _H
 
 
 # ----------------------------------------------------------------------
@@ -31,12 +31,15 @@ class EmitContext:
         self._pending_helpers: List[str] = []
         # Map of refinement-type-name -> predicate AST. Populated at the
         # start of emit() by walking TypeDecls. Used to insert
-        # _ae_check_refinement calls at function entry for parameters whose
+        # _aert_check_refinement calls at function entry for parameters whose
         # declared type matches.
         self.refinements: Dict[str, Dict[str, Any]] = {}
         # --release mode: elide effect frames and ensures asserts; keep
         # requires + refinement boundary checks (wave 1, gap 6).
         self.release = False
+        # Name of the emitted capability-grant constant, or None when the
+        # program declares no module (implicit all-grant).
+        self.grant: Optional[str] = None
 
     def emit(self, s: str = ""):
         if s:
@@ -55,7 +58,9 @@ class EmitContext:
 
     def fresh(self, prefix: str = "tmp") -> str:
         self.tmp_counter += 1
-        return f"_ae_{prefix}{self.tmp_counter}"
+        # Temporaries live in the helper namespace: `_ae_tmp1` was also
+        # the mangled spelling of a user variable `tmp1` (audit A4).
+        return f"{_H}{prefix}{self.tmp_counter}"
 
 
 # ----------------------------------------------------------------------
@@ -83,6 +88,15 @@ def emit(ast: Dict[str, Any], release: bool = False) -> str:
                 "base_kind": base.get("kind"),
                 "base_name": base.get("name"),
             }
+    # Runtime capability grant (audit 2026-09-24 A3): a program with a
+    # module runs under exactly the capabilities it declares; a stdlib
+    # effect outside them raises E0701 when it is performed.
+    mods = [d for d in ast["decls"] if d["kind"] == "ModuleDecl"]
+    if mods:
+        caps = sorted({c for m in mods for c in m.get("capabilities", [])})
+        ctx.grant = f"{_H}grant"
+        ctx.emit(f"{ctx.grant} = frozenset({caps!r})")
+        ctx.emit(f"set_capability_grant({ctx.grant})")
     ctx.union_cases.setdefault("Some", "Option")
     ctx.union_cases.setdefault("None", "Option")
     ctx.union_cases.setdefault("Ok", "Result")
@@ -91,13 +105,13 @@ def emit(ast: Dict[str, Any], release: bool = False) -> str:
     # B.4 polish: emit one module-level predicate-helper per refinement type
     # before the user's declarations, so per-call boundary checks can reuse
     # the same callable instead of allocating a fresh lambda per invocation.
-    # The helper name is `_ae_refn_<TypeName>`. It's pure and takes _ae_self.
+    # The helper name is `_aert_refn_<TypeName>`. It's pure and takes _ae_self.
     if ctx.refinements:
         ctx.emit()
         ctx.emit("# refinement predicates (B.4: hoisted helpers)")
         for refn_name, refn_data in ctx.refinements.items():
             pred_src = emit_expr(ctx, refn_data["predicate"])
-            ctx.emit(f"def _ae_refn_{refn_name}(_ae_self):")
+            ctx.emit(f"def {_H}refn_{refn_name}(_ae_self):")
             with ctx.block():
                 ctx.emit(f"return bool({pred_src})")
 
@@ -196,10 +210,11 @@ def emit_function(ctx: EmitContext, d: Dict[str, Any]):
             eff_lits = []
             for e in d["effects"]:
                 eff_lits.append("(" + ", ".join(repr(p) for p in e["path"]) + ",)")
-            ctx.emit(f"push_effect_frame([{', '.join(eff_lits)}])")
+            grant = f", {ctx.grant}" if ctx.grant else ""
+            ctx.emit(f"push_effect_frame([{', '.join(eff_lits)}]{grant})")
         old_marker_idx = len(ctx.lines)
         # B.4 polish: refinement boundary checks reference the hoisted
-        # `_ae_refn_<TypeName>` helper instead of allocating a lambda per
+        # `_aert_refn_<TypeName>` helper instead of allocating a lambda per
         # call. The predicate's source text is also passed so the runtime
         # diagnostic can include it: "value 0 fails refinement PositiveInt
         # where self > 0" reads better than "value 0 fails refinement
@@ -212,13 +227,13 @@ def emit_function(ctx: EmitContext, d: Dict[str, Any]):
                 pred_ast = ctx.refinements[refn_name]["predicate"]
                 pred_text = _pretty(pred_ast)
                 ctx.emit(
-                    f"_ae_check_refinement({pname_m}, "
-                    f"_ae_refn_{refn_name}, "
+                    f"{_H}check_refinement({pname_m}, "
+                    f"{_H}refn_{refn_name}, "
                     f"{refn_name!r}, {p['name']!r}, {pred_text!r})"
                 )
         for clause in d["requires"]:
             cond_src = emit_expr(ctx, clause)
-            ctx.emit(f"_ae_assert_contract(bool({cond_src}), 'requires', "
+            ctx.emit(f"{_H}assert_contract(bool({cond_src}), 'requires', "
                      f"{repr(_pretty(clause))}, {name!r})")
         def _emit_fn_body():
             if not d["body"]:
@@ -264,7 +279,7 @@ def emit_function(ctx: EmitContext, d: Dict[str, Any]):
 
 
 def emit_ensures_checks(ctx: EmitContext):
-    """Emit one _ae_assert_contract call per active ensures clause.
+    """Emit one _aert_assert_contract call per active ensures clause.
     Called immediately before each `return _ae_result`."""
     if getattr(ctx, "release", False):
         return
@@ -273,7 +288,7 @@ def emit_ensures_checks(ctx: EmitContext):
     fn_name = ctx.fn_name_stack[-1] if ctx.fn_name_stack else "?"
     for clause in ctx.ensures_stack[-1]:
         cond_src = emit_expr(ctx, clause)
-        ctx.emit(f"_ae_assert_contract(bool({cond_src}), 'ensures', "
+        ctx.emit(f"{_H}assert_contract(bool({cond_src}), 'ensures', "
                  f"{repr(_pretty(clause))}, {fn_name!r})")
 
 
@@ -559,11 +574,11 @@ def emit_match_expr(ctx: EmitContext, e: Dict[str, Any]) -> str:
     ctx.lines = []
     saved_indent = ctx.indent_level
     ctx.indent_level = 0
-    ctx.emit(f"def {fn}(_ae_scrut):")
+    ctx.emit(f"def {fn}({_H}scrut):")
     with ctx.block():
         first = True
         for arm in e["arms"]:
-            cond, bindings = compile_pattern(ctx, arm["pattern"], "_ae_scrut")
+            cond, bindings = compile_pattern(ctx, arm["pattern"], f"{_H}scrut")
             kw = "if" if first else "elif"
             first = False
             ctx.emit(f"{kw} {cond}:")
