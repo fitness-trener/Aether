@@ -206,6 +206,33 @@ SINK_BY_QUALIFIED: Dict[str, str] = {
     "fastapi.responses.RedirectResponse": "redirect",
     "django.http.HttpResponseRedirect": "redirect",
     "aiohttp.web.HTTPFound": "redirect",
+    # Wave 4 (audit 2026-09-24 B9): spellings of classes the tables
+    # already model, each probe-confirmed silent first. Corpus sites per
+    # row are in audits/waves/wave4_record.md.
+    "werkzeug.utils.redirect": "redirect",        # flask.redirect's own body
+    "quart.redirect": "redirect",
+    "django.http.HttpResponsePermanentRedirect": "redirect",
+    "aiohttp.web.HTTPSeeOther": "redirect",
+    "aiohttp.web.HTTPTemporaryRedirect": "redirect",
+    "aiohttp.web.HTTPPermanentRedirect": "redirect",
+    "aiohttp.web.HTTPMovedPermanently": "redirect",
+    "duckdb.sql": "sqlQuery", "duckdb.execute": "sqlQuery",
+    "duckdb.query": "sqlQuery",
+    "_pickle.loads": "deserialize", "_pickle.load": "deserialize",
+    "jinja2.nativetypes.NativeTemplate": "renderTemplate",
+    "tornado.template.Template": "renderTemplate",
+    # runpy executes the file / module the argument names: the caller
+    # picks the CODE, which is E0731's class (CWE-94), not E0711's —
+    # nothing is read back, the path is run. E0711 is also strict-only,
+    # which would hide an RCE by default.
+    "runpy.run_path": "evalCode", "runpy.run_module": "evalCode",
+    # `code.InteractiveInterpreter().runsource(src)` compiles and runs
+    # `src`. Spelled through the constructor (`_attr_spelling`): a
+    # `runsource`/`push` METHOD row on an unresolved receiver would match
+    # every queue's `.push(x)`.
+    "code.InteractiveInterpreter.runsource": "evalCode",
+    "code.InteractiveConsole.runsource": "evalCode",
+    "code.InteractiveConsole.push": "evalCode",
 }
 
 # ----------------------------------------------------------------------
@@ -234,15 +261,21 @@ class Guard:
     sink_values   — dotted spellings that make it a SINK. Used where the
                     absent case is safe (`shell=` absent means no shell).
     absent_is_sink— verdict when the keyword is not present at all.
+    on_receiver   — the keyword is read off the CONSTRUCTOR the method was
+                    called on (`YAML(typ="unsafe").load(s)`), directly or
+                    through a single-binding name; the call itself when
+                    there is no such constructor.
     """
     def __init__(self, sink_name, keyword=None, arg_index=None,
-                 safe_values=(), sink_values=(), absent_is_sink=True):
+                 safe_values=(), sink_values=(), absent_is_sink=True,
+                 on_receiver=False):
         self.sink_name = sink_name
         self.keyword = keyword
         self.arg_index = arg_index
         self.safe_values = frozenset(safe_values)
         self.sink_values = frozenset(sink_values)
         self.absent_is_sink = absent_is_sink
+        self.on_receiver = on_receiver
 
 
 # Loader safety verified by EXECUTION on PyYAML 6.0.3 with the payload
@@ -299,6 +332,24 @@ for _fn in ("defusedxml.minidom.parse", "defusedxml.minidom.parseString",
     SINK_GUARDS[_fn] = Guard("parseXml", keyword="parser", arg_index=1,
                              safe_values=("None",), absent_is_sink=False)
 
+for _fn in ("ruamel.yaml.YAML.load", "ruamel.yaml.YAML.load_all"):
+    # ruamel's default `typ` is round-trip (no arbitrary objects);
+    # `typ="unsafe"` constructs `!!python/object` like yaml.Loader. The
+    # keyword lives on the constructor, not on `.load` — `on_receiver`.
+    # An unresolvable `typ` is a sink. 0 corpus sites.
+    SINK_GUARDS[_fn] = Guard("deserialize", keyword="typ",
+                             sink_values=("unsafe",), absent_is_sink=False,
+                             on_receiver=True)
+for _fn in ("langchain_core.prompts.PromptTemplate.from_template",
+            "langchain_core.prompts.ChatPromptTemplate.from_template",
+            "langchain.prompts.PromptTemplate.from_template",
+            "langchain.prompts.ChatPromptTemplate.from_template"):
+    # A LangChain prompt is an f-string template unless the caller asks
+    # for jinja2, and a jinja2 template from input is SSTI (langchain's
+    # own docstring warns against it). 0 corpus call sites.
+    SINK_GUARDS[_fn] = Guard("renderTemplate", keyword="template_format",
+                             sink_values=("jinja2",), absent_is_sink=False)
+
 # Method name on a receiver of unresolved type -> sink (over-flag direction).
 SINK_BY_METHOD: Dict[str, str] = {
     "execute": "sqlQuery", "executemany": "sqlQuery",
@@ -326,6 +377,16 @@ SINK_BY_METHOD: Dict[str, str] = {
     # paramiko `client.exec_command(cmd)` runs `cmd` through the remote
     # shell. 0 corpus sites.
     "exec_command": "shellExec",
+    # Wave 4 (B9). peewee/ODPS `execute_sql` — 1 corpus site (max_compute).
+    # `.sql(q)`: duckdb connections, pyspark, snowflake, rockset,
+    # manticore — all 16 corpus `.sql(` calls are SQL executors. sqlglot's
+    # `expr.sql(dialect=d)` renders instead and will over-flag (q5).
+    "execute_sql": "sqlQuery", "sql": "sqlQuery",
+    # Django `QuerySet.extra(select=, where=, tables=, order_by=)` splices
+    # its strings verbatim. Only those strings are judged (`_extra_sql_arg`):
+    # `extra(where=["a = %s"], params=[x])` is the parameterized form and
+    # stays clean. 0 corpus sites.
+    "extra": "sqlQuery",
 }
 
 # Builtins that are sinks. `exec`/`eval`/`compile` on a non-literal source
@@ -423,6 +484,28 @@ _SQL_TABLE_METHODS = frozenset({"select", "insert", "update", "delete"})
 # text)` carries its string in the SECOND positional slot.
 _SQL_RAW_METHODS = frozenset({"prefix_with", "suffix_with", "with_hint",
                               "with_statement_hint", "op"})
+# A raw SQL string is an injection WHEREVER it enters, executed in the
+# same statement or not (audit 2026-09-24 B4/B5/PM-5/PM-7): a
+# `Query.filter(text(f"..."))` runs at `.all()`, `session.scalars(...)`
+# is no executor row, and `order = text(col)` is executed three lines
+# later through `select(t).order_by(order)`. So the entry call ITSELF is
+# the E0713 sink (`_raw_sql_entry`), and when it sits inside an
+# executor's judged argument the executor's finding stands for both.
+#   * `text` / `literal_column` resolved into sqlalchemy/sqlmodel;
+#   * `.text(...)` on ANY receiver — Flask-SQLAlchemy's `db.text` is an
+#     instance attribute no import resolves. Over-flag by name (q5): a
+#     `.text(x)` that is not SQL (streamlit `st.text`, a canvas) fires;
+#     a tuple/list/number argument (PIL's `draw.text((x, y), s)`) cannot
+#     be SQL text and does not;
+#   * a str-SHAPED argument (f-string, concat, `%`, `.format`, `.join`)
+#     to `.where` / `.filter` / `.having` — SQLAlchemy 1.x coerced it to
+#     `text()`, and LanceDB/sqlglot parse it as SQL.
+_SQL_TEXT_ENTRY = frozenset({"text", "literal_column"})
+_SQL_STR_ENTRY_METHODS = frozenset({"where", "filter", "having"})
+# Inside a recognised builder chain a str-shaped argument to any of these
+# sanctions nothing either (it is compiled verbatim), so the executor
+# judges the chain as a raw query.
+_SQL_STR_CLAUSE_METHODS = _SQL_STR_ENTRY_METHODS | {"order_by", "group_by", "select"}
 
 
 class _FnScope:
@@ -442,7 +525,8 @@ class _FnScope:
     literal, nowhere else in the module, to that literal."""
     def __init__(self, consts: Dict[str, str], sql_names=(), lit_names=(),
                  local_names=(), module_lits: Optional[Dict[str, Tuple[str, int]]] = None,
-                 local_fns=()):
+                 local_fns=(), values: Optional[Dict[str, Any]] = None,
+                 module: Optional["_ModuleFacts"] = None):
         self.consts = consts
         self.sql_names = frozenset(sql_names)
         self.lit_names = frozenset(lit_names)
@@ -452,11 +536,38 @@ class _FnScope:
         # this function, or a module-level `def`. `SINK_BY_BUILTIN` is
         # keyed by builtin name, so a local `def exec(...)` must win.
         self.shadowed = self.local_names | frozenset(local_fns)
+        # name -> the one value expression bound to it (a name bound
+        # once, by a form whose value is visible); `module` holds the
+        # same for module-level names bound once in the whole module.
+        self.values: Dict[str, Any] = values or {}
+        self.module = module
         self.depth = 0            # current `_expr` nesting (see _MAX_EXPR_DEPTH)
         self.too_deep = False     # set when the cap was hit in this scope
 
     def __call__(self, name: str) -> Optional[str]:
-        return self.consts.get(name)
+        if name in self.local_names:
+            return self.consts.get(name)
+        # A module-level alias bound once in the whole module (`system =
+        # os.system`) resolves like a function-local one (audit B8).
+        return self.module.consts.get(name) if self.module else None
+
+    def value_of(self, name: str) -> Optional[Any]:
+        """The single value expression `name` is bound to here, or None.
+        A local binding wins; an unbound name falls back to the module."""
+        if name in self.local_names:
+            return self.values.get(name)
+        return self.module.values.get(name) if self.module else None
+
+
+class _ModuleFacts:
+    """Module-level names bound exactly ONCE in the whole module (any
+    binding form, any depth — the bar `module_lits` uses), at module
+    level, by a single-name assignment: `values` maps each to its value
+    expression, `consts` to its dotted spelling where `_dotted_of` can
+    name one."""
+    def __init__(self, values: Dict[str, Any], consts: Dict[str, str]):
+        self.values = values
+        self.consts = consts
 
 
 # ----------------------------------------------------------------------
@@ -634,7 +745,9 @@ def _scope_has_content(stripped: Any) -> bool:
         if isinstance(s, _pyast.Expr) and _const_str(s.value) is not None:
             continue                      # a docstring / bare string statement
         if isinstance(s, (_pyast.Assign, _pyast.AnnAssign)) \
-                and any(_const_str(c) is not None for c in _pyast.walk(s.value or s)):
+                and any(_const_str(c) is not None
+                        or (isinstance(c, _pyast.Constant) and isinstance(c.value, bytes))
+                        for c in _pyast.walk(s.value or s)):
             return True
     return False
 
@@ -691,12 +804,17 @@ def _is_sql_expression(node: _pyast.Call, imp: "_Imports",
         return False
 
     def _raw_ok(a: Any) -> bool:
-        return _const_str(a) is not None \
-            or (isinstance(a, _pyast.Name) and a.id in lit_names)
+        return _raw_literal(a, scope)
 
     for sub in _pyast.walk(node):
         if not isinstance(sub, _pyast.Call):
             continue
+        if _raw_sql_entry(sub, imp, scope) is not None:
+            return False
+        if isinstance(sub.func, _pyast.Attribute) and sub.func.attr == "text" \
+                and (sub.args or sub.keywords) \
+                and not (sub.args and _raw_ok(sub.args[0])):
+            return False           # `db.text(...)`, any signature: no name clears
         if _sql_builder_of(sub.func, imp) in _SQL_RAW_ENTRY:
             if not _raw_ok(sub.args[0] if sub.args else None):
                 return False
@@ -705,7 +823,81 @@ def _is_sql_expression(node: _pyast.Call, imp: "_Imports",
             strs = sub.args[1:] if sub.func.attr == "with_hint" else sub.args
             if not all(_raw_ok(a) for a in strs):
                 return False
+        elif ((isinstance(sub.func, _pyast.Attribute)
+               and sub.func.attr in _SQL_STR_CLAUSE_METHODS)
+              or _sql_builder_of(sub.func, imp) == "select") \
+                and any(_is_str_shaped(a) for a in sub.args):
+            return False           # `select(t).order_by(f"{col} DESC")` (PM-7)
     return True
+
+
+def _raw_literal(a: Any, scope: Any = None) -> bool:
+    """A str literal, or a name bound only to str literals."""
+    return _const_str(a) is not None or (
+        isinstance(a, _pyast.Name) and a.id in getattr(scope, "lit_names", ()))
+
+
+def _is_str_shaped(node: Any) -> bool:
+    """A str BUILT at runtime: an f-string with an interpolation, a `+`
+    chain with a str literal among non-literal parts, `"..." % x`,
+    `"...".format(...)` / `"...".join(...)`. Shape only, no type
+    inference: a bare name or a call result is not str-shaped."""
+    if isinstance(node, _pyast.JoinedStr):
+        return any(isinstance(v, _pyast.FormattedValue) for v in node.values)
+    if isinstance(node, _pyast.BinOp) and isinstance(node.op, _pyast.Add):
+        leaves: List[Any] = []
+        stack = [node]
+        while stack:
+            x = stack.pop()
+            if isinstance(x, _pyast.BinOp) and isinstance(x.op, _pyast.Add):
+                stack += [x.left, x.right]
+            else:
+                leaves.append(x)
+        return any(_const_str(x) is not None or isinstance(x, _pyast.JoinedStr)
+                   for x in leaves) \
+            and not all(_const_str(x) is not None for x in leaves)
+    if isinstance(node, _pyast.BinOp) and isinstance(node.op, _pyast.Mod):
+        return _const_str(node.left) is not None
+    return isinstance(node, _pyast.Call) \
+        and isinstance(node.func, _pyast.Attribute) \
+        and node.func.attr in ("format", "join") \
+        and _const_str(node.func.value) is not None
+
+
+# Argument shapes that cannot be SQL text: `draw.text((x, y), s)`.
+_NOT_TEXT = (_pyast.Tuple, _pyast.List, _pyast.Set, _pyast.Dict)
+
+
+def _raw_sql_entry(call: _pyast.Call, imp: "_Imports",
+                   scope: Any = None) -> Optional[Tuple[Any, str]]:
+    """`(judged argument, match kind)` when `call` enters a NON-literal
+    raw SQL string (see `_SQL_TEXT_ENTRY`), else None."""
+    func = call.func
+    judged, kind = None, None
+    if _sql_builder_of(func, imp) in _SQL_TEXT_ENTRY:
+        kind = "qualified"
+    elif isinstance(func, _pyast.Attribute) and func.attr == "text" \
+            and len(call.args) + len(call.keywords or []) == 1:
+        # SQLAlchemy's `text(text)` takes the one string and nothing else;
+        # a `.text(x, y, c)` or `.text(q, max_results=n)` is some other
+        # API's signature (a canvas, a search client: 3 corpus sites).
+        # Residual: SQLAlchemy 1.x `db.text(sql, bindparams=...)` outside
+        # an executor or builder chain (inside one it still sanctions
+        # nothing — `_is_sql_expression`).
+        kind = "method"
+    if kind is not None:
+        judged = call.args[0] if call.args else next(
+            (kw.value for kw in call.keywords or [] if kw.arg == "text"), None)
+        if judged is None or isinstance(judged, _NOT_TEXT) or (
+                isinstance(judged, _pyast.Constant)
+                and not isinstance(judged.value, str)):
+            return None
+    elif isinstance(func, _pyast.Attribute) and func.attr in _SQL_STR_ENTRY_METHODS:
+        judged = next((a for a in call.args if _is_str_shaped(a)), None)
+        kind = "method"
+    if judged is None or _raw_literal(judged, scope):
+        return None
+    return judged, kind
 
 
 def _assign_bindings(fn_node: Any) -> Dict[str, List[Any]]:
@@ -943,6 +1135,42 @@ def _pos(node: Any, fallback: int = 0) -> Dict[str, int]:
             "column": getattr(node, "col_offset", 0) + 1}
 
 
+def _translated_calls(node: Any) -> Iterator[Dict[str, Any]]:
+    """Every translated `Call` dict inside `node`, itself included."""
+    stack = [node]
+    while stack:
+        x = stack.pop()
+        if isinstance(x, dict):
+            if x.get("kind") == "Call":
+                yield x
+            stack.extend(x.values())
+        elif isinstance(x, list):
+            stack.extend(x)
+
+
+def _demote_raw_entries(node: Any):
+    """Un-name every raw-SQL-entry sink inside `node` (see `_call_expr`):
+    an executor that judges the same value reports the flow once."""
+    for c in _translated_calls(node):
+        if c.pop("raw_entry", False):
+            c["func"]["name"] = "py:" + str(c.pop("callee", "text"))
+            c.pop("match", None)
+
+
+def _dedupe_bound_raw_entries(stmts: List[Dict[str, Any]]):
+    """`stmt = text(f"..."); session.execute(stmt)`: the executor judges
+    `stmt` and fires (a name bound to a raw entry is never a safe name),
+    so the entry in the binding is the same flow — one finding, at the
+    executor, as before the entry became a sink itself."""
+    executed = {c["args"][0]["name"] for c in _translated_calls(stmts)
+                if c["func"]["name"] in ("sqlQuery", "sqlExec")
+                and not c.get("raw_entry") and c.get("args")
+                and c["args"][0].get("kind") == "Ident"}
+    for s in stmts:
+        if s.get("kind") == "Let" and s.get("name") in executed:
+            _demote_raw_entries(s.get("value"))
+
+
 def _concat(parts: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Left-nested `+` tree over `parts` (>=1)."""
     out = parts[0]
@@ -985,6 +1213,16 @@ def _expr_inner(node: Any, imp: "_Imports",
             # `pos` is load-bearing: E0723 anchors on the literal itself,
             # and a finding with no line is useless to a fix-loop.
             return {"kind": "StringLit", "value": node.value, "pos": _pos(node)}
+        if isinstance(node.value, bytes):
+            # A bytes literal is not a str to any argument rule (it stays
+            # an opaque PyExpr, judged as before), but a credential in
+            # `b"AKIA..."` is as committed as one in a str (audit B9). The
+            # decoded text rides along under `parts`, where only the
+            # literal scan (E0723) walks; latin-1 maps every byte 1:1.
+            return {"kind": "PyExpr", "py": "Constant",
+                    "parts": [{"kind": "StringLit",
+                               "value": node.value.decode("latin-1"),
+                               "pos": _pos(node)}]}
         return {"kind": "PyExpr", "py": "Constant"}
     if isinstance(node, _pyast.Name):
         # A module-level constant bound exactly once, to a str literal,
@@ -1032,14 +1270,18 @@ def _expr_inner(node: Any, imp: "_Imports",
                 dynamic = True
                 parts.append(_expr(v.value, imp, safe_xml, resolver))
             elif isinstance(v, _pyast.Constant) and isinstance(v.value, str):
-                parts.append({"kind": "StringLit", "value": v.value})
+                # Positioned: E0723 inside an f-string reported line 0
+                # (audit B10). Python < 3.12 gives each part the
+                # f-string's own start; 3.12+ the part's.
+                parts.append({"kind": "StringLit", "value": v.value,
+                              "pos": _pos(v, getattr(node, "lineno", 0))})
             else:
                 dynamic = True
                 parts.append({"kind": "PyExpr", "py": "FormattedValue"})
         if not parts:
-            return {"kind": "StringLit", "value": ""}
+            return {"kind": "StringLit", "value": "", "pos": _pos(node)}
         if not dynamic:
-            return {"kind": "StringLit",
+            return {"kind": "StringLit", "pos": _pos(node),
                     "value": "".join(p.get("value", "") for p in parts)}
         return _concat(parts)
     if isinstance(node, _pyast.Call):
@@ -1243,7 +1485,9 @@ def _sink_match(call: _pyast.Call, imp: "_Imports",
         return None
     guard = SINK_GUARDS.get(dotted)
     if guard is not None:
-        if _guard_verdict(call, guard, imp, resolver):
+        judged_call = (_instance_ctor(call.func, resolver) if guard.on_receiver
+                       else None) or call
+        if _guard_verdict(judged_call, guard, imp, resolver):
             return guard.sink_name, "guard"
         # `subprocess.run(["bash", "-c", cmd])`: no shell= — the argv
         # exit — but the argv IS a shell invocation (BUGS.md BUG-021).
@@ -1272,17 +1516,37 @@ def _sink_match(call: _pyast.Call, imp: "_Imports",
         return sink, "qualified"
     if sink is not None:
         return sink, "qualified"
-    if dotted in SINK_BY_BUILTIN and isinstance(call.func, _pyast.Name):
+    # A non-literal raw SQL string entering the expression language is the
+    # sink itself, wherever it appears (audit B4/B5, `_SQL_TEXT_ENTRY`).
+    raw = _raw_sql_entry(call, imp, resolver)
+    if raw is not None:
+        return "sqlQuery", raw[1]
+    builtin = None
+    if dotted.startswith("builtins.") and dotted[9:] in SINK_BY_BUILTIN:
+        # `builtins.eval(x)`, `from builtins import exec as run`,
+        # `getattr(builtins, "exec")`, `__builtins__["eval"]` — the module
+        # spelled out, so no local binding can be what is called. Decided
+        # BEFORE the by-method rows: `getattr(builtins, "exec")(src)` is
+        # the builtin, not the SQL `exec` method (audit B10).
+        builtin = dotted[9:]
+    elif dotted in SINK_BY_BUILTIN and isinstance(call.func, _pyast.Name):
         # Bare names only: `_callee_spelling` falls back to the ATTRIBUTE
         # name for an unresolved receiver, and `session.exec(stmt)` is
         # not the builtin (it reported E0731 until this guard; the
-        # by-name SQL row still judges it).
-        if call.func.id in getattr(resolver, "shadowed", ()):
+        # by-name SQL row still judges it). An alias (`e = eval; e(x)`)
+        # spells the builtin through `_alias_target`; then it is the
+        # builtin's own name that must not be shadowed.
+        if call.func.id in getattr(resolver, "shadowed", ()) \
+                and call.func.id == dotted:
             return None          # a local def / binding, not the builtin
+        if call.func.id != dotted and dotted in getattr(resolver, "shadowed", ()):
+            return None
+        builtin = dotted
+    if builtin is not None:
         # `exec(compile(src, "<s>", "exec"))`: the source text enters at
         # compile(), which is judged on its own; the outer call runs a
         # code object, not text — one finding per line, not two.
-        if dotted in ("exec", "eval") and call.args \
+        if builtin in ("exec", "eval") and call.args \
                 and isinstance(call.args[0], _pyast.Call) \
                 and _sink_name(call.args[0], imp, safe_xml, resolver) == "evalCode":
             return None
@@ -1291,8 +1555,8 @@ def _sink_match(call: _pyast.Call, imp: "_Imports",
         # running the result — three syntax-checking linters and a
         # round-trip test (bench/framework_scan/REPORT.md §8). Wrapped in
         # exec/eval it is re-rated in `_call_expr` (BUG-030).
-        return SINK_BY_BUILTIN[dotted], (
-            "builtin_compile" if dotted == "compile" else "builtin")
+        return SINK_BY_BUILTIN[builtin], (
+            "builtin_compile" if builtin == "compile" else "builtin")
     # Method on an unresolved receiver: over-flag by name (see doctrine note).
     #
     # No parameterized-query special case. `cur.execute("... id = ?", params)`
@@ -1303,6 +1567,8 @@ def _sink_match(call: _pyast.Call, imp: "_Imports",
     # launder a concatenated query. BUGS.md BUG-004.
     attr = _method_name(call.func, resolver)
     if attr is not None and attr in SINK_BY_METHOD:
+        if attr == "extra" and _extra_sql_arg(call, resolver) is None:
+            return None          # every spliced string is a literal
         return SINK_BY_METHOD[attr], "method"
     return None
 
@@ -1344,6 +1610,7 @@ def _call_expr(node: _pyast.Call, imp: "_Imports",
     misses, so it is not a soundness bug — but an unmapped, unaudited
     sink is invisible to `mapping_table()`, which is exactly what the
     auditable-surface design exists to prevent."""
+    node = _unwrap_indirect(node, imp, resolver, safe_xml)
     dotted = _callee_spelling(node.func, imp, resolver)
     sink = _sink_match(node, imp, safe_xml, resolver)
     name = ((sink[0] if sink else None)
@@ -1362,6 +1629,22 @@ def _call_expr(node: _pyast.Call, imp: "_Imports",
             # the judged argument (BUG-021). The literal program name and
             # flag carry nothing worth keeping.
             args = [payload]
+    raw = _raw_sql_entry(node, imp, resolver) if name == "sqlQuery" else None
+    if raw is not None:
+        # The raw string is the judged slot; the rest is carried.
+        args = [raw[0]] + [a for a in args if a is not raw[0]]
+    elif name == "sqlQuery" and _method_name(node.func, resolver) == "extra":
+        args = [_extra_sql_arg(node, resolver)]
+    carried: List[Any] = []
+    if sink is not None and sink[1] == "guard" and not args and kws:
+        # A guard's deciding keyword is not the payload: in keyword-only
+        # `from_template(template_format="jinja2", template=t)` the
+        # literal "jinja2" must not take the judged slot and clear it.
+        # Still translated (carried), so nothing inside it goes unseen.
+        g = SINK_GUARDS.get(dotted or "")
+        if g is not None and g.keyword and any(k.arg != g.keyword for k in kws):
+            carried = [k for k in kws if k.arg == g.keyword]
+            kws = [k for k in kws if k.arg != g.keyword]
     if not args and kws:
         # A sink fed keyword-only — `yaml.load(stream=raw)`,
         # `cur.execute(query=q)`, `subprocess.run(args=cmd, shell=True)` —
@@ -1414,9 +1697,18 @@ def _call_expr(node: _pyast.Call, imp: "_Imports",
     # Keyword values are carried too, so `f(k=cur.execute(q))` is found by
     # `walk`; `_arg_reason` reads only `args[i]`, so nothing here is ever
     # judged as the sink's own argument (BUG-012).
-    kw_vals = [_expr(kw.value, imp, safe_xml, resolver) for kw in kws]
+    kw_vals = [_expr(kw.value, imp, safe_xml, resolver) for kw in kws + carried]
     if kw_vals:
         out["kwargs"] = kw_vals
+    if raw is not None:
+        out["raw_entry"] = True
+    if name in ("sqlQuery", "sqlExec") and out["args"]:
+        # One finding per flow: a raw-string entry inside this executor's
+        # judged argument is what makes the executor fire (the argument is
+        # then never a sanctioned expression), so the executor's finding
+        # stands for it — `session.execute(text(f"..."))` reports once, at
+        # the executor, exactly as before the entry became a sink itself.
+        _demote_raw_entries(out["args"][0])
     # A call used as a RECEIVER is still a call: `open(p).read()`,
     # `conn.cursor().execute(sql)`, `requests.get(u).json()`. Chaining is
     # idiomatic Python, and dropping the receiver loses the sink entirely
@@ -1441,7 +1733,18 @@ def _callee_spelling(func: Any, imp: "_Imports",
         d = imp.resolve_name(func.id)
         if d is None and resolver is not None:
             d = resolver(func.id)
+        if d is None:
+            # `e = eval`, module-level `system = os.system`, `run =
+            # importlib.import_module("os").system`: follow single-binding
+            # aliases to the function they name (audit B8).
+            t = _alias_target(func, imp, resolver)
+            if t is not func:
+                return (_callee_spelling(t, imp, resolver) if isinstance(t, _pyast.Attribute)
+                        else imp.resolve_name(t.id) or t.id)
         return d or func.id
+    if isinstance(func, _pyast.Subscript) and isinstance(func.value, _pyast.Name) \
+            and func.value.id == "__builtins__" and _const_str(func.slice) is not None:
+        return "builtins." + _const_str(func.slice)       # __builtins__["eval"]
     if isinstance(func, _pyast.Call) and isinstance(func.func, _pyast.Name) \
             and func.func.id == "getattr" and len(func.args) >= 2 \
             and _const_str(func.args[1]) is not None:
@@ -1449,8 +1752,8 @@ def _callee_spelling(func: Any, imp: "_Imports",
             _pyast.Attribute(value=func.args[0], attr=_const_str(func.args[1]),
                              ctx=_pyast.Load()), imp, resolver)
     if isinstance(func, _pyast.Attribute):
-        if isinstance(func.value, _pyast.Name):
-            return imp.resolve_attr(func.value.id, func.attr) or func.attr
+        if isinstance(func.value, (_pyast.Name, _pyast.Call)):
+            return _attr_spelling(func.value, func.attr, imp, resolver) or func.attr
         if isinstance(func.value, _pyast.Attribute):
             # Chained module path: `import xml.sax` + `xml.sax.parseString(...)`
             # arrives as Attribute(Attribute(Name)). Resolving only one level
@@ -1478,6 +1781,185 @@ def _callee_spelling(func: Any, imp: "_Imports",
     return None
 
 
+# How many single-binding hops an alias / partial / dispatch lookup
+# follows. `a = b; b = a` must terminate; real code uses one or two.
+_MAX_ALIAS_HOPS = 5
+
+
+def _alias_target(node: Any, imp: "_Imports", resolver: Any) -> Any:
+    """Follow a Name through single-binding aliases (`e = eval`,
+    `system = os.system`) to the Name or Attribute it finally names.
+    Stops at an imported name, at a name with no single visible value,
+    and at anything that is not itself a Name/Attribute (a call result
+    is not the callee that produced it)."""
+    cur = node
+    value_of = getattr(resolver, "value_of", None)
+    for _ in range(_MAX_ALIAS_HOPS):
+        if value_of is None or not isinstance(cur, _pyast.Name) \
+                or imp.resolve_name(cur.id) is not None \
+                or cur.id in imp.alias_to_path:
+            break
+        v = value_of(cur.id)
+        if isinstance(v, _pyast.Attribute) or (
+                isinstance(v, _pyast.Name) and v.id != cur.id):
+            cur = v
+        else:
+            break
+    return cur
+
+
+def _dynamic_import_target(call: Any, imp: "_Imports",
+                           resolver: Any = None) -> Optional[str]:
+    """The module `importlib.import_module("<lit>")` / `__import__("<lit>")`
+    returns, or None. `__import__("a.b")` returns `a` unless a fromlist
+    is given — the same package the statement form would bind."""
+    if not isinstance(call, _pyast.Call) or not call.args \
+            or _const_str(call.args[0]) is None:
+        return None
+    name = _const_str(call.args[0])
+    if isinstance(call.func, _pyast.Name) and call.func.id == "__import__":
+        has_fromlist = len(call.args) >= 4 or any(
+            kw.arg == "fromlist" for kw in call.keywords or [])
+        return name if has_fromlist else _module_root(name)
+    if _callee_spelling(call.func, imp, resolver) == "importlib.import_module":
+        return name
+    return None
+
+
+def _qualified_row(dotted: str) -> bool:
+    return dotted in SINK_BY_QUALIFIED or dotted in SINK_GUARDS
+
+
+def _attr_spelling(recv: Any, attr: str, imp: "_Imports", resolver: Any = None,
+                   hops: int = 0) -> Optional[str]:
+    """Dotted path of `<recv>.attr` when the receiver can be named: an
+    import alias (the historical rule, checked first), `__builtins__`, a
+    literal `import_module`/`__import__` call, a constructor call whose
+    `Ctor.attr` is a table row (`code.InteractiveInterpreter().runsource`),
+    or a name bound once to any of those (`m = importlib.import_module(
+    "os")`, module-level `interp = code.InteractiveConsole()`)."""
+    if hops > _MAX_ALIAS_HOPS:
+        return None
+    if isinstance(recv, _pyast.Name):
+        d = imp.resolve_attr(recv.id, attr)
+        if d is not None:
+            return d
+        if recv.id == "__builtins__":
+            return "builtins." + attr
+        v = getattr(resolver, "value_of", lambda _n: None)(recv.id)
+        if v is not None:
+            return _attr_spelling(v, attr, imp, resolver, hops + 1)
+        return None
+    if isinstance(recv, _pyast.Call):
+        mod = _dynamic_import_target(recv, imp, resolver)
+        if mod is not None:
+            return mod + "." + attr
+        ctor = _callee_spelling(recv.func, imp, resolver)
+        if ctor and _qualified_row(ctor + "." + attr):
+            return ctor + "." + attr
+        return None
+    if isinstance(recv, _pyast.Attribute):
+        d = _callee_spelling(recv, imp, resolver)
+        return (d + "." + attr) if d and "." in d else None
+    return None
+
+
+def _instance_ctor(func: Any, resolver: Any = None) -> Optional[_pyast.Call]:
+    """The constructor call a method is invoked on: `Ctor(...).m` directly,
+    or through a name bound once to it."""
+    if not isinstance(func, _pyast.Attribute):
+        return None
+    recv = func.value
+    for _ in range(_MAX_ALIAS_HOPS):
+        if not isinstance(recv, _pyast.Name):
+            break
+        recv = getattr(resolver, "value_of", lambda _n: None)(recv.id)
+    return recv if isinstance(recv, _pyast.Call) else None
+
+
+def _synth_call(func: Any, args: List[Any], keywords: List[Any],
+                at: _pyast.Call) -> _pyast.Call:
+    return _pyast.copy_location(
+        _pyast.Call(func=func, args=list(args), keywords=list(keywords)), at)
+
+
+def _unwrap_indirect(call: _pyast.Call, imp: "_Imports", resolver: Any = None,
+                     safe_xml: Optional[Set[str]] = None) -> _pyast.Call:
+    """The call a callable VALUE stands for (audit B8):
+      * `functools.partial(f, *a, **k)(*b, **j)` — directly, or through a
+        name bound once to the partial — is `f(*a, *b, **k, **j)`;
+      * `table[k](...)` where `table` is a dict/list/tuple display (or a
+        name bound once to one) is the call of the entry a literal key
+        selects, else of ANY entry that is a sink — over-flag: dispatch
+        through a table that holds `os.system` may reach it.
+    Anything else is returned unchanged. Synthesized calls carry the
+    outer call's position, so a finding lands where the call is made."""
+    value_of = getattr(resolver, "value_of", lambda _n: None)
+    for _ in range(_MAX_ALIAS_HOPS):
+        f = call.func
+        target = value_of(f.id) if isinstance(f, _pyast.Name) else f
+        if isinstance(target, _pyast.Call) and target.args \
+                and _callee_spelling(target.func, imp, resolver) in (
+                    "functools.partial", "functools.partialmethod"):
+            call = _synth_call(target.args[0], target.args[1:] + call.args,
+                               list(target.keywords or []) + list(call.keywords or []),
+                               call)
+            continue
+        if isinstance(f, _pyast.Subscript):
+            table = f.value
+            if isinstance(table, _pyast.Name):
+                table = value_of(table.id)
+            cands: List[Any] = []
+            key = f.slice
+            if isinstance(table, _pyast.Dict):
+                cands = [v for k, v in zip(table.keys, table.values)
+                         if k is not None and isinstance(key, _pyast.Constant)
+                         and isinstance(k, _pyast.Constant) and k.value == key.value] \
+                    or [v for v in table.values if v is not None]
+            elif isinstance(table, (_pyast.List, _pyast.Tuple)):
+                cands = list(table.elts)
+                if isinstance(key, _pyast.Constant) and isinstance(key.value, int) \
+                        and -len(cands) <= key.value < len(cands):
+                    cands = [cands[key.value]]
+            for c in cands:
+                s = _synth_call(c, call.args, call.keywords or [], call)
+                if _sink_match(s, imp, safe_xml, resolver) is not None:
+                    return s
+        break
+    return call
+
+
+# Django `QuerySet.extra`: the keywords (and positional slots, in
+# signature order) whose strings are spliced into the SQL verbatim.
+_EXTRA_SQL_SLOTS = (("select", 0), ("where", 1), ("tables", 3), ("order_by", 4))
+
+
+def _extra_sql_arg(call: _pyast.Call, scope: Any = None) -> Optional[Any]:
+    """The first non-literal SQL string handed to `.extra(...)`: an
+    element of `where=`/`tables=`/`order_by=`, a value of `select=`, or
+    the slot itself when it is not a display. None when every string is
+    a literal (`params=` is the parameterized form and is not judged)."""
+    kws = {kw.arg: kw.value for kw in call.keywords or [] if kw.arg}
+    for name, idx in _EXTRA_SQL_SLOTS:
+        v = kws.get(name, call.args[idx] if len(call.args) > idx else None)
+        if v is None or _is_none_const(v):
+            continue
+        if isinstance(v, _pyast.Dict):
+            elems = v.values
+        elif isinstance(v, (_pyast.List, _pyast.Tuple, _pyast.Set)):
+            elems = v.elts
+        else:
+            elems = [v]
+        for e in elems:
+            if not _raw_literal(e, scope):
+                return e
+    # A splat may carry `where=`; unresolvable means judged.
+    for kw in call.keywords or []:
+        if kw.arg is None:
+            return kw.value
+    return next((a for a in call.args if isinstance(a, _pyast.Starred)), None)
+
+
 def _classify_dotted(dotted: str) -> Optional[Tuple[str, str]]:
     """Return (capability, verb) for a dotted call path, or None if not a
     known capability. Checks exact qualified entry, then module root, then
@@ -1500,7 +1982,9 @@ class _FnVisitor:
                  sql_names: Optional[Set[str]] = None,
                  lit_names: Optional[Set[str]] = None,
                  local_names: Optional[Set[str]] = None,
-                 module_lits: Optional[Dict[str, Tuple[str, int]]] = None):
+                 module_lits: Optional[Dict[str, Tuple[str, int]]] = None,
+                 values: Optional[Dict[str, Any]] = None,
+                 module: Optional[_ModuleFacts] = None):
         self.imp = imports
         # Names bound to an XML parser with entity resolution disabled —
         # the guard lives in a different statement than the parse call.
@@ -1512,7 +1996,8 @@ class _FnVisitor:
         # What the expression translator resolves against. Empty sets mean
         # no name holds a SQL expression or a literal — the sound default.
         self.scope = _FnScope(self.consts, sql_names or (), lit_names or (),
-                              local_names or (), module_lits, local_fns)
+                              local_names or (), module_lits, local_fns,
+                              values, module)
         self.local_fns = local_fns
         self.fn_name = fn_name
         self.fn_line = fn_line
@@ -1854,6 +2339,20 @@ def py_to_ir(source: str) -> Tuple[Dict[str, Any], Dict[str, List[Dict[str, Any]
                 and mod_binds.get(s.targets[0].id) == 1:
             module_lits[s.targets[0].id] = (_const_str(s.value),
                                             getattr(s, "lineno", 0))
+    # The same bar for any value, for aliases (audit B8): `system =
+    # os.system`, `evaluate = eval`, `sh = functools.partial(...)`,
+    # `HANDLERS = {"sh": os.system}`, `interp = code.InteractiveConsole()`.
+    mod_values: Dict[str, Any] = {}
+    for s in scope_stmts(tree.body):
+        tgt = (s.targets[0] if isinstance(s, _pyast.Assign) and len(s.targets) == 1
+               else s.target if isinstance(s, _pyast.AnnAssign) else None)
+        if isinstance(tgt, _pyast.Name) and s.value is not None \
+                and mod_binds.get(tgt.id) == 1:
+            mod_values[tgt.id] = s.value
+    mod_scope = _NameScope(mod_binds)
+    module = _ModuleFacts(mod_values, {
+        n: d for n, v in mod_values.items()
+        if (d := _dotted_of(v, imports, mod_scope)) is not None})
 
     decls: List[Dict[str, Any]] = []
     unprovable_map: Dict[str, List[Dict[str, Any]]] = {}
@@ -1863,12 +2362,19 @@ def py_to_ir(source: str) -> Tuple[Dict[str, Any], Dict[str, List[Dict[str, Any]
         v = _FnVisitor(imports, simple_names, qual, line, module_lits=module_lits)
         try:
             sql_names, lit_names = _sql_expression_names(node, imports, module_lits)
+            binds = _bindings_of(node)
+            counts: Dict[str, int] = {}
+            for n, _v, _l in binds:
+                counts[n] = counts.get(n, 0) + 1
             v = _FnVisitor(imports, simple_names, qual, line,
                            _safe_xml_parser_names(node, imports),
                            _local_constants(node, imports),
                            sql_names, lit_names,
-                           {n for n, _v, _l in _bindings_of(node)},
-                           module_lits)
+                           set(counts),
+                           module_lits,
+                           {n: val for n, val, _l in binds
+                            if counts[n] == 1 and val is not None},
+                           module)
             # Two separate walks, deliberately. `visit_call` drives the
             # untouched capability/UNPROVABLE analysis over EVERY call
             # anywhere in the function (including inside comprehensions
@@ -1887,6 +2393,7 @@ def py_to_ir(source: str) -> Tuple[Dict[str, Any], Dict[str, List[Dict[str, Any]
             for sub in _pyast.walk(node):
                 if isinstance(sub, _pyast.stmt):
                     v.visit_stmt(sub)
+            _dedupe_bound_raw_entries(v.stmts)
             if v.scope.too_deep:
                 v._add_unprovable("too_deep", qual,
                                   f"an expression in this scope is nested deeper "
