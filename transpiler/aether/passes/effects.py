@@ -104,33 +104,48 @@ def _declared_effects(fn_decl: Dict[str, Any]) -> List[EffectEntry]:
 # Subsumption: does any caller effect cover this callee effect?
 # ----------------------------------------------------------------------
 
-_GLOB_REGEX_CACHE: Dict[str, re.Pattern] = {}
+_GLOB_REGEX_CACHE: Dict[Tuple[str, str], re.Pattern] = {}
 
 
-def _glob_to_regex(pattern: str) -> re.Pattern:
-    """Compile a glob pattern (`*` is wildcard) to a regex anchored start-to-end.
+def _glob_to_regex(pattern: str, star: str = ".*") -> re.Pattern:
+    """Compile a glob pattern (`*` is wildcard, spelled `star` in the
+    regex) to a regex anchored start-to-end.
 
     Cached because compilation is hot-path inside the subsumption check.
     """
-    cached = _GLOB_REGEX_CACHE.get(pattern)
+    cached = _GLOB_REGEX_CACHE.get((pattern, star))
     if cached is not None:
         return cached
     parts = ["^"]
     for c in pattern:
         if c == "*":
-            parts.append(".*")
+            parts.append(star)
         elif c in r".+?^$()[]{}|\\":
             parts.append("\\" + c)
         else:
             parts.append(c)
     parts.append("$")
     rx = re.compile("".join(parts))
-    _GLOB_REGEX_CACHE[pattern] = rx
+    _GLOB_REGEX_CACHE[(pattern, star)] = rx
     return rx
 
 
+def _url_split(url: str) -> Tuple[str, str, str]:
+    """`scheme://AUTHORITY/rest` -> (scheme, authority, rest)."""
+    scheme, rest = url.split("://", 1)
+    authority = _scope_authority(url)
+    return scheme, authority, rest[len(authority):]
+
+
 def _arg_covers(caller_arg: Optional[str], callee_arg: Optional[str]) -> bool:
-    """Does the caller's arg permission cover the callee's arg requirement?"""
+    """Does the caller's arg permission cover the callee's arg requirement?
+
+    For a URL glob the cover is decided PART BY PART on the parsed URL:
+    a `*` in the scheme or the authority matches no `/ @ : ? #`, so
+    `https://*.corp.example/*` no longer covers
+    `https://evil.com/.corp.example/x` (the `*` used to span the `/` and
+    the path, audit 2026-09-24 A7), and `https://api.example.com*` does
+    not cover a `@evil.com` userinfo trick."""
     if caller_arg is None:
         return True
     if callee_arg is None:
@@ -138,9 +153,13 @@ def _arg_covers(caller_arg: Optional[str], callee_arg: Optional[str]) -> bool:
         return False
     if caller_arg == callee_arg:
         return True
-    if "*" in caller_arg:
-        return bool(_glob_to_regex(caller_arg).match(callee_arg))
-    return False
+    if "*" not in caller_arg:
+        return False
+    if "://" in caller_arg and "://" in callee_arg:
+        pin = "[^/@:?#]*"
+        return all(_glob_to_regex(c, star).match(v) for c, v, star in zip(
+            _url_split(caller_arg), _url_split(callee_arg), (pin, pin, ".*")))
+    return bool(_glob_to_regex(caller_arg).match(callee_arg))
 
 
 def _effect_covered(caller_effects: List[EffectEntry],

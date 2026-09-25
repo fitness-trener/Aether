@@ -690,6 +690,42 @@ end
     assert (out, code) == ("1\n", None), (out, code)
 
 
+# ----------------------------------------------------------------------
+# A7 — a net.fetch glob `*` does not cross `/ @ : ? #` in the authority
+# ----------------------------------------------------------------------
+
+def _fetch(callee_url: str, caller_glob: str) -> list:
+    return codes(f"""
+function reach() returns Unit
+  effects net.fetch("{callee_url}")
+do
+  return
+end
+function sync() returns Unit
+  effects net.fetch("{caller_glob}")
+do
+  reach()
+end
+""")
+
+
+def test_a7_glob_does_not_span_the_path():
+    assert _fetch("https://evil.com/.corp.example/x",
+                  "https://*.corp.example/*") == ["E0801"]
+
+
+def test_a7_glob_does_not_span_userinfo():
+    assert _fetch("https://api.example.com@evil.com/v1/x",
+                  "https://api.example.com*") == ["E0710", "E0801"]
+
+
+def test_a7_subdomain_and_path_globs_still_cover():
+    assert _fetch("https://api.corp.example/v1/items?x=1",
+                  "https://*.corp.example/*") == []
+    assert _fetch("https://api.example.com/charge/42",
+                  "https://api.example.com/charge/*") == []
+
+
 if __name__ == "__main__":
     n = 0
     for name, fn in sorted(globals().items()):
