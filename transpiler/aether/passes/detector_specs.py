@@ -40,48 +40,31 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from ..confidence import confidence_of
 from ..diagnostics import Diagnostic, Position
-from .ast_walk import walk, callee_name
+from .ast_walk import walk, callee_name, binders, fn_exprs, contexts
 
 
 # ----------------------------------------------------------------------
 # Generic AST access
 # ----------------------------------------------------------------------
 
-_BIND_KINDS = ("Let", "Var", "Assign")
+def _walk_binds(fn_decl: Dict[str, Any]):
+    """Yield (name, value, node) for every binder of `fn_decl` that
+    carries a value (Let/Var/Assign). Value-less binders (`for` loop
+    variables, `match` pattern names) are in `binders()`; a pass that
+    proves something about a name must read `binders()` so they can
+    disqualify it (audit 2026-09-24 A5; BUGS.md BUG-013 was the same
+    class one walker at a time)."""
+    for b in binders(fn_decl):
+        if b.value is not None:
+            yield b.name, b.value, b.node
 
 
-def _bind_target(n: Dict[str, Any]) -> Optional[str]:
-    """The name a binding statement writes. `Let`/`Var` carry `name`;
-    `Assign` carries `target` (parser.py). Every walker that reasons
-    about what a name holds goes through here — BUGS.md BUG-013: the
-    taint fixpoint, the literal-or-wrapper safe-name proof, the alias
-    map and E0717's stable-name proof each walked only `Let`/`Assign`
-    and read only `name`, so a `var` binding was never seen and an
-    assignment was dropped — `var x = password; print(x)` was exit 0."""
-    tgt = n.get("name") or n.get("target")
-    return tgt if isinstance(tgt, str) else None
-
-
-def _walk_binds(body: Any):
-    """Yield (name, value, node) for every Let/Var/Assign in `body`."""
-    for n in walk(body, *_BIND_KINDS):
-        tgt = _bind_target(n)
-        if tgt is not None and "value" in n:
-            yield tgt, n["value"], n
-
-
-def _bindings(body: Any) -> Dict[str, List[Any]]:
-    """name -> every Let/Var/Assign value bound to it in this body."""
-    out: Dict[str, List[Any]] = {}
-    for name, value, _ in _walk_binds(body):
-        out.setdefault(name, []).append(value)
-    return out
-
-
-def _mutable_names(body: Any) -> Set[str]:
-    """Names with a `var` declaration or a re-assignment in this body."""
-    return {_bind_target(n) for n in walk(body, "Var", "Assign")
-            if _bind_target(n) is not None}
+def _mutable_names(fn_decl: Dict[str, Any]) -> Set[str]:
+    """Names that can hold more than one value: a `var` declaration, a
+    re-assignment, or a value-less binder (a loop variable takes every
+    element; a pattern name takes whatever the scrutinee holds)."""
+    return {b.name for b in binders(fn_decl)
+            if b.kind in ("Var", "Assign") or b.value is None}
 
 
 # ----------------------------------------------------------------------
@@ -286,7 +269,7 @@ def _fn_aliases(fn_decl: Dict[str, Any], targets: frozenset) -> Dict[str, Set[st
     when a name is rebound). Used flag-more only — an aliased unwrapper
     is never honored, an aliased SINK is a sink (BUGS.md BUG-015)."""
     binds: List[Tuple[str, str]] = []
-    for name, v, _ in _walk_binds(fn_decl.get("body", [])):
+    for name, v, _ in _walk_binds(fn_decl):
         if isinstance(v, dict) and v.get("kind") == "Ident":
             binds.append((name, v["name"]))
     out: Dict[str, Set[str]] = {}
@@ -324,12 +307,6 @@ def _aliased_mask(pmask: Dict[str, Tuple[bool, ...]],
     return out
 
 
-def _pattern_bind_names(pat: Any) -> Set[str]:
-    """Names bound by a match pattern (BindPat leaves, recursively —
-    nested constructor patterns included)."""
-    return {n["name"] for n in walk(pat, "BindPat") if "name" in n}
-
-
 def _record_names(fn_decl: Dict[str, Any], carriers: frozenset,
                   rec_fns: frozenset) -> frozenset:
     """Names whose EVERY binding is a carrier record at the top of its
@@ -342,15 +319,15 @@ def _record_names(fn_decl: Dict[str, Any], carriers: frozenset,
     def top(ty: Any) -> bool:
         return _is_record_type(ty, carriers)
 
-    body = fn_decl.get("body", [])
     binds: Dict[str, List[Tuple[Dict[str, Any], Any]]] = {}
-    for name, value, n in _walk_binds(body):
-        binds.setdefault(name, []).append((n, value))
-    params = {p["name"] for p in fn_decl.get("params", []) if top(p.get("type"))}
+    for b in binders(fn_decl):
+        binds.setdefault(b.name, []).append((b.node, b.value))
 
     def rec_shaped(n: Dict[str, Any], v: Any, known: Set[str]) -> bool:
         if top(n.get("type")):
-            return True
+            return True    # `u: User` — a parameter or an annotated binding
+        if v is None:
+            return False   # loop variable / pattern name / other param
         if isinstance(v, dict):
             if v.get("kind") == "Call":
                 c = callee_name(v)
@@ -363,7 +340,7 @@ def _record_names(fn_decl: Dict[str, Any], carriers: frozenset,
     changed = True
     while changed:
         changed = False
-        for cand in params | set(binds):
+        for cand in set(binds):
             if cand not in names and all(rec_shaped(n, v, names)
                                          for n, v in binds.get(cand, [])):
                 names.add(cand)
@@ -407,22 +384,13 @@ def _marked_taint(fn_decl: Dict[str, Any], marker: str, unwrap,
     binds: List[Tuple[str, Any]] = []
     destructures: List[Tuple[Set[str], Any]] = []  # (bound names, source expr)
 
-    body = fn_decl.get("body", [])
-    for name, value, n in _walk_binds(body):
-        if _type_carries_marker(n.get("type"), marker, carriers):
-            tainted.add(name)  # the annotation says so
-        binds.append((name, value))
-    for n in walk(body, "Match", "MatchExpr"):
-        if "scrutinee" not in n:
-            continue
-        names: Set[str] = set()
-        for arm in n.get("arms", []):
-            names |= _pattern_bind_names(arm.get("pattern"))
-        if names:
-            destructures.append((names, n["scrutinee"]))
-    for n in walk(body, "For"):
-        if isinstance(n.get("var"), str) and "iter" in n:
-            destructures.append(({n["var"]}, n["iter"]))
+    for b in binders(fn_decl):
+        if b.value is not None:
+            if _type_carries_marker(b.node.get("type"), marker, carriers):
+                tainted.add(b.name)  # the annotation says so
+            binds.append((b.name, b.value))
+        elif b.source is not None:
+            destructures.append(({b.name}, b.source))
     changed = True
     while changed:
         changed = False
@@ -1101,7 +1069,7 @@ def param_sink_reach(ast: Dict[str, Any]) -> Dict[str, Dict[int, frozenset]]:
             continue
         al = _fn_aliases(d, frozenset(sinks))
         per: Dict[int, Set[str]] = {}
-        for call in walk(d.get("body", []), "Call"):
+        for call in walk(fn_exprs(d), "Call"):
             args = call.get("args") or []
             for sink in _sink_targets(callee_name(call), al, sinks):
                 idx = sinks[sink]
@@ -1167,7 +1135,7 @@ def _arg_reason(node: Any, safe_names: Set[str], rule: ArgRule) -> Optional[str]
     return rule.default
 
 
-def _safe_names(body: Any, rule: ArgRule) -> Set[str]:
+def _safe_names(fn_decl: Dict[str, Any], rule: ArgRule) -> Set[str]:
     """Names bound ONLY to values `rule` accepts, across every binding to
     them in this body. A single unsafe binding disqualifies the name, and
     so does a `var` declaration or a re-assignment: a mutable name is not
@@ -1176,8 +1144,12 @@ def _safe_names(body: Any, rule: ArgRule) -> Set[str]:
     assignment was invisible). Iterated to a fixpoint so a name bound to
     an earlier safe name is itself safe — except where the row asks for a
     single pass."""
-    binds = _bindings(body)
-    mutable = _mutable_names(body)
+    binds: Dict[str, List[Any]] = {}
+    for name, value, _ in _walk_binds(fn_decl):
+        binds.setdefault(name, []).append(value)
+    # A `for` variable or a pattern name has no value of its own, so it
+    # is in `mutable` and can never be proven (audit 2026-09-24 A5).
+    mutable = _mutable_names(fn_decl)
     safe: Set[str] = set()
     changed = True
     while changed:
@@ -1201,15 +1173,12 @@ def literal_or_wrapper(spec: LiteralOrWrapperSpec) -> Callable[[Dict[str, Any]],
 
     def check(ast: Dict[str, Any]) -> List[Diagnostic]:
         diags: List[Diagnostic] = []
-        for d in ast.get("decls", []):
-            if d.get("kind") != "FunctionDecl":
-                continue
+        for d in contexts(ast):
             fn = d["name"]
             fpos = d.get("pos") or {"line": 0, "column": 0}
-            body = d.get("body", [])
-            safe_names = _safe_names(body, safe_rule)
+            safe_names = _safe_names(d, safe_rule)
             aliases = _fn_aliases(d, sink_set)
-            for call in walk(body, "Call"):
+            for call in walk(fn_exprs(d), "Call"):
                 # An alias of a sink is the sink (`let run = sqlQuery`).
                 targets = _sink_targets(callee_name(call), aliases, sink_set)
                 if not targets:
@@ -1266,9 +1235,7 @@ def marker_flow(spec: MarkerFlowSpec) -> Callable[[Dict[str, Any]], List[Diagnos
         # Alias targets, once per module (TC-04): sources, marked
         # callables and this row's sinks.
         targets = src_fns | frozenset(pmask) | sink_names
-        for d in ast.get("decls", []):
-            if d.get("kind") != "FunctionDecl":
-                continue
+        for d in contexts(ast):
             al = _fn_aliases(d, targets)
             src_l = src_fns | frozenset(a for a, ts in al.items() if ts & src_fns)
             pmask_l = _aliased_mask(pmask, al)
@@ -1281,7 +1248,7 @@ def marker_flow(spec: MarkerFlowSpec) -> Callable[[Dict[str, Any]], List[Diagnos
                 continue
             fn = d["name"]
             fpos = d.get("pos") or {"line": 0, "column": 0}
-            for call in walk(d.get("body", []), "Call"):
+            for call in walk(fn_exprs(d), "Call"):
                 # An alias of a sink is the sink (`let out = print`).
                 hits = _sink_targets(callee_name(call), al, sink_names)
                 if not hits:
