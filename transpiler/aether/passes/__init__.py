@@ -23,6 +23,7 @@ crashes across 799 inputs (370 whole files + 429 truncated mid-typing
 buffers), and a crashing detector must go red, not silent. Liveness for
 long-lived servers is the LSP request boundary's job, not analysis's.
 """
+from .ast_walk import shared_index
 from .capability import check_capabilities
 from .effects import (
     check_effects, check_effect_scope, check_fs_path_safety, check_secret_flow,
@@ -82,8 +83,10 @@ def analyze(ast, skip=()):
     if unknown:
         raise ValueError(f"analyze(skip=...): unknown stage(s) {sorted(unknown)}; "
                          f"stages are {[name for name, _fns in STAGES]}")
-    return [(name, [d for fn in fns for d in fn(ast)])
-            for name, fns in STAGES if name not in skip]
+    # One shared per-function index for every detector (audit F5).
+    with shared_index():
+        return [(name, [d for fn in fns for d in fn(ast)])
+                for name, fns in STAGES if name not in skip]
 
 
 def analyze_flat(ast, skip=()):

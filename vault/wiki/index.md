@@ -11,7 +11,7 @@ query — start here, follow links.
 
 ## Sources (`wiki/sources/`)
 - [[sources/README|README]] — project front door, install, fix-loop split, design principles (v0.3)
-- [[sources/keywords|keywords]] — 47 reserved words, naming laws, LL(1) anchors (v0.1)
+- [[sources/keywords|keywords]] — 56 reserved words (lexer `KEYWORDS`, test-pinned since 2026-09-24), naming laws (not enforced), LL(1) anchors
 - [[sources/effects|effects]] — effect lattice, composition, capability gating (v0.1)
 - [[sources/types|types]] — primitives, records/unions, refinements, disallow list (v0.1)
 - [[sources/diagnostics|diagnostics]] — code ranges, `extra` dicts, caller/implementer split (v0.3)
