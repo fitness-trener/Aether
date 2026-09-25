@@ -1744,7 +1744,7 @@ E0201 with a split-into-lets hint; deepest in-repo program: 13); `emit()`
 turns NotImplementedError into E9001. Done without touching cli.py:
 both are raised as `AetherError` below it.
 
-### BUG-065  a non-literal raw SQL string was judged only inside an executor's argument; bound to a name, passed to `Query.filter`/`scalars`/`from_statement`, or built in `.where(...)`, it was silent (false accept)  [OPEN]
+### BUG-065  a non-literal raw SQL string was judged only inside an executor's argument; bound to a name, passed to `Query.filter`/`scalars`/`from_statement`, or built in `.where(...)`, it was silent (false accept)  [FIXED a45ad9d]
 test: tests/test_py_frontend_sinks.py
 (`::test_raw_sql_string_is_a_finding_wherever_it_enters`)
 
@@ -1788,7 +1788,7 @@ its old match kind (0 confidence changes on the corpus).
 
 Measurement: framework corpus +29 E0713 (below); in-repo trees 0.
 
-### BUG-066  a sink reached through a literal dynamic import, a module-level alias, a local builtin alias, `functools.partial` or a dispatch table was silent (false accept)  [OPEN]
+### BUG-066  a sink reached through a literal dynamic import, a module-level alias, a local builtin alias, `functools.partial` or a dispatch table was silent (false accept)  [FIXED a45ad9d]
 test: tests/test_py_frontend_sinks.py
 (`::test_aliases_and_dynamic_callees_reach_the_sink`)
 
@@ -1824,7 +1824,7 @@ SANCTIONED value now clears a guard like a function-local one —
 
 Measurement: framework corpus 0 added / 0 removed by this item alone.
 
-### BUG-067  builtins reached through the `builtins` module were silent, and `getattr(builtins, "exec")(src)` was reported as SQL injection  [OPEN]
+### BUG-067  builtins reached through the `builtins` module were silent, and `getattr(builtins, "exec")(src)` was reported as SQL injection  [FIXED a45ad9d]
 test: tests/test_py_frontend_sinks.py
 (`::test_builtins_spelled_through_the_module_are_the_builtin`)
 
@@ -1839,7 +1839,7 @@ import, a from-import, `getattr(builtins|__builtins__, "X")`,
 `__builtins__["X"]`) as the builtin `X`, decided before the by-method rows;
 `session.exec(stmt)` stays E0713.
 
-### BUG-068  spellings of already-modeled sinks were silent (sink-table gaps)  [OPEN]
+### BUG-068  spellings of already-modeled sinks were silent (sink-table gaps)  [FIXED a45ad9d]
 test: tests/test_sink_rows.py (every row pinned);
 tests/test_py_frontend_sinks.py (`::test_wave4_sink_rows_fire_and_safe_forms_clear`)
 
@@ -1888,7 +1888,7 @@ Measurement: `min_py_table_rows` 93 → 121 (28 rows: 19 qualified, 3
 method, 6 guard). Framework corpus: +18 E0713 (`.sql`/`execute_sql`
 executors and LanceDB), +2 E0731 (runpy).
 
-### BUG-069  E0723 inside an f-string reported line 0, column 0; a credential in a bytes literal was never scanned  [OPEN]
+### BUG-069  E0723 inside an f-string reported line 0, column 0; a credential in a bytes literal was never scanned  [FIXED a45ad9d]
 test: tests/test_py_frontend_sinks.py
 (`::test_credential_in_fstring_and_bytes_is_positioned`)
 
