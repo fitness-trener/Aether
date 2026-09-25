@@ -40,7 +40,7 @@ what's in `extra`, and what an agent fix-loop is supposed to do.
 
 | Code | Description | `extra` keys |
 |------|-------------|--------------|
-| **E0201** | parse error (unified code for every "expected X, got Y") | — |
+| **E0201** | parse error (unified code for every "expected X, got Y"). Also raised for input nested too deeply to analyze: a top-level declaration whose AST is deeper than 200 levels (`MAX_AST_DEPTH` in `parser.py`) or that exhausts the parser's recursion — the hint says to split the expression into named `let` bindings | — |
 | **E0202** | a `match` on a union omits a case and has no wildcard catch-all — non-exhaustive match / unhandled variant (static, was runtime-only) | `function`, `union`, `missing` |
 | **E0203** | a `match` arm can never be reached — it follows a wildcard catch-all, or duplicates an earlier case (dead code, CWE-561) | `function`, `reason` |
 | **E0204** | a statement follows an unconditional `return`/`break`/`continue` in the same block — unreachable dead code (CWE-561) | `function`, `after` |
@@ -134,7 +134,7 @@ Bench-harness only. The CLI does not currently enforce timeouts;
 
 | Code | Description | `extra` keys |
 |------|-------------|--------------|
-| **E0701** | function's transitive effect closure requires a capability not declared by any module | `function`, `effect`, `required_capability`, `declared_capabilities`, `via_transitive` |
+| **E0701** | function's transitive effect closure requires a capability not declared by any module. **Runtime variant** (`extra.runtime = true`): in a program that declares a module, `aether run` raises it when a stdlib function performs an effect outside the module's grant, or when a function whose declared effects exceed the grant is invoked (under `--release`, performed effects only). A runtime guarantee, not a static proof | `function`, `effect`, `required_capability`, `declared_capabilities`, `via_transitive`; runtime variant: `effect`, `required_capability`, `declared_capabilities`, `runtime` |
 | **E0702** | module exports a name that isn't declared in this file (D.3) | `module`, `exported`, `declared_names` |
 | **E0703** | more than one `module ... end` in a single file (v0.3 is single-file; D.3) | `first_module`, `duplicate_module` |
 | **E0704** | module requires a capability outside the known vocabulary (D.3) | `module`, `capability`, `known` |
@@ -453,20 +453,20 @@ review by construction.
 
 | Code | Description | `extra` keys |
 |------|-------------|--------------|
-| **E0801** | callee's effects not covered by caller's declared set (B.1 + B.2). A function passed as a **value** counts as a callee: its effects run under the call it is handed to, so `apply(logIt, s)` from a `pure` caller is refused (`extra.via = "function_value"`). A pure function value adds nothing — `map(double, xs)` stays clean. The name is resolved as a function only when nothing local shadows it: a `String` parameter or a `let` named after a function is a VALUE (BUG-024). A local alias binding still counts — `let g = logIt  apply(g, s)` reports `logIt` with `g` named in the message | `caller`, `callee`, `caller_effects`, `missing_effect`, optional `via` |
+| **E0801** | callee's effects not covered by caller's declared set (B.1 + B.2). A function passed as a **value** counts as a callee: its effects run under the call it is handed to, so `apply(logIt, s)` from a `pure` caller is refused (`extra.via = "function_value"`). A pure function value adds nothing — `map(double, xs)` stays clean. The name is resolved as a function only when nothing local shadows it: a `String` parameter or a `let` named after a function is a VALUE (BUG-024). A local alias binding still counts — `let g = logIt  apply(g, s)` reports `logIt` with `g` named in the message. A callee the checker cannot name (an indexed element, a call result, an `if`/`match` expression, a record field, an opaque local) is bounded by the declared effects of every function the program uses as a value (`extra.via = "unknown_callee"`, with `candidates` — those functions — and `shape` — what the callee was, e.g. `"an indexed element"`). What an agent should do: remove or replace the call, and widen the caller's effects clause only if the caller is meant to have that effect | `caller`, `callee`, `caller_effects`, `missing_effect`, optional `via`; `candidates`, `shape` when `via = "unknown_callee"` |
 
 Default-on. Opt out per-file with `aether check --no-static-effects`.
 Glob-matching on effect args (B.2) is part of this code.
 
 ## Internal / harness (E9xxx)
 
-These are emitted by `bench/harness.py` only, when something below the
-Aether layer fails. They don't indicate user-code bugs; they indicate
+These are emitted by `bench/harness.py` when something below the
+Aether layer fails (E9001 also by the emitter itself, see its row). They don't indicate user-code bugs; they indicate
 toolchain/sandbox/etc. issues.
 
 | Code | Description |
 |------|-------------|
-| **E9001** | emit error (Python `compile()` rejected the emitted source) |
+| **E9001** | emit error (Python `compile()` rejected the emitted source). Also raised when the emitter cannot translate a construct (e.g. `old()` outside a function) |
 | **E9002** | internal error (parser/emitter raised something other than `AetherError`) |
 | **E9003** | Python runtime error inside the candidate (e.g. divide-by-zero with no precondition) |
 

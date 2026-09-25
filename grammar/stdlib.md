@@ -186,10 +186,8 @@ The constructors `Some`, `None`, `Ok`, `Err` are also always in scope.
     function contains?<T>(s: Set<T>, x: T) returns Bool
       effects pure
 
-Known defect: `remove` on a `Set` raises a Python `TypeError` at runtime
-(the runtime's `remove` is written for a `Map`; measured with
-`remove(setUnion([1], [2]), 1)`). There is no `Set` literal; a `Set`
-value comes from `setUnion` / `setIntersection` / `setDifference` / `add`.
+There is no `Set` literal; a `Set` value comes from `setUnion` /
+`setIntersection` / `setDifference` / `add`.
 
 ## String
 

@@ -81,8 +81,17 @@ function's transitive effect set through direct calls and refuses, with
 declares **no** module, every capability is granted and `E0701` never
 fires (measured: a module-less `print` program passes `check` and runs).
 
-This is a static check. At this version there is no runtime capability
-check: the runtime does not consult the module's capability list.
+That is the static check. A program that declares a module also runs
+under a **runtime** capability check: its module's capabilities are the
+grant, and `aether run` raises `E0701` (`extra.runtime = true`) when a
+stdlib function performs an effect whose capability is outside the grant,
+or when a function whose declared effects exceed the grant is invoked
+(before its body runs). This holds even with `--no-static-effects
+--no-capability-check`. A program without a module keeps the implicit
+all-capability grant. Under `--release` only performed effects are
+checked, against one process-wide grant. This is a runtime guarantee
+about the stdlib effects and declared effects of the running program,
+not a static proof.
 
 ## Runtime effect tracking (`--effect-strict`, opt-in)
 

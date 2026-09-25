@@ -58,7 +58,7 @@ from typing import Any, Dict, List, Optional
 
 from .diagnostics import Diagnostic
 from .lexer import KEYWORDS as _AETHER_KEYWORDS
-from .runtime import build_namespace as _runtime_namespace
+from .runtime import build_namespace as _runtime_namespace, unmangle as _unmangle
 from .sdk import check as _sdk_check
 from .passes.patch_target import compute_patch_target as _compute_patch_target
 
@@ -68,15 +68,13 @@ from .passes.patch_target import compute_patch_target as _compute_patch_target
 # ----------------------------------------------------------------------
 
 def _compute_stdlib_names() -> List[str]:
-    """Strip the runtime's `_ae_` prefix off everything build_namespace
-    exposes — that's the Aether-visible stdlib surface (`length`,
-    `print`, `parseInt`, ...)."""
+    """Unmangle everything build_namespace exposes — that's the
+    Aether-visible stdlib surface (`length`, `print`, `empty?`, ...)."""
     names: List[str] = []
     for n in _runtime_namespace():
-        if n.startswith("_ae_"):
-            bare = n[len("_ae_"):]
-            if bare and bare not in names:
-                names.append(bare)
+        bare = _unmangle(n)
+        if bare and bare not in names:
+            names.append(bare)
     return sorted(names)
 
 

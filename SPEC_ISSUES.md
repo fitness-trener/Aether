@@ -95,14 +95,12 @@ extremely common identifier. Fix in v0.2: contextually reserve `result`
 only inside an `ensures` expression (the parser knows the context). v0.1
 workaround: documented in `prompt/system_prompt.md` under common mistakes.
 
-### S-016 · Mangling collision between `foo?` / `foo_q` (and `foo!` / `foo_e`)
-`empty?` mangles to `_ae_empty_q`, and a user-defined `empty_q` would also
-mangle to `_ae_empty_q`. Latent — the v0.1 stdlib doesn't trigger it, and a
-user identifier ending in `_q` or `_e` is unusual but not impossible. Fix:
-use a non-identifier separator like `__pred__` / `__bang__`, or reject any
-user identifier that already ends in `_q` / `_e`.
-
 ## Resolved
+
+### S-016 · Mangling collision between `foo?` / `foo_q` (and `foo!` / `foo_e`)  *(fixed 2026-09-25)*
+`empty?` and a user-defined `empty_q` both mangled to `_ae_empty_q`, so the
+checker and the runtime could run different functions. Fixed by `8722ce6`
+(injective mangling; the scheme is in `runtime.mangle`'s docstring).
 
 ### S-021 · `stdlib.md` documented Instant arithmetic the runtime never had  *(resolved 2026-09-25)*
 `plus(t: Instant, d: Duration)` and `minus(a: Instant, b: Instant)` were

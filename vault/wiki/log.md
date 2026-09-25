@@ -1,5 +1,16 @@
 # Operation Log (append-only — newest on top)
 
+## [2026-09-25] Q1 row closed + residuals | iteration 58: the compiler refuses again
+- **Closed:** the open A5 row (`for`/`match` binders laundering a proven name),
+  BUG-055. Parameters and `AsPat` names were the same class and closed with it.
+- **Narrowed, not closed:** effect-polymorphic function types. A call through a
+  value the checker cannot name is now bounded by every function the program
+  uses as a value (BUG-057). No effects syntax was added to function types, as
+  the closed design point requires.
+- **Five residual rows:** the A2 bound is program-wide; a `for`-bound id is never
+  stable for E0717; the runtime grant covers stdlib and declared effects only;
+  refinement sites not checked; the 200-level nesting bound.
+
 ## [2026-09-25] Corrections + q1 residuals | iteration 57: the spec says what is checked
 - **Retracted in the vault:** the type-system cluster's v0.1 claim of a working
   type checker (a correction row now follows it); the index and the keywords

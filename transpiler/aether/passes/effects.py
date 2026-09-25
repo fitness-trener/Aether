@@ -2147,8 +2147,14 @@ def check_effects(ast: Dict[str, Any]) -> List[Diagnostic]:
         def e0801(what: str, callee: str, eff: EffectEntry,
                   via: Optional[str], extra: Dict[str, Any]) -> Diagnostic:
             missing_pretty = _format_effect(eff)
-            hint = (f"add {missing_pretty} to {caller_name}'s effects "
-                    f"clause, or change the call site")
+            # Removal first: widening the clause silences E0801 without
+            # removing the effect (audit 2026-09-24, Wave 3 D1).
+            call = ("the call that can reach" if via == "unknown_callee"
+                    else "the call to")
+            hint = (f"remove or replace {call} {callee!r} (it performs "
+                    f"{missing_pretty}), or — only if {caller_name} is "
+                    f"meant to have that effect — add {missing_pretty} "
+                    f"to its effects clause")
             if via == "unknown_callee":
                 hint += ("; to keep the effects narrow, call a named function, "
                          "or take the function as a function-typed parameter "

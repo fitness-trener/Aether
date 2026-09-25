@@ -360,7 +360,8 @@ structured output for an agent to consume; the Python SDK is
 
 **Design principles.** One syntactic form per semantic operation · every
 public function declares its contracts and effects · modules declare their
-capabilities and the runtime grants only what is declared · the AST is
+capabilities and, in a program that declares a module, only what is
+declared is granted (a static E0701 check plus a runtime one) · the AST is
 canonical (`parse(print(ast)) == ast`) · errors are structured and
 suggestions are machine-readable.
 

@@ -1528,8 +1528,8 @@ test now walks every `.aeth` in the repository that parses (407; the 11
 that do not are malformed-input fixtures), with and without comment
 keeping, and checks idempotence.
 
-### BUG-050  `remove` on a `Set` raises a Python `TypeError`; stdlib.md documents it for `Set<T>`  [OPEN]
-test: none yet (runtime fix is outside Wave 6's file ownership; the doc now states the defect)
+### BUG-050  `remove` on a `Set` raises a Python `TypeError`; stdlib.md documents it for `Set<T>`  [FIXED 8722ce6]
+test: tests/test_compiler_refuses.py (`::test_bug050_remove_on_set`; fixed in Wave 2, `8722ce6`)
 
 Found 2026-09-24 while writing `tests/test_spec_docs.py` (E4, reading every
 documented stdlib signature against `runtime.py`). `grammar/stdlib.md`
@@ -1556,3 +1556,190 @@ in `tests/test_stdlib_d1.py` asserting `remove(setUnion([1],[2]), 1)` has
 size 1. Measurement: none needed (no detector touches `remove`).
 `grammar/stdlib.md` "Set<T>" now carries a "Known defect" note — delete it
 with the fix.
+
+### BUG-055  `for` / `match` binders (and parameters) re-bound a name the safe / stable / authorized proofs had proven  [OPEN]
+test: tests/test_compiler_refuses.py
+(`::test_a5_for_shadow_path`, `::test_a5_match_shadow_path`,
+`::test_a5_for_shadow_sql`, `::test_a5_for_shadow_idor`,
+`::test_a5_for_shadow_authorized`, `::test_a5_raw_param_later_assigned_a_proof`,
+`::test_a5_as_pattern_carries_taint`, `::test_a5_sanctioned_shapes_stay_clean`)
+
+Found 2026-09-24 by the whole-repo audit (A5), probe-confirmed on
+`52f04aa`: `let s = "SELECT 1"; for s in xs do sqlQuery(s) end`, the same
+shape for E0711 (`readFile`), `match o do case Some(p) do readFile(p)`,
+and the E0717 IDOR (`let id = "doc-1"; proof = authorizeResource(u, "e",
+id); for id in ids do sqlByOwner(stmt, id, proof)`) were all `check`
+exit 0. Found while fixing: a raw parameter later assigned a proof
+(`sqlExec(s, tok); tok = authorize(u, a)`) was authorized, because
+parameters were not bindings; and `case Some(x) as y` never tainted `y`
+(`AsPat` names were invisible to the taint pass).
+
+Root cause: six binding fixpoints, each with its own walker. Only
+`_marked_taint` knew `For` / `BindPat`; `_safe_names`, `_mutable_names`,
+`_record_names`, `_authorized_names`, `_stable_names` saw only
+Let/Var/Assign. The BUG-013/014 class, fixed there one walker at a time.
+
+Fix (`c193b21`): one `binders(fn)` iterator in `passes/ast_walk.py`
+yields `(name, value, kind, node, source)` for parameters, let / var /
+assign, `for` variables and every `BindPat` / `AsPat` of match
+statements and match expressions, over body AND contracts. All six
+fixpoints read it. A value-less binder (loop variable, pattern name,
+plain parameter) disqualifies a name from safe / stable / authorized;
+the exceptions are the ones that ARE proofs (an `Authorized<...>`
+parameter; an `Ok`/`Some` payload of a proven scrutinee; a record-typed
+parameter for `_record_names`). Taint propagates through `source`.
+
+Measurement: in-repo `.aeth` corpus 200 findings before and after,
+identical (file, code, line); Python corpora unchanged (see Measurements).
+
+### BUG-056  effects and injections in `requires` / `ensures`, refinement predicates and `const` initializers were never checked  [OPEN]
+test: tests/test_compiler_refuses.py
+(`::test_a1_requires_effect`, `::test_a1_ensures_effect`,
+`::test_a1_refinement_predicate_effect`, `::test_a1_const_initializer_effect`,
+`::test_a1_requires_shell_injection`, `::test_a1_pure_contracts_stay_clean`)
+
+Audit A1, probe-confirmed on `52f04aa` (`lang/e01..e04`): a `pure`
+function with `requires isOk?(writeFile(...))`, a refinement `where
+isOk?(writeFile(...))`, a `const X = isOk?(writeFile(...))` under a
+module granting only `log`, and `requires shellExec("rm -rf " + name)
+!= ""` were all exit 0 (and `run` wrote the files).
+
+Root cause: `check_effects`, `check_capabilities` and every security
+detector walked `d["body"]` only, and only `FunctionDecl`s.
+
+Fix (`c193b21`): `fn_exprs(decl)` = body + requires + ensures, and
+`contexts(ast)` = every FunctionDecl plus one synthetic PURE context per
+refinement predicate (`<type T where>`, `self` as its parameter) and per
+const initializer (`<const X>`). Every per-body scan (E0801, E0701, the
+marker-flow and literal-or-wrapper rows, E0716, E0717, E0729) iterates
+`contexts()` / `fn_exprs()`; signature tables still read real
+FunctionDecls. Effects in a predicate or const are E0801 (pure context)
+and, under a module, E0701.
+
+### BUG-057  function values laundered effects and capabilities unless they were a bare Ident argument  [OPEN]
+test: tests/test_compiler_refuses.py
+(`::test_a2_indexed_list_under_module`, `::test_a2_returned_function`,
+`::test_a2_const_alias`, `::test_a2_list_element_to_hof`,
+`::test_a2_if_expr_function`, `::test_a2_pattern_bound_function`,
+`::test_a2_record_field_function`, `::test_a2_sanctioned_shapes_stay_clean`)
+
+Audit A2, probe-confirmed on `52f04aa` (`lang/c01, p02..p05, p07, p08`):
+`let ws = [writeFile]; ws[0](path, s)` in a `pure` function under a
+module granting only `log`; a returned function; `const g = print`; a
+list element handed to `map`; an if-expression of functions; a
+map-valued function unwrapped by `match`; a record-field call — all
+exit 0.
+
+Root cause: `callee_name()` returns None for index / call / if / match
+callees and the call was skipped; a local or const callee with no alias
+binding contributed nothing; `capability.py` treated those callees as
+pure.
+
+Fix (`c193b21`, `8722ce6`): one resolver, `resolve_call()` in
+`passes/effects.py`, shared by E0801 and E0701. Aether has no lambdas,
+so every function value is a named function; a callee the checker
+cannot name (index, call result, if / match expression, record field,
+an opaque local — one bound by a loop, a pattern, a non-function
+parameter or a non-Ident value — or an unresolved const) is bounded by
+the declared effects of every function the program uses as a value
+(an Ident outside callee position, not shadowed locally). The same holds
+for a function value at a position a stdlib HOF or a user
+function-typed parameter calls. E0801 names the bound
+(`extra.via = "unknown_callee"`, `candidates`, `shape`); `capability.py`
+adds an edge to every escaping function. An empty bound (only pure
+functions escape) proves the call pure. Function-typed parameters keep
+BUG-022/024/025 semantics (charged where the function is passed). No
+effects syntax for function types was added (closed design point).
+Translated Python keeps the pre-A2 capability edges (`call["py"]`): the
+closed-world argument does not hold there, and without the guard
+`check-py --strict` gained 39 E0701 on the framework corpus.
+
+Measurement: in-repo `.aeth` corpus 200 = 200 (no corpus program calls
+an unnameable callee with an effectful escaping function); framework
+corpus 676 = 676 default, 10,808 = 10,808 `--strict`.
+
+### BUG-058  name mangling was not injective and shared the namespace of the runtime's own helpers  [OPEN]
+test: tests/test_compiler_refuses.py
+(`::test_a4_user_function_cannot_replace_contract_checker`,
+`::test_a4_user_function_cannot_replace_refinement_checker`,
+`::test_a4_question_suffix_does_not_collide`, `::test_a4_temporaries_do_not_collide`,
+`::test_a4_mangle_is_injective`, `::test_a4_runtime_helpers_unreachable_from_user_names`)
+
+Audit A4 (`lang/n01, n02, n04`), probe-confirmed on `52f04aa`: a user
+`function assert_contract(...)` disabled every `requires`
+(`withdraw(10, -1000)` printed 1010); a user `check_refinement`
+disabled refinements; `valid?` and `valid_q` both mangled to
+`_ae_valid_q`, so the checker judged one function and the runtime ran
+the other. Found while fixing: emitter temporaries `_ae_scrut1`,
+`_ae_tmp1`, ... were the mangled spellings of user names `scrut1`, `tmp1`.
+Closes SPEC_ISSUES S-016.
+
+Fix (`8722ce6`): `mangle()`: `foo?` -> `_ae_foo__q`, `foo!` ->
+`_ae_foo__e`, a plain name ending in `__q`/`__e` -> `_aex_<name>`, else
+`_ae_<name>` (injective; proof in the docstring; `unmangle()` is the
+inverse). Runtime `?` functions renamed (`_ae_isOk__q`, ...). Helpers
+and temporaries live under `_aert_`, which no mangled name can start
+with. `_ae_result` / `_ae_self` stay: they are the user's own `result`
+and `self`. Test: every `build_namespace()` entry is either reachable
+exactly as its stdlib name or unreachable from every identifier.
+
+### BUG-059  the runtime enforced no capabilities  [OPEN]
+test: tests/test_compiler_refuses.py
+(`::test_a3_effect_outside_grant_fails_at_runtime`,
+`::test_a3_release_mode_enforces_too`, `::test_a3_const_initializer_under_module`,
+`::test_a3_capability_firewall_demo_fails_at_runtime`,
+`::test_a3_granted_and_moduleless_programs_run`)
+
+Audit A3 (`lang/c04`), probe-confirmed on `52f04aa`: module `requires
+capability log`, a function calling `writeFile`; `run
+--no-static-effects --no-capability-check` wrote the file. The same run
+of `demos/capability-firewall/log_formatter.aeth` finished exit 0.
+
+Fix (`8722ce6`, `af11754`): a program with a module emits
+`_aert_grant = frozenset([...])` + `set_capability_grant(_aert_grant)`
+at the top and passes the grant on every effect frame. The runtime
+raises a structured E0701 (`extra.runtime = True`) when (a) a stdlib
+function performs an effect outside the grant, or (b) a function whose
+DECLARED effects exceed the grant is invoked (before its body runs).
+Programs without a module keep the implicit all-grant (unchanged
+emitted code). This is a RUNTIME guarantee about the stdlib effects and
+declared effects of the running program, not a static proof. Ceiling:
+`--release` pushes no frames, so there only performed effects are
+checked, against one process-wide grant (two packed modules imported
+into one process share the last one set).
+
+### BUG-060  a net.fetch glob `*` crossed `/ @ :` in the authority  [OPEN]
+test: tests/test_compiler_refuses.py (`::test_a7_glob_does_not_span_the_path`,
+`::test_a7_glob_does_not_span_userinfo`, `::test_a7_subdomain_and_path_globs_still_cover`)
+
+Audit A7 (`lang/g01`): `https://*.corp.example/*` covered
+`https://evil.com/.corp.example/x` (E0801 silent). Fix (`065ee74`): for
+URL globs the cover is decided per part of the parsed URL; `*` in the
+scheme or authority is `[^/@:?#]*`, in the path `.*`. `.aeth` corpus
+200 = 200.
+
+### BUG-061  refinements were checked only on direct `TypeName` parameters  [OPEN]
+test: tests/test_compiler_refuses.py (`::test_a6_every_binding_site_is_checked`,
+`::test_a6_valid_values_pass`)
+
+Audit A6 (`lang/r01..r06`): a refined return, typed `let`, record field,
+`List<PositiveInt>` element, `const`, and the base predicate of a refined
+alias (`type Small = PositiveInt where self < 10` accepted -50) all
+passed at runtime. Fix (`b02eafe`): one `refine_check()` in the emitter
+applied at parameters, returns, annotated let/var and assignments to
+them, consts, record constructor fields and `List<Refined>` elements;
+the hoisted predicate of a refined alias calls its base's predicate.
+Runtime guarantees (E0302 when the value is bound).
+
+### BUG-062  deep input crashed the parser / passes / emitter with a Python traceback  [OPEN]
+test: tests/test_compiler_refuses.py (`::test_a10_deep_parens_and_long_chains_are_e0201`,
+`::test_a10_bounded_depth_still_analyzes_and_runs`, `::test_a10_unemittable_construct_is_e9001`)
+
+Audit A10 (`lang/m01, m02, m07`): ~40+ nested parens → parser
+RecursionError; a 500-term `1 + 1 + ...` chain → RecursionError in
+`ast_walk.walk`; `const X = old(1)` → NotImplementedError. Fix
+(`eaa5d91`): `walk()` iterative; the parser bounds each top-level
+declaration (RecursionError, or AST depth > `MAX_AST_DEPTH` = 200, is
+E0201 with a split-into-lets hint; deepest in-repo program: 13); `emit()`
+turns NotImplementedError into E9001. Done without touching cli.py:
+both are raised as `AetherError` below it.

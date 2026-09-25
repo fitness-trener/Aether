@@ -39,12 +39,14 @@ static pass before it executes, so a program `check` refuses does not run.
 
 **At runtime only** (runtime guarantees, not static proof):
 
-- Refinement predicates, for a function **parameter** whose declared type
-  is a refinement type name — `E0302` (predicate false) / `E0303`
-  (predicate raised). Return values, typed `let`s, record fields, constants,
-  generic arguments (`List<PositiveInt>`) and a refined alias's base
-  predicate are not checked at this version
-  (`audits/audit_2026-09-24_plan.md`, A6).
+- Refinement predicates — `E0302` (predicate false) / `E0303` (predicate
+  raised) — when a value is bound at a parameter, a return, an annotated
+  `let`/`var` and each assignment to it, a `const`, a record constructor
+  field, or an element of a `List<Refined>`; a refined alias
+  (`type Small = PositiveInt where self < 10`) also checks its base's
+  predicate. Not checked: `Map`/`Option`/`Result`/`Set` payloads, a record
+  field updated after construction, and an assignment to a name annotated
+  in a different function (`audits/audit_2026-09-24_plan.md`, A6).
 - `requires` / `ensures` contracts — `E0301` / `E0304`; stdlib
   preconditions — `E0305`.
 - Declared effects, only under `--effect-strict` — `E0501` / `E0502`.
@@ -114,9 +116,10 @@ exhaustiveness pass refuses a missing case with `E0202`.
     type Probability = Float where self >= 0.0 and self <= 1.0
 
 Inside the refinement clause, `self` is the candidate value. The predicate
-is checked **at runtime**, at entry to a function, for each parameter
-whose declared type is the refinement type (`E0302`); see the list above
-for the positions that are not checked. Inside a function body the
+is checked **at runtime** (`E0302`) at each binding site listed above:
+parameters, returns, annotated `let`/`var` and their assignments, consts,
+record constructor fields and `List<Refined>` elements; the same list
+names the positions that are not checked. Between those sites the
 refinement is assumed, not re-proved.
 
 The one static check on a refinement is `E0207`: an integer interval that
@@ -176,8 +179,8 @@ consistently (SPEC_ISSUES S-007).
 ## Subtyping
 
 There is no subtyping. Passing a base value where a refinement type is
-declared is allowed; the predicate is asserted at runtime on entry to the
-callee (see *Refinement types*).
+declared is allowed; the predicate is asserted at runtime where the value
+is bound, e.g. on entry to the callee (see *Refinement types*).
 
 ## Inference
 

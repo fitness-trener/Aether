@@ -2479,6 +2479,44 @@ State carried forward: the full gate suite must stay green
 
 ---
 
+## Iteration 58 — Wave 2 of the 2026-09-24 audit: the compiler refuses again (no new detector)
+
+- **Target:** not a backlog row. Plan Wave 2 (A5, A1, A2, A4, A3) plus
+  A6, A7, A10 from Wave 6's language list: each is a place the compiler
+  accepted, or the runtime ran, what the language promises to refuse.
+- **Probe-confirmed first (on `52f04aa`, `check` exit 0 or wrong run):**
+  the four arch for/match-shadow probes (E0711, E0713, match E0711, E0717
+  IDOR); `lang/e01..e04` (effects in contracts, predicates, consts);
+  `lang/c01, p02..p05, p07, p08` (function values); `lang/n01, n02, n04`
+  (mangling); `lang/c04` and the capability-firewall demo under
+  `--no-static-effects --no-capability-check`; `lang/g01`; `lang/r01..r06`;
+  `lang/m01, m02, m07`.
+- **Fixes (one mechanism per root cause):**
+  - `binders(fn)` — one binding iterator (params, let/var/assign, for,
+    BindPat/AsPat in match statements and expressions) read by all six
+    fixpoints; value-less binders disqualify proofs.
+  - `fn_exprs()` + `contexts()` — contracts, refinement predicates and
+    const initializers are code, scanned by every pass.
+  - `resolve_call()` — an unnameable callee is bounded by the effects of
+    every function the program uses as a value (closed world: no
+    lambdas); shared by E0801 and E0701.
+  - Injective `mangle()`, helpers under `_aert_`.
+  - Runtime capability grant: performed and declared effects outside a
+    module's grant raise E0701 at run time.
+  - URL-part glob cover; `refine_check()` at every binding site;
+    iterative walk + parser depth bound + E9001 from emit.
+- **Measured non-breaking:** in-repo `.aeth` corpus 200 findings before
+  and after, identical; framework corpus 676 = 676 (default) and
+  10,808 = 10,808 (`--strict`); in-repo Python trees unchanged except the
+  new test file itself.
+- **TYPE gap surfaced:** effect names are still unchecked (A11) — the
+  spec lattice (`db.read`/`db.write`) and the stdlib (`db.query`/`db.exec`,
+  `exec.run`, `net.redirect`) disagree, so "only spec'd names" cannot be
+  enforced until the list is regenerated from code (Wave 6 E5).
+- **Residuals (pushed to q1):** see q1 rows below.
+
+---
+
 ---
 
 ## Next-iteration checklist (for the loop)
