@@ -841,6 +841,14 @@ def test_a10_unemittable_construct_is_e9001():
         got = e.diag.code
     assert got == "E9001"
 
+def test_a3_capability_firewall_demo_fails_at_runtime():
+    # demos/capability-firewall/log_formatter.aeth with every static pass
+    # skipped: `exfil` DECLARES net.fetch under a module granting only
+    # log, and is refused when invoked (no stdlib call needed).
+    path = os.path.join(ROOT, "demos", "capability-firewall", "log_formatter.aeth")
+    out, code = run(open(path, encoding="utf-8").read())
+    assert code == "E0701", (out, code)
+
 if __name__ == "__main__":
     n = 0
     for name, fn in sorted(globals().items()):

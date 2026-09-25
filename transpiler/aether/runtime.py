@@ -102,6 +102,13 @@ class EffectTracker:
 
     def push_frame(self, declared: List[Tuple[str, ...]],
                    grant: Optional[frozenset] = None):
+        if grant is not None:
+            # A function whose DECLARED effects exceed the module grant is
+            # refused when invoked, before its body runs — a declared
+            # effect with no stdlib call behind it (`net.fetch`) is still
+            # a reach the module never granted.
+            for path in declared:
+                _check_grant(tuple(path), grant)
         self.allowed.append(declared)
         self.grants.append(grant)
 
