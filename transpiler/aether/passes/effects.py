@@ -40,13 +40,13 @@ from typing import Any, Dict, List, Set, Tuple, Iterable, Optional
 
 from ..confidence import FLOOR
 from ..diagnostics import Diagnostic, Position
-from .ast_walk import walk, callee_name, binders, fn_exprs, contexts
+from .ast_walk import walk, callee_name, binders, fn_exprs, contexts, fn_calls, all_nodes, names_in
 from .detector_specs import (
     build, boundary_markers, _is_marker_type, _type_carries_marker,
     _marker_source_fns, _marker_param_mask, _marker_field_names, _expr_leaks_marked,
     _fn_aliases, _aliased_mask, _marked_taint,
     _marked_records, _record_fns, _sink_targets, _walk_binds,
-    marker_sink_sanitizers, param_sink_reach,
+    marker_sink_sanitizers, param_sink_reach, marker_absent,
 )
 
 
@@ -606,12 +606,16 @@ _BOUNDARY_MARKERS = boundary_markers()
 def check_marker_boundary(ast: Dict[str, Any]) -> List[Diagnostic]:
     """Return E0729 diagnostics for a marker-carrying value passed to a
     user-declared function parameter not typed with that marker."""
+    diags: List[Diagnostic] = []
+    present = [(m, u) for m, u in _BOUNDARY_MARKERS.items()
+               if not marker_absent(ast, m)]
+    if not present:
+        return diags   # no marker, nothing to launder (audit F5)
     decls = {d["name"]: d for d in ast.get("decls", [])
              if d.get("kind") == "FunctionDecl"}
     reach = param_sink_reach(ast)          # BUG-023: which sink a param feeds
     sink_san = marker_sink_sanitizers()    # marker -> sink -> its sanitizer
-    diags: List[Diagnostic] = []
-    for marker, unwraps in _BOUNDARY_MARKERS.items():
+    for marker, unwraps in present:
         row_san = sink_san.get(marker, {})
         sanitizers = frozenset(row_san.values())
         src_fns = _marker_source_fns(ast, marker)
@@ -647,7 +651,7 @@ def check_marker_boundary(ast: Dict[str, Any]) -> List[Diagnostic]:
             ft_al = _fn_aliases(d, frozenset(ftparams)) if ftparams else {}
             leaks = lambda node, uw: _expr_leaks_marked(   # noqa: E731
                 node, tainted, uw, src_l, pmask_l, mfields, rec_names)
-            for call in walk(fn_exprs(d), "Call"):
+            for call in fn_calls(d):
                 cname = callee_name(call)
                 direct = decls.get(cname)
                 cands = [direct] if direct is not None else \
@@ -784,6 +788,8 @@ def check_return_laundering(ast: Dict[str, Any]) -> List[Diagnostic]:
     at the return site. Authorized<T> excluded (proof marker)."""
     diags: List[Diagnostic] = []
     for marker, unwraps in _BOUNDARY_MARKERS.items():
+        if marker_absent(ast, marker):
+            continue   # nothing can carry it (audit F5)
         src_fns = _marker_source_fns(ast, marker)
         pmask = _marker_param_mask(ast, marker)
         mfields = _marker_field_names(ast, marker)
@@ -1523,6 +1529,7 @@ def check_authorization(ast: Dict[str, Any]) -> List[Diagnostic]:
                 f"initialize the const with {_AUTH_GUARD}(principal, action)",
                 {"name": d.get("name"), "reason": "annotation coercion"},
             ))
+    names = names_in(ast)
     for d in contexts(ast):
         fn = d["name"]
         fpos = d.get("pos") or {"line": 0, "column": 0}
@@ -1531,7 +1538,7 @@ def check_authorization(ast: Dict[str, Any]) -> List[Diagnostic]:
         # Obligation 1 — call-site proof for Authorized<...> parameters.
         # This is what makes trusting those parameters (above) sound: a
         # raw value is rejected where it enters, so it can never arrive.
-        for call in walk(body, "Call"):
+        for call in fn_calls(d):
             callee = callee_name(call)
             idxs = gated.get(callee)
             if not idxs:
@@ -1558,8 +1565,9 @@ def check_authorization(ast: Dict[str, Any]) -> List[Diagnostic]:
                     f"proven Authorized) as argument {i} of {callee}",
                     {"callee": callee, "param": pname, "reason": reason},
                 ))
-        # Obligation 2 — annotation cannot mint the type.
-        for b in _walk_marker_binds(body):
+        # Obligation 2 — annotation cannot mint the type. (No
+        # `Authorized` anywhere: no annotation to check — audit F5.)
+        for b in (_walk_marker_binds(body) if _AUTH_MARKER in names else ()):
             if _expr_is_authorized(b.get("value"), authorized, minters):
                 continue
             pos = b.get("pos") or fpos
@@ -1575,7 +1583,7 @@ def check_authorization(ast: Dict[str, Any]) -> List[Diagnostic]:
                 {"name": b.get("name"), "reason": "annotation coercion"},
             ))
         # Obligation 3 — gated functions must not escape as values.
-        for gname in _escaped_gated_idents(body, set(gated)):
+        for gname in (_escaped_gated_idents(body, set(gated)) if gated else ()):
             diags.append(_e0716(
                 fn,
                 f"function {fn!r} uses the {_AUTH_MARKER}-gated function "
@@ -1625,7 +1633,7 @@ def check_authorization(ast: Dict[str, Any]) -> List[Diagnostic]:
                         {"reason": "return does not mint declared proof"},
                     ))
         sink_al = _fn_aliases(d, frozenset(_MUTATION_SINKS))
-        for call in walk(body, "Call"):
+        for call in fn_calls(d):
             hits = _sink_targets(callee_name(call), sink_al, _MUTATION_SINKS)
             if not hits:
                 continue
@@ -1765,7 +1773,7 @@ def check_resource_authorization(ast: Dict[str, Any]) -> List[Diagnostic]:
         stable = _stable_names(d)
         proof_ids = _resource_proof_ids(d, stable)
         sink_al = _fn_aliases(d, frozenset({_RESOURCE_SINK}))
-        for call in walk(fn_exprs(d), "Call"):
+        for call in fn_calls(d):
             if not _sink_targets(callee_name(call), sink_al, {_RESOURCE_SINK}):
                 continue
             args = call.get("args") or []
@@ -1869,7 +1877,7 @@ def check_hardcoded_secret(ast: Dict[str, Any]) -> List[Diagnostic]:
            "load the secret at runtime from the environment or "
            "a secret manager (e.g. getEnv(\"...\")), never a "
            "string literal")
-    for lit in walk(ast, "StringLit"):
+    for lit in (n for n in all_nodes(ast) if n.get("kind") == "StringLit"):
         val = lit.get("value")
         if not isinstance(val, str):
             continue
@@ -2156,7 +2164,8 @@ def check_effects(ast: Dict[str, Any]) -> List[Diagnostic]:
         cx = context_names(d, prog)
 
         def e0801(what: str, callee: str, eff: EffectEntry,
-                  via: Optional[str], extra: Dict[str, Any]) -> Diagnostic:
+                  via: Optional[str], extra: Dict[str, Any],
+                  at: Dict[str, Any]) -> Diagnostic:
             missing_pretty = _format_effect(eff)
             # Removal first: widening the clause silences E0801 without
             # removing the effect (audit 2026-09-24, Wave 3 D1).
@@ -2176,7 +2185,8 @@ def check_effects(ast: Dict[str, Any]) -> List[Diagnostic]:
                 severity="error",
                 message=(f"function {caller_name!r} (effects "
                          f"{_format_effect_list(caller_effects)}) " + what),
-                position=Position(pos.get("line", 0), pos.get("column", 0)),
+                # At the offending call (audit D10); the decl if unpositioned.
+                position=Position(at.get("line", 0), at.get("column", 0)),
                 suggestion=hint,
                 confidence=1.0,
                 extra={"caller": caller_name, "callee": callee,
@@ -2185,8 +2195,9 @@ def check_effects(ast: Dict[str, Any]) -> List[Diagnostic]:
                        **({"via": via} if via else {}), **extra},
             )
 
-        for call in walk(fn_exprs(d), "Call"):
+        for call in fn_calls(d):
             name = callee_name(call)
+            at = call.get("pos") or pos
             targets, unknown = resolve_call(call, cx, prog)
             for callee, as_value in targets:
                 callee_effects = prog["user_effects"].get(callee)
@@ -2208,7 +2219,7 @@ def check_effects(ast: Dict[str, Any]) -> List[Diagnostic]:
                                 f"{missing_pretty} not covered by the caller")
                     diags.append(e0801(what, callee, callee_eff,
                                        "function_value" if as_value is not None
-                                       else None, {}))
+                                       else None, {}, at))
             if unknown is None:
                 continue
             for fn, eff in bound:
@@ -2220,5 +2231,6 @@ def check_effects(ast: Dict[str, Any]) -> List[Diagnostic]:
                         f"{fn!r} has effect {_format_effect(eff)} not covered by "
                         f"the caller")
                 diags.append(e0801(what, fn, eff, "unknown_callee",
-                                   {"candidates": candidates, "shape": unknown}))
+                                   {"candidates": candidates, "shape": unknown},
+                                   at))
     return diags

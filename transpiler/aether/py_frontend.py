@@ -35,6 +35,7 @@ Output of `py_to_ir(source)`:
 from __future__ import annotations
 import ast as _pyast
 import re
+from contextvars import ContextVar
 import shlex
 from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 
@@ -647,12 +648,31 @@ def _param_names(a: Any) -> List[str]:
     return out
 
 
+# `_bindings_of` per node, while `py_to_ir` translates the `def`s: six
+# callers asked for the same function's bindings, each re-walking it —
+# 60% of frontend time on the slowest framework files (audit F5). Only
+# live during the `def` phase: the scope phase then strips `def`s out of
+# class and module nodes IN PLACE, which would make a cached entry stale.
+_BINDINGS_MEMO: ContextVar[Optional[Dict[int, Tuple[Any, List[Any]]]]] = \
+    ContextVar("aether_py_bindings", default=None)
+
+
 def _bindings_of(node: Any) -> List[Tuple[str, Any, int]]:
     """Every (name, value-or-None, line) binding inside `node`: its own
     parameters when it is a function, then every binding form in its
     body — nested functions and lambdas included, because their bodies
     are translated into the enclosing function and their names are its
     names. Over a Module it is every binding in the file, at any depth."""
+    memo = _BINDINGS_MEMO.get()
+    if memo is None:
+        return _bindings_walk(node)
+    hit = memo.get(id(node))
+    if hit is None or hit[0] is not node:
+        hit = memo[id(node)] = (node, _bindings_walk(node))
+    return list(hit[1])
+
+
+def _bindings_walk(node: Any) -> List[Tuple[str, Any, int]]:
     out: List[Tuple[str, Any, int]] = []
     if isinstance(node, (_pyast.FunctionDef, _pyast.AsyncFunctionDef, _pyast.Lambda)):
         out += [(n, None, getattr(node, "lineno", 0)) for n in _param_names(node.args)]
@@ -2976,8 +2996,12 @@ def py_to_ir(source: str) -> Tuple[Dict[str, Any], Dict[str, List[Dict[str, Any]
         if v.unprovable:
             unprovable_map[qual] = v.unprovable
 
-    for qual, node in func_nodes:
-        translate(qual, node, getattr(node, "lineno", 0))
+    memo_token = _BINDINGS_MEMO.set({})
+    try:
+        for qual, node in func_nodes:
+            translate(qual, node, getattr(node, "lineno", 0))
+    finally:
+        _BINDINGS_MEMO.reset(memo_token)
 
     # Code that runs when the module is imported — `os.system(sys.argv[1])`
     # at the top level, an `if __name__ == "__main__":` block, a class

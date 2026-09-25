@@ -27,7 +27,50 @@ anchor contract. Nor are the passes that PRUNE (`_expr_leaks_marked`,
 """
 
 from __future__ import annotations
-from typing import Any, Dict, Iterator, List, NamedTuple, Optional
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Any, Callable, Dict, Iterator, List, NamedTuple, Optional, Tuple
+
+
+# ----------------------------------------------------------------------
+# The per-analysis index (audit 2026-09-24 F5)
+# ----------------------------------------------------------------------
+# Thirty detectors each re-walked every function for its binders, its
+# calls and its contexts: ~5.4M `walk()` frames on the three slowest
+# framework files, 77% of analysis time. Inside `shared_index()` (which
+# `passes.analyze()` enters) each of those per-node results is computed
+# once and handed to every detector. Outside it nothing is cached, so a
+# detector called directly behaves exactly as before.
+#
+# Keyed by `id(node)`, with the node itself kept in the entry and compared
+# by identity, so a recycled id can never alias. Sound only because no
+# pass mutates the AST during analysis (the same property the walk's
+# pre-order contract already relies on).
+_INDEX: ContextVar[Optional[Dict[Tuple[str, int], Tuple[Any, Any]]]] = \
+    ContextVar("aether_shared_index", default=None)
+
+
+@contextmanager
+def shared_index():
+    """Share per-node walk results across every detector run inside."""
+    token = _INDEX.set({})
+    try:
+        yield
+    finally:
+        _INDEX.reset(token)
+
+
+def _indexed(tag: str, node: Any, compute: Callable[[], Any]) -> Any:
+    memo = _INDEX.get()
+    if memo is None:
+        return compute()
+    key = (tag, id(node))
+    hit = memo.get(key)
+    if hit is not None and hit[0] is node:
+        return hit[1]
+    value = compute()
+    memo[key] = (node, value)
+    return value
 
 
 def walk(node: Any, *kinds: str) -> Iterator[Dict[str, Any]]:
@@ -60,7 +103,14 @@ def fn_exprs(decl: Dict[str, Any]) -> List[Any]:
             decl.get("ensures", [])]
 
 
-def contexts(ast: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
+def contexts(ast: Dict[str, Any]) -> Tuple[Dict[str, Any], ...]:
+    """`_contexts(ast)` as a tuple, built once per analysis: the
+    synthetic contexts must be the SAME dicts for every detector, or the
+    per-function index below would miss on them."""
+    return _indexed("contexts", ast, lambda: tuple(_contexts(ast)))
+
+
+def _contexts(ast: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
     """Every evaluation context of a program, as function-shaped dicts:
     each `FunctionDecl`, plus one synthetic PURE context per refinement
     predicate (`type T = B where <pred>`, run at every boundary check,
@@ -104,7 +154,30 @@ class Binder(NamedTuple):
     source: Optional[Dict[str, Any]]
 
 
-def binders(decl: Dict[str, Any]) -> Iterator[Binder]:
+def binders(decl: Dict[str, Any]) -> Tuple[Binder, ...]:
+    """`_binders(decl)` as a tuple, built once per analysis."""
+    return _indexed("binders", decl, lambda: tuple(_binders(decl)))
+
+
+def fn_calls(decl: Dict[str, Any]) -> Tuple[Dict[str, Any], ...]:
+    """Every `Call` a function evaluates — `walk(fn_exprs(decl), "Call")`,
+    in the same pre-order, built once per analysis."""
+    return _indexed("calls", decl, lambda: tuple(walk(fn_exprs(decl), "Call")))
+
+
+def all_nodes(node: Any) -> Tuple[Dict[str, Any], ...]:
+    """`walk(node)` — every dict node, pre-order — built once per analysis."""
+    return _indexed("nodes", node, lambda: tuple(walk(node)))
+
+
+def names_in(node: Any) -> frozenset:
+    """Every string `name` field anywhere under `node` (identifiers,
+    callees, declarations, type names), built once per analysis."""
+    return _indexed("names", node, lambda: frozenset(
+        n["name"] for n in all_nodes(node) if isinstance(n.get("name"), str)))
+
+
+def _binders(decl: Dict[str, Any]) -> Iterator[Binder]:
     """Every binding in a function: its parameters (kind `Param`, value
     None), then in body and contracts `let`, `var`, assignment, `for`
     loop variable, and each `BindPat` / `AsPat` name of every `match`

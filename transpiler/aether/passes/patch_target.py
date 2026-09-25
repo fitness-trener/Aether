@@ -149,12 +149,13 @@ def _patch_E0801(ast: Dict[str, Any], diag) -> Optional[Path]:
     `effects` field used to be the only target, which made widening the
     one mechanical repair on offer (audit 2026-09-24 D1).
 
-    The diagnostic carries the callee's name but not the call's position,
-    so this picks the caller's first call to `callee`, else the first call
-    passing `callee` as a value (`extra.via == "function_value"`).
-    ponytail: first match by name; an exact pick needs the call position
-    in `extra` (D10). Falls back to the effects clause when neither is
-    found (a call through an alias)."""
+    The diagnostic is positioned at the call (audit D10), so the call at
+    that position is the target — the one whose callee is `callee` when a
+    call chain shares that start. With no call at the position (an AST
+    edited since the check, a call in a contract clause) it picks the
+    caller's first call to `callee`, else the first call passing `callee`
+    as a value (`extra.via == "function_value"`). Falls back to the
+    effects clause when none is found (a call through an alias)."""
     extra = diag.extra or {}
     idx = _find_decl_index(ast, "FunctionDecl", extra.get("caller"))
     if idx is None:
@@ -163,6 +164,13 @@ def _patch_E0801(ast: Dict[str, Any], diag) -> Optional[Path]:
     # Body only: check_effects never reads the contract clauses.
     calls = [c for j, stmt in enumerate(ast["decls"][idx].get("body") or [])
              for c in _walk_calls_with_path(stmt, [("body", j)])]
+    pos = getattr(diag, "position", None)
+    at = [(path, call) for path, call in calls if pos is not None
+          and (call.get("pos") or {}).get("line") == pos.line
+          and (call.get("pos") or {}).get("column") == pos.column]
+    named = [pc for pc in at if _callee_name(pc[1]) == callee]
+    if at:
+        return [("decls", idx)] + (named or at)[0][0]
     for path, call in calls:
         if _callee_name(call) == callee:
             return [("decls", idx)] + path
