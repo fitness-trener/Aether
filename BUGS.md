@@ -2081,7 +2081,7 @@ Measured: framework `--min-confidence 0.9` 55 → 51 (the 4 stdlib
 `ET.fromstring`/`parse` sites → 0.6; 0 corpus findings demoted by
 argument shape); probes ≥ 0.9: 20 → 6.
 
-### BUG-077  exit codes conflated findings, parse errors, usage errors and crashes; a crash under `--json` was a raw traceback  [OPEN]
+### BUG-077  exit codes conflated findings, parse errors, usage errors and crashes; a crash under `--json` was a raw traceback  [FIXED 69e1b3b]
 test: tests/test_exit_codes.py (`::test_check_exit_table`,
 `::test_check_crash_is_3_and_json_survives`, `::test_check_py_exit_table`,
 `::test_check_py_crash_is_3`, `::test_scan_exit_table_and_json`,
@@ -2125,7 +2125,7 @@ seen even when findings make the exit 1) fails unless the new
 `aether test` keeps its fixture table (0/1/2) on purpose — `run_all.py` and
 `bench/harness.py` grade on it.
 
-### BUG-078  five JSON shapes: `--json check` wrote JSONL to stderr, `check-py --json` said `ok: true` with nothing analysed, `patch_target` existed only in the LSP  [OPEN]
+### BUG-078  five JSON shapes: `--json check` wrote JSONL to stderr, `check-py --json` said `ok: true` with nothing analysed, `patch_target` existed only in the LSP  [FIXED 69e1b3b]
 test: tests/test_exit_codes.py (`::test_check_json_is_one_document_on_stdout`,
 `::test_check_py_json_complete_and_ok`, `::test_check_py_no_unprovable`,
 `::test_sdk_and_lsp_speak_to_dict`, `::test_sarif_rules_carry_descriptions`)
@@ -2172,7 +2172,7 @@ remove both in 0.6. `tools/alsp_surface.py` and `tools/py_surface.py` build
 their own dicts (with `col`) and were not changed (not owned, not
 `aether/check`).
 
-### BUG-079  `check-py` exited 0 with `ok: true` when the files could not be parsed — valid 3.12 source scanned on 3.10/3.11 included  [OPEN]
+### BUG-079  `check-py` exited 0 with `ok: true` when the files could not be parsed — valid 3.12 source scanned on 3.10/3.11 included  [FIXED 69e1b3b]
 test: tests/test_exit_codes.py (`::test_newer_python_syntax_is_incomplete_with_hint`,
 `::test_check_py_exit_table`); tests/test_py_frontend_sinks.py
 (`::test_unreadable_and_skipped_are_visible_in_every_mode`)
