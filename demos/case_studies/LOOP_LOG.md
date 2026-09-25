@@ -2517,6 +2517,41 @@ State carried forward: the full gate suite must stay green
 
 ---
 
+## Iteration 59 — Wave 4 of the 2026-09-24 audit: the Python scanner stops missing (no new detector)
+
+- **Target:** not a backlog row. Plan Wave 4 (B4, B5, B8, B9, B10; B1–B3
+  and B7 already fixed as BUG-032..035; B6 is Wave 5): silent false
+  accepts inside the modeled surface.
+- **Probe-confirmed first (on `47139a1`):** 43 of the audit's `pymiss`
+  repros in this scope were wrong — 41 silent, `getattr(builtins,
+  "exec")` reported as E0713, E0723 at `(0, 0)` in an f-string: raw
+  `text()`/`literal_column`/`db.text` outside an executor, str-shaped
+  `.where`/`.filter`, aliases and dynamic callees, `builtins.*`, table
+  spellings, bytes credentials. Of the 28 new table rows, 27 were silent
+  through their generated snippet (`duckdb.execute` fired at 0.6).
+- **Fixes (each once, where every caller routes through):** a raw SQL
+  string entry is the sink itself (`_raw_sql_entry`), deduplicated
+  against the executor that judges the same value; one alias resolver
+  (`_ModuleFacts` + `_FnScope.value_of`, `_alias_target`, `_attr_spelling`,
+  `_unwrap_indirect`) used by `_callee_spelling` and `_call_expr`;
+  `builtins.X` before the by-method rows; 28 pinned rows; receiver-side
+  guards; positioned f-string parts; bytes scanned for E0723 only.
+- **Measured:** framework corpus (4,946 files) 676 → 707, +31 / −0, 0
+  confidence changes on kept findings, 0 errors, 0 unparseable; in-repo
+  trees 110 → 111 (the new test's own fixture). Every addition read at
+  source: 26 true by rule, 5 over-flags of the any-receiver `.text` row.
+- **Residuals (pushed to q1):** see q1 rows below.
+- **TYPE gap surfaced for next iter:** a receiver's TYPE decides three of
+  this wave's rows and only a constructor call in the same scope can name
+  it (`code.InteractiveConsole().push`, `YAML(typ=)`, `db.text`); an
+  attribute receiver (`self.console.push(src)`, `self.db.text(q)`) is
+  still unresolved. A per-class attribute-binding summary
+  (`self.x = Ctor(...)` in `__init__`) is the next lever — measure its
+  reach on the corpus before building it (q3).
+- **Suite:** exit 0 (`smt` SKIP, z3 not installed locally).
+
+---
+
 ---
 
 ## Next-iteration checklist (for the loop)

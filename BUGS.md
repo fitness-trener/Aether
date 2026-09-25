@@ -1743,3 +1743,166 @@ declaration (RecursionError, or AST depth > `MAX_AST_DEPTH` = 200, is
 E0201 with a split-into-lets hint; deepest in-repo program: 13); `emit()`
 turns NotImplementedError into E9001. Done without touching cli.py:
 both are raised as `AetherError` below it.
+
+### BUG-065  a non-literal raw SQL string was judged only inside an executor's argument; bound to a name, passed to `Query.filter`/`scalars`/`from_statement`, or built in `.where(...)`, it was silent (false accept)  [OPEN]
+test: tests/test_py_frontend_sinks.py
+(`::test_raw_sql_string_is_a_finding_wherever_it_enters`)
+
+Found 2026-09-24 by the whole-repo audit (B4, B5, PM-5, PM-7), confirmed on
+`47139a1`. Silent: `order = text(col); session.execute(select(t).order_by(order))`
+(README: "still an injection … built in one statement or across several");
+`cond = text("n = '" + name + "'")` then `.where(cond)`;
+`session.query(User).filter(text(f"..."))`; `session.scalars(text(f"..."))`,
+`session.scalar(...)`; `.from_statement(text(f"..."))`;
+`c = literal_column(col)`; module-level `COND = text(sys.argv[1])`;
+`conds = [text(a), text(b)]`; Flask-SQLAlchemy `User.query.filter(db.text("n='" + name + "'"))`
+and `select(User).where(db.text(f"..."))` (sanctioned as `sqlBind` —
+`db.text` resolves through no import); `select(t).where("n = '" + name + "'")`
+and `users.select().where(...)` (sanctioned: the str argument was never
+inspected); `session.query(User).filter("name = '%s'" % name)`.
+
+Root cause: `text()`/`literal_column()` were only a *disqualifier* inside
+`_is_sql_expression`; the finding came from the executor that judged the
+expression, so a raw entry that never sat inside an executor's argument
+had no finding at all. `db.text` matched no row. A str argument to
+`.where()` was not a raw entry.
+
+Fix (`a45ad9d`): `_raw_sql_entry(call)` — a non-literal raw SQL string
+entering the expression language IS the E0713 sink (`sqlQuery`, the string
+in the judged slot), wherever it appears: `text`/`literal_column` resolved
+into sqlalchemy/sqlmodel (`qualified`, 0.95); `.text(x)` on ANY receiver
+with SQLAlchemy's one-argument signature (`method`, 0.6 — over-flag by name,
+see Measurements for its cost); a str-shaped argument (f-string, concat with
+a str literal, `"..." % x`, `"...".format`/`.join`) to `.where`/`.filter`/
+`.having` (`method`). Inside a recognised builder chain, a str-shaped
+argument to `.where/.filter/.having/.order_by/.group_by/.select` or
+`select(...)`, and any non-literal `.text(...)` whatever its signature,
+sanctions nothing (the executor judges it). A literal, a literal-bound
+name, a module literal constant, a tuple/list/number argument
+(`draw.text((x, y), s)`) are not entries. One finding per flow: an entry
+inside an executor's judged argument, or bound to a name an executor then
+judges (`q = text(f"..."); session.execute(q)`), is un-named
+(`_demote_raw_entries`), because the executor fires on exactly that value —
+so `session.execute(text(f"..."))` still reports once, at its line, with
+its old match kind (0 confidence changes on the corpus).
+
+Measurement: framework corpus +29 E0713 (below); in-repo trees 0.
+
+### BUG-066  a sink reached through a literal dynamic import, a module-level alias, a local builtin alias, `functools.partial` or a dispatch table was silent (false accept)  [OPEN]
+test: tests/test_py_frontend_sinks.py
+(`::test_aliases_and_dynamic_callees_reach_the_sink`)
+
+Found 2026-09-24 by the audit (B8, PM-8), confirmed on `47139a1`, all
+silent: `importlib.import_module("os").system(cmd)`, `__import__("os").system(cmd)`,
+module-level `system = os.system` then `system(cmd)`, `evaluate = eval`,
+function-local `e = eval; e(x)`, `run = functools.partial(os.system, cmd); run()`,
+module-level `sh = functools.partial(subprocess.run, shell=True); sh(cmd)`,
+`HANDLERS = {"sh": os.system}; HANDLERS["sh"](cmd)`, `p = pickle; p.loads(b)`.
+
+Root cause: `_callee_spelling` resolved a bare name only through imports
+and function-local single dotted bindings; a receiver only through an
+import alias; a call target that is a call or a subscript not at all.
+
+Fix (`a45ad9d`): `_ModuleFacts` — module-level names bound once in the
+whole module (the `module_lits` bar) with their value expression and
+dotted spelling; `_FnScope.value_of` (local single binding, else module).
+`_alias_target` follows Name→Name/Attribute single bindings (≤5 hops) so an
+aliased builtin is the builtin unless the builtin's own name is shadowed;
+`_attr_spelling` names a receiver that is a literal `import_module`/
+`__import__` call (or a name bound to one), `__builtins__`, or a
+constructor whose `Ctor.method` is a table row; `_unwrap_indirect`
+rewrites `partial(f, *a, **k)(*b, **j)` (direct or through a single-binding
+name) to `f(*a, *b, **k, **j)`, and a call through a subscript of a
+dict/list/tuple display (inline or single-binding) to the entry a literal
+key selects, else to ANY entry that is a sink (over-flag). Synthesized
+calls carry the outer call's position.
+
+Behaviour change (precision, same bar): a module-level alias of a
+SANCTIONED value now clears a guard like a function-local one —
+`LOADER = yaml.SafeLoader` (bound once in the module) then
+`yaml.load(x, Loader=LOADER)` is clean (was E0720).
+
+Measurement: framework corpus 0 added / 0 removed by this item alone.
+
+### BUG-067  builtins reached through the `builtins` module were silent, and `getattr(builtins, "exec")(src)` was reported as SQL injection  [OPEN]
+test: tests/test_py_frontend_sinks.py
+(`::test_builtins_spelled_through_the_module_are_the_builtin`)
+
+Found 2026-09-24 by the audit (B9, B10, PM-9/PM-10), confirmed on
+`47139a1`: `builtins.eval(x)`, `from builtins import exec as run; run(src)`,
+`__builtins__["eval"](src)` silent; `getattr(builtins, "exec")(src, {})`
+reported E0713 (the by-method `exec` row — sqlmodel `Session.exec` — ran
+because the builtin row matched bare names only).
+
+Fix (`a45ad9d`): `_sink_match` treats a spelling `builtins.<X>` (from an
+import, a from-import, `getattr(builtins|__builtins__, "X")`,
+`__builtins__["X"]`) as the builtin `X`, decided before the by-method rows;
+`session.exec(stmt)` stays E0713.
+
+### BUG-068  spellings of already-modeled sinks were silent (sink-table gaps)  [OPEN]
+test: tests/test_sink_rows.py (every row pinned);
+tests/test_py_frontend_sinks.py (`::test_wave4_sink_rows_fire_and_safe_forms_clear`)
+
+Found 2026-09-24 by the audit (B9, PM-9). Each row was run on `47139a1`
+through the same generated snippet `test_sink_rows` uses — every one
+silent, except `duckdb.execute` (already E0713 via the `execute` method
+row at 0.6; the qualified row raises it to 0.95):
+
+- E0718 `redirect`: `werkzeug.utils.redirect`, `quart.redirect`,
+  `django.http.HttpResponsePermanentRedirect`, `aiohttp.web.HTTPSeeOther`,
+  `.HTTPTemporaryRedirect`, `.HTTPPermanentRedirect`, `.HTTPMovedPermanently`.
+- E0713 `sqlQuery`: `duckdb.sql`, `duckdb.execute`, `duckdb.query`;
+  methods `execute_sql` (peewee/ODPS), `sql` (duckdb connection, pyspark,
+  snowflake, rockset, manticore — all 16 corpus `.sql(` calls are SQL
+  executors), `extra` (Django `QuerySet.extra`: only the strings of
+  `select=`/`where=`/`tables=`/`order_by=` (or those positional slots) are
+  judged; `extra(where=["a = %s"], params=[x])` stays clean).
+- E0720 `deserialize`: `_pickle.loads`, `_pickle.load`; guards
+  `ruamel.yaml.YAML.load`/`.load_all` on the constructor's `typ` —
+  `"unsafe"` or unresolvable is a sink, absent/`"safe"`/`"rt"` clean.
+- E0719 `renderTemplate`: `jinja2.nativetypes.NativeTemplate`,
+  `tornado.template.Template`; guards on `template_format="jinja2"` for
+  `PromptTemplate.from_template` / `ChatPromptTemplate.from_template`
+  under `langchain_core.prompts` and `langchain.prompts`.
+- E0731 `evalCode`: `runpy.run_path`, `runpy.run_module`,
+  `code.InteractiveInterpreter.runsource`, `code.InteractiveConsole.runsource`,
+  `code.InteractiveConsole.push`. **E0731, not E0711:** the existing E0731
+  doctrine is "the caller picks the code that runs" (CWE-94). `run_path`
+  executes the file at the path and `run_module` the module named — nothing
+  is read back, the argument selects the code, which is E0731's class;
+  E0711 (path traversal) describes reading/writing a path and is also
+  strict-only, which would hide an RCE by default. The `code.*` rows are
+  spelled through the constructor (`code.InteractiveConsole().push(s)` or
+  `i = code.InteractiveConsole(); i.push(s)`): a `push`/`runsource` METHOD
+  row on an unresolved receiver would match every queue's `.push(x)`.
+
+Two supporting changes: `Guard(on_receiver=True)` reads the deciding
+keyword off the receiver's constructor (directly or through a
+single-binding name); and a guard's deciding keyword never takes the
+judged slot of a keyword-only call — `from_template(template_format="jinja2",
+template=t)` would otherwise have judged the literal `"jinja2"` and CLEARED
+it. Side effect (precision): `subprocess.run(shell=True, args="ls -l")` is
+clean (was E0714 on the literal-`True` slot); `args=cmd` still fires.
+
+Measurement: `min_py_table_rows` 93 → 121 (28 rows: 19 qualified, 3
+method, 6 guard). Framework corpus: +18 E0713 (`.sql`/`execute_sql`
+executors and LanceDB), +2 E0731 (runpy).
+
+### BUG-069  E0723 inside an f-string reported line 0, column 0; a credential in a bytes literal was never scanned  [OPEN]
+test: tests/test_py_frontend_sinks.py
+(`::test_credential_in_fstring_and_bytes_is_positioned`)
+
+Found 2026-09-24 by the audit (B10, B9), confirmed on `47139a1`:
+`{"Authorization": f"Bearer sk-proj-…"}` → E0723 at `(0, 0)`;
+`AWS_KEY = b"AKIA…"` → nothing (a bytes constant translated to an opaque
+leaf, and a module whose only assignment is bytes was not a scope).
+
+Fix (`a45ad9d`): f-string literal parts and constant-only f-strings carry
+`pos` (on Python < 3.12 the f-string's own start, 3.12+ the part's); a
+bytes constant stays an opaque `PyExpr` to every argument rule (so
+`cur.execute(b"SELECT " + n)` is judged exactly as before) but carries its
+latin-1-decoded text as a positioned `StringLit` under `parts`, where only
+the literal scan walks; `_scope_has_content` counts a bytes assignment.
+
+Measurement: no E0723 moved or appeared on the framework corpus or the
+in-repo trees except the new test's own AWS documented-example fixture.

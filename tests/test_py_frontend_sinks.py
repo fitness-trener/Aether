@@ -1819,6 +1819,19 @@ def test_credential_in_fstring_and_bytes_is_positioned():
     print("BUG-069: E0723 carries the f-string's line; bytes literals are scanned")
 
 
+def test_stripe_restricted_key_is_a_credential():
+    """Audit B9 (Wave 4 residual, coordinator): a Stripe live restricted key
+    (`rk_live_`) was silent while `sk_live_` fired. The fixture is built from
+    split literals so the SOURCE of this test is not credential-shaped
+    (GitHub push protection); the scanned string is one literal."""
+    src = "K = '" + "rk_" + "live_" + "4eC39HqLyjWDarjtT1zdp7dc" + "'\n"
+    ast_dict, _u, _m = py_to_ir(src)
+    got = [(d.position.line, d.code) for d in analyze_flat(ast_dict, skip=PY_SKIP_STAGES)
+           if d.code == "E0723"]
+    assert got == [(1, "E0723")], got
+    print("E0723: a Stripe live restricted key is a hardcoded credential")
+
+
 if __name__ == "__main__":
     test_body_is_no_longer_discarded()
     test_assign_becomes_let()
@@ -1919,4 +1932,5 @@ if __name__ == "__main__":
     test_builtins_spelled_through_the_module_are_the_builtin()
     test_wave4_sink_rows_fire_and_safe_forms_clear()
     test_credential_in_fstring_and_bytes_is_positioned()
+    test_stripe_restricted_key_is_a_credential()
     print("PY FRONTEND: ALL TESTS PASS")

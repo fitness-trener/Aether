@@ -346,3 +346,15 @@ has (PEM headers). The by-name rows carry their measured cost with them:
 `from_string` at roughly one non-template hit in three, `fetch_all` at
 four HTTP loaders — both the direction q5 sanctions, both now numbers
 rather than predictions.
+
+## 9. Re-measured 2026-09-25, after iteration 59 (Wave 4): 676 → 707
+
+Same 4,946 files, same interpreter. +31, −0; no kept finding changed
+confidence. E0713 600 → 629: 5 raw `text()` entries outside any executor
+(agno partial-index `postgresql_where=text(cfg["where"])` ×4,
+langchain-community `sa.text(self.query)` into a private `_execute`), 15
+`.sql`/`.execute_sql` executors (duckdb/csv agent tools, spark, snowflake,
+rockset, manticore, ODPS), 4 f-string LanceDB `.where(...)` filters
+(agno, crewai), and 5 over-flags of the any-receiver `.text` row
+(streamlit, outlines, LanceDB full-text) at 0.6. E0731 8 → 10:
+`runpy.run_path` in agno's Python tool. 26 of 31 true by rule. The Stripe `rk_live_` credential row was added by the coordinator after this measurement (no corpus site).

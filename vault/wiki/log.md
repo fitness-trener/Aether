@@ -1,5 +1,12 @@
 # Operation Log (append-only — newest on top)
 
+## [2026-09-25] Q1 residuals | iteration 59: the Python scanner stops missing
+- **5 q1 rows** from Wave 4. A raw `text()` built in a helper or stored on
+  `self` reports twice. Aliases are followed only through names assigned once.
+  Credentials split across concatenated literals are still missed.
+- **Framework corpus 676 → 707** (`bench/framework_scan/REPORT.md` §9). 26 of the
+  31 additions are true by rule, and the 5 over-flags are rated 0.6.
+
 ## [2026-09-25] Q1 row closed + residuals | iteration 58: the compiler refuses again
 - **Closed:** the open A5 row (`for`/`match` binders laundering a proven name),
   BUG-055. Parameters and `AsPat` names were the same class and closed with it.

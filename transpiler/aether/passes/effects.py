@@ -1831,6 +1831,7 @@ _CREDENTIAL_PATTERNS = [
     (re.compile(r"AIza[0-9A-Za-z_\-]{35}"),               "Google API key"),
     (re.compile(r"xox[baprs]-[0-9A-Za-z\-]{10,}"),        "Slack token"),
     (re.compile(r"sk_live_[0-9A-Za-z]{20,}"),             "Stripe live secret key"),
+    (re.compile(r"rk_live_[0-9A-Za-z]{20,}"),             "Stripe live restricted key"),
     # Provider prefixes with a length floor: each is a documented token
     # format, none matched anything in 4,946 framework files or the
     # in-tree corpus when added (slice-3 record). Specific `sk-` shapes
