@@ -2,15 +2,15 @@
 
 Plan: `audits/audit_2026-09-24_plan.md` §F5 + Wave 7, plus the D10 leftover
 (deferred by Wave 5a: `Call`/`ExprStmt` carried no position) and A11.
-Branch forked from `v0.5-audit-waves` @ `2f686b2`. Every "before" below is
-`2f686b2`: a pristine `git archive 2f686b2` tree, run on the same machine
+Branch forked from `v0.5-audit-waves` @ `0653115`. Every "before" below is
+`0653115`: a pristine `git archive 0653115` tree, run on the same machine
 (8 logical cores, `os.cpu_count() == 8`, Windows 11, CPython 3.11). Ids:
 BUG-080..084, iteration 62.
 
 Commits:
-- `95abe86` perf(passes): one shared per-function index; skip marker rows with no marker (audit F5)
-- `cd97b8a` perf(py): memoize _bindings_of per def while translating (audit F5)
-- `0084ef1` fix(parser): positioned calls, E0801 at the call; validate effects clauses (audit D10, A11)
+- `5bd1334` perf(passes): one shared per-function index; skip marker rows with no marker (audit F5)
+- `2c65c12` perf(py): memoize _bindings_of per def while translating (audit F5)
+- `881a3b5` fix(parser): positioned calls, E0801 at the call; validate effects clauses (audit D10, A11)
 - this record
 
 Files changed (all inside the wave's ownership list):
@@ -25,11 +25,11 @@ README, BUGS.md, LOOP_LOG, vault, `grammar/effects.md`, `grammar/grammar.ebnf`
 (see "Coordinator decisions").
 
 Red first: `tests/test_perf_index.py::test_walk_budget_per_function`
-fails on `2f686b2` (97.0 walks per function, budget 20; 14.0 after). All five
-`tests/test_call_positions.py` checks fail on `2f686b2` (Call has no `pos`;
+fails on `0653115` (97.0 walks per function, budget 20; 14.0 after). All five
+`tests/test_call_positions.py` checks fail on `0653115` (Call has no `pos`;
 E0801 at `1:1` twice; both E0801 patch the first `print`; E0204 on the
 `return` line; the comment above `print(a)` dropped by `fmt`). Both A11
-tests in `tests/test_module_validation.py` fail on `2f686b2` (`effects pure,
+tests in `tests/test_module_validation.py` fail on `0653115` (`effects pure,
 log` accepted; `bogus.effect` produces no diagnostic).
 
 ## BUGS entries
@@ -39,7 +39,7 @@ test: tests/test_perf_index.py (`::test_walk_budget_per_function`,
 `::test_marker_skip_is_output_identical`, `::test_shared_index_is_output_identical`)
 
 Found 2026-09-24 by the architecture audit (F5, P2). Measured on
-`2f686b2`: `check-py --jobs 1` over the framework corpus (4,946 files)
+`0653115`: `check-py --jobs 1` over the framework corpus (4,946 files)
 365.9 s wall; in-process, 94.8 s frontend + 249.1 s analysis. cProfile on
 the three slowest files (`agno/workflow/workflow.py`,
 `browser_use/beta/service.py`, `agno/db/postgres/postgres.py`): 5.38M
@@ -57,7 +57,7 @@ constructor, which is every Python program (the frontend emits neither).
 Their early-exit guard `not tainted and not src_l and not mfields` never
 fired because `src_l` always holds the stdlib constructors.
 
-Fix (`95abe86`): `passes/ast_walk.py` gains `shared_index()`, entered by
+Fix (`5bd1334`): `passes/ast_walk.py` gains `shared_index()`, entered by
 `passes.analyze()`: `contexts()`, `binders()`, a new `fn_calls()`,
 `all_nodes()` and `names_in()` are computed once per node per analysis
 (keyed by node identity, the node kept in the entry and compared with
@@ -90,7 +90,7 @@ to ~20 s, the frontend was the top hotspot. `_bindings_of` was 8.5 of
 alias resolver, the XML parser binder, the guard scan, parameter seeding,
 the per-def counts) each re-walked the same function's Python AST.
 
-Fix (`cd97b8a`): `_bindings_of` is memoized per node while `py_to_ir`
+Fix (`2c65c12`): `_bindings_of` is memoized per node while `py_to_ir`
 translates the `def`s (a `ContextVar` set around that loop only). The
 scope phase then strips `def`s out of class and module nodes in place
 (`_ScopeStripper`), which would make a cached entry stale, so nothing is
@@ -101,7 +101,7 @@ slowest files 2.8 s → 1.7 s; framework-corpus JSON byte-identical.
 test: tests/test_call_positions.py (all five)
 
 Found 2026-09-24 by the tool auditor (D10, P2); deferred by Wave 5a
-(`parser.py` outside its set). Repro on `2f686b2`:
+(`parser.py` outside its set). Repro on `0653115`:
 
     function main() returns Unit
       effects pure
@@ -123,7 +123,7 @@ Root cause: `parser.py` built `{"kind": "Call", "func", "args"}` and
 the declaration's; `check_effects` used the declaration's position even
 where a call position existed.
 
-Fix (`0084ef1`): `Call` carries the position of the first token of its
+Fix (`881a3b5`): `Call` carries the position of the first token of its
 callee expression (`_parse_postfix` records it before the primary — a
 chain `a.b(c)(d)` shares one start); `ExprStmt` the statement's first
 token. E0801 is reported at the call (the declaration only for an
@@ -155,7 +155,7 @@ the first `print`) — the two disagreed on what the function may do.
 Root cause: `parse_effect_list` accepted `pure` as one element of any
 list (`grammar.ebnf`: `effect = "pure" | dotted_ident ...`).
 
-Fix (`0084ef1`): a list of more than one effect containing `pure` is
+Fix (`881a3b5`): a list of more than one effect containing `pure` is
 E0201 at the `pure` token ("'pure' declares no effects and cannot be
 combined with other effects"), in either order. The corpus never writes
 it (0 of 418 files). E0201 row text updated.
@@ -172,7 +172,7 @@ as if it were a missing grant.
 Root cause: nothing validated effect names; `effect_capability()` maps an
 effect to its first path segment and nobody checked that segment.
 
-Fix (`0084ef1`): `check_modules` (modules stage, runs with or without a
+Fix (`881a3b5`): `check_modules` (modules stage, runs with or without a
 module) reports E0704 for an effect in Aether source whose first path
 segment is not in `_KNOWN_CAPABILITIES` (and is not `pure`), positioned
 at the function, `extra` = `function`, `effect`, `capability`, `known`.
@@ -190,7 +190,7 @@ Corpus: 0 new findings (every declared head in the 407 parseable files is
 
 - **Target:** not a backlog row. Plan F5 (perf) + the D10 and A11
   leftovers.
-- **Probe-confirmed first (on `2f686b2`):** `check-py --jobs 1` over the
+- **Probe-confirmed first (on `0653115`):** `check-py --jobs 1` over the
   framework corpus 365.9 s (analysis 249 s of it); 97 AST walks per
   function; marker rows ≈ 50% of analysis on Python, where they cannot
   fire. Two E0801 in one body both at `1:1` and both patched to the same
@@ -249,7 +249,7 @@ Corpus: 0 new findings (every declared head in the 407 parseable files is
 ## Measurements
 
 Machine: 8 logical cores (`os.cpu_count()`), Windows 11, CPython 3.11.
-Before = `git archive 2f686b2`; after = `0084ef1`. Wall times from
+Before = `git archive 0653115`; after = `881a3b5`. Wall times from
 `python -B -m transpiler.aether.cli --json check-py <path>`, output to
 NUL, runs sequential on an otherwise idle machine.
 
@@ -261,8 +261,8 @@ NUL, runs sequential on an otherwise idle machine.
 | `browser_use/browser_use/beta/service.py` | 3.5 s | 1.0 s |
 | `agno/agno/db/postgres/postgres.py` | 3.4 s | 1.0 s |
 
-After `95abe86` alone (analysis only): `--jobs 1` 123.0 s, default 38.7 s.
-In-process on `2f686b2`: frontend 94.8 s + analysis 249.1 s over the
+After `5bd1334` alone (analysis only): `--jobs 1` 123.0 s, default 38.7 s.
+In-process on `0653115`: frontend 94.8 s + analysis 249.1 s over the
 corpus. (The audit's 29.7 s kubernetes `core_v1_api.py` is not in this
 corpus; the three largest-by-time files here were used instead.)
 
@@ -273,11 +273,11 @@ Byte-identity, full JSON (stdout + stderr + exit code), before vs after:
   (`tests/test_perf_index.py`, `tests/test_call_positions.py` new;
   `tests/test_module_validation.py` gains functions — its `--strict`
   E0701 inventory lines move/add accordingly, no default findings).
-- after `95abe86`: all four Python snapshots and all 418 `.aeth` outputs
-  byte-identical to before. After `cd97b8a`: the two framework snapshots
+- after `5bd1334`: all four Python snapshots and all 418 `.aeth` outputs
+  byte-identical to before. After `2c65c12`: the two framework snapshots
   and all 418 `.aeth` outputs byte-identical; the in-repo snapshots
   differed only by this wave's then-uncommitted test edits.
-- after `0084ef1`: 418 `.aeth` `check --json --no-prove` outputs — 320
+- after `881a3b5`: 418 `.aeth` `check --json --no-prove` outputs — 320
   identical, 98 differ in positions only; codes (as sorted multisets) and
   exit codes identical in every file. By code, positions moved: E0801 25,
   E0206 12, E0715 11, E0712 10, E0716 8, E0713 7, E0714 6, E0729 6,

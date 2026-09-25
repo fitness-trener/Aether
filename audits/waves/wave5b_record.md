@@ -2,16 +2,16 @@
 
 Plan: `audits/audit_2026-09-24_plan.md`, Wave 5 items D5, D6, D10-partial
 (SARIF, category enum, `--no-unprovable`, single Action run) and B6.
-Forked from `v0.5-audit-waves` @ `a4cd812`. Ids: BUG-077..079.
+Forked from `v0.5-audit-waves` @ `a60b16e`. Ids: BUG-077..079.
 **Breaking change: ships as 0.5.0** (`CHANGELOG.md`, new). The version in
 `pyproject.toml`/`__init__` is not bumped here — the release does that.
 
 Commits:
-- `69e1b3b` one exit-code table and one JSON contract on every surface (D5, D6, B6, D10-partial)
+- `50ed1f1` one exit-code table and one JSON contract on every surface (D5, D6, B6, D10-partial)
 - this record
 
-Every item was reproduced red on `a4cd812` first, and every new/changed
-test was run against the `a4cd812` sources (a `git archive a4cd812` tree
+Every item was reproduced red on `a60b16e` first, and every new/changed
+test was run against the `a60b16e` sources (a `git archive a60b16e` tree
 with the new tests copied in) and failed — see Measurements, "red before".
 
 ## BUGS entries
@@ -23,7 +23,7 @@ test: tests/test_exit_codes.py (`::test_check_exit_table`,
 `::test_fix_loop_exit_table`, `::test_real_process_exit_codes`);
 tests/test_action.py (`::test_scan_step_obeys_the_exit_code_table`)
 
-Found 2026-09-24 by the audit (D5, P1). Repro on `a4cd812`: `aether check
+Found 2026-09-24 by the audit (D5, P1). Repro on `a60b16e`: `aether check
 demos/payment_workflow/broken.aeth` → exit 2; `aether check` on a file with
 a parse error → exit 2; `aether check nope.aeth` → exit 2; `aether check
 --bogus` → exit 2 (argparse); a detector exception → raw traceback, exit 1,
@@ -39,7 +39,7 @@ two findings: step exit 0).
 Root cause: no shared table. Each command returned literal integers; `main`
 caught only `AetherError`/`FileNotFoundError`; argparse exited on its own.
 
-Fix (`69e1b3b`): `diagnostics.py` defines the table once —
+Fix (`50ed1f1`): `diagnostics.py` defines the table once —
 `EXIT_CLEAN 0 · EXIT_FINDINGS 1 · EXIT_USAGE 2 · EXIT_CRASH 3 ·
 EXIT_INCOMPLETE 4` and `exit_code(findings, incomplete, crashed)` (precedence
 3 > 1 > 4 > 0) — imported by `cli.py`, `fix_loop.py` and `tools/scan.py`.
@@ -65,7 +65,7 @@ test: tests/test_exit_codes.py (`::test_check_json_is_one_document_on_stdout`,
 `::test_check_py_json_complete_and_ok`, `::test_check_py_no_unprovable`,
 `::test_sdk_and_lsp_speak_to_dict`, `::test_sarif_rules_carry_descriptions`)
 
-Found by the audit (D6, P1; D10 partial; survey TC-08). Repro on `a4cd812`:
+Found by the audit (D6, P1; D10 partial; survey TC-08). Repro on `a60b16e`:
 `aether --json check broken.aeth` → nothing on stdout, three
 `{"ok": false, "diagnostic": {...}}` lines on **stderr**; `--collect-errors`
 → the same diagnostics on stdout AND stderr; `check-py --json` on a file
@@ -75,7 +75,7 @@ that does not parse → `{"ok": true, ...}`, exit 0; LSP `aether/check` →
 `patch_target` only in the LSP; SARIF rules → `shortDescription` = the bare
 code, no description, no help.
 
-Fix (`69e1b3b`): `Diagnostic` gains `stage` (set by every surface
+Fix (`50ed1f1`): `Diagnostic` gains `stage` (set by every surface
 that runs `analyze()`: CLI, `sdk.check`, `check-py`'s `_scan_one`,
 `tools/scan.py`; `smt` for E0901/E0902) and `to_dict(ast=None)` always
 emits `stage` and `patch_target` (computed by `passes/patch_target.py`,
@@ -112,7 +112,7 @@ test: tests/test_exit_codes.py (`::test_newer_python_syntax_is_incomplete_with_h
 `::test_check_py_exit_table`); tests/test_py_frontend_sinks.py
 (`::test_unreadable_and_skipped_are_visible_in_every_mode`)
 
-Found by the audit (B6, P1). Repro on `a4cd812` under Python 3.11:
+Found by the audit (B6, P1). Repro on `a60b16e` under Python 3.11:
 `import os\ndef f(d):\n    os.system(f"echo {d["k"]}")` (PEP 701) →
 stderr note `could not parse ... f-string: unmatched '['`, stdout
 `{"ok": true, "files": [], ...}`, exit 0 — an E0714 missed with a green
@@ -120,7 +120,7 @@ result. Same for a PEP 695 `type X = ...` line.
 
 Root cause: the documented policy "unparseable input never fails the run".
 
-Fix (`69e1b3b`): an unreadable/unparsed file makes the run incomplete:
+Fix (`50ed1f1`): an unreadable/unparsed file makes the run incomplete:
 exit 4 when nothing was found, 1 when something was (`complete: false`
 either way), in text, `--json` and `--sarif`. On 3.10/3.11 a SyntaxError
 whose message starts `f-string` or whose line has a PEP 695 shape
@@ -137,7 +137,7 @@ does not. Verified on 3.13: the PEP 701 repro parses and exits 1 (E0714).
 - **Target:** not a backlog row. Plan items D5, D6, B6 and D10-partial:
   an agent or CI job could not tell "found something" from "could not
   run" from "crashed", and every surface spoke its own JSON.
-- **Probe-confirmed first (on `a4cd812`):** `check` exit 2 for findings,
+- **Probe-confirmed first (on `a60b16e`):** `check` exit 2 for findings,
   parse errors, import errors and usage alike; a crash under `--json` a raw
   traceback, exit 1; `tools/scan.py` exit 0 on a missing path; the Action
   passed a crash that had findings elsewhere; `--json check` JSONL on
@@ -231,14 +231,14 @@ does not. Verified on 3.13: the PEP 701 repro parses and exits 1 (E0714).
 - **Framework corpus** (`bench/framework_scan/_work/src`, 4,946 files,
   `--json check-py --no-unprovable`, Python 3.11): after — 707 findings,
   all `stage: "security"`, 0 unreadable, 0 errors, `complete: true`, exit
-  1. At `a4cd812`: 707 findings (Wave 4's number), exit 2. No row can move:
+  1. At `a60b16e`: 707 findings (Wave 4's number), exit 2. No row can move:
   no detector, frontend table or stage changed; `_scan_one` walks
   `analyze()` instead of `analyze_flat()`, which is the same iteration.
 - **Worktree `bench tests tools playground demos`** (`check-py --json`,
-  same paths, `a4cd812` sources vs this branch): 213 files, 115 findings
+  same paths, `a60b16e` sources vs this branch): 213 files, 115 findings
   both (E0713 29, E0714 11, E0718 3, E0719 3, E0720 20, E0723 19, E0727 2,
   E0731 28), 0 added / 0 removed rows, 0 unreadable; exit 2 → 1.
-- **Red before** (a4cd812 sources, new tests copied in):
+- **Red before** (a60b16e sources, new tests copied in):
   `test_exit_codes` 0/13; `test_action::test_scan_step_obeys_the_exit_code_table`
   red on the crash case (rc 3 + 2 findings → old step exit 0; run with the
   new SARIF renderer, since the old one cannot read `to_dict` rows);

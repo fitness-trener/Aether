@@ -2558,7 +2558,7 @@ State carried forward: the full gate suite must stay green
   the checker flagged the remediation its own hint names, so an agent
   fix-loop could not converge, and a Python finding named Aether
   functions a Python user cannot call.
-- **Probe-confirmed first (on `a4cd812`):** 108 precision-auditor probes
+- **Probe-confirmed first (on `a60b16e`):** 108 precision-auditor probes
   gave 37 findings (20 at ≥ 0.9) — `"ls -l " + shlex.quote(p)`,
   `redirect(url_for(...))`, psycopg `sql`, module/class constants,
   `self.table.delete()`, `SandboxedEnvironment().from_string`,
@@ -2595,7 +2595,7 @@ State carried forward: the full gate suite must stay green
 - **Target:** not a backlog row. Plan items D5, D6, B6 and D10-partial:
   an agent or CI job could not tell "found something" from "could not
   run" from "crashed", and every surface spoke its own JSON.
-- **Probe-confirmed first (on `a4cd812`):** `check` exit 2 for findings,
+- **Probe-confirmed first (on `a60b16e`):** `check` exit 2 for findings,
   parse errors, import errors and usage alike; a crash under `--json` a raw
   traceback, exit 1; `tools/scan.py` exit 0 on a missing path; the Action
   passed a crash that had findings elsewhere; `--json check` JSONL on
@@ -2627,7 +2627,7 @@ State carried forward: the full gate suite must stay green
 
 - **Target:** not a backlog row. Plan F5 (perf) + the D10 and A11
   leftovers.
-- **Probe-confirmed first (on `2f686b2`):** `check-py --jobs 1` over the
+- **Probe-confirmed first (on `0653115`):** `check-py --jobs 1` over the
   framework corpus 365.9 s (analysis 249 s of it); 97 AST walks per
   function; marker rows ≈ 50% of analysis on Python, where they cannot
   fire. Two E0801 in one body both at `1:1` and both patched to the same

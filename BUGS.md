@@ -95,7 +95,7 @@ Fix: sort on an explicit ordering key, `(path, arg or "")`, so the arg
 slot is always str-vs-str. Regression test:
 `test_mixed_arg_effect_list_does_not_crash` in tests/test_effect_scope.py.
 
-### BUG-004  three sink guards defaulted "unknown" to "safe" (false accepts)  [FIXED 6606fe1]
+### BUG-004  three sink guards defaulted "unknown" to "safe" (false accepts)  [FIXED a22c424]
 test: tests/test_py_frontend_sinks.py
 
 Found 2026-07-26, probing the guard-bound-elsewhere residual recorded in
@@ -1349,7 +1349,7 @@ a stage. `capability._STDLIB_EFFECT_PATHS` is derived from
 `effects._STDLIB_EFFECTS` in one expression (verified equal first:
 10 entries, identical path sets).
 
-### BUG-039  E0711 (`--strict`) flags `os.path.join(base, secure_filename(name))`, the documented Werkzeug fix  [FIXED c130939]
+### BUG-039  E0711 (`--strict`) flags `os.path.join(base, secure_filename(name))`, the documented Werkzeug fix  [FIXED fc05e15]
 test: tests/test_py_precision.py (`::test_bug039_secure_filename_join`; also tests/test_python_hints.py)
 
 Found 2026-09-24 while writing `tests/test_sink_rows.py` (F2 sanitizer
@@ -1907,12 +1907,12 @@ the literal scan walks; `_scope_has_content` counts a bytes assignment.
 Measurement: no E0723 moved or appeared on the framework corpus or the
 in-repo trees except the new test's own AWS documented-example fixture.
 
-### BUG-073  E0714 flagged the documented shell fix — `"ls -l " + shlex.quote(p)`, the f-string form, `" ".join(shlex.quote(a) for a in args)`, `shlex.join` — at 0.95  [FIXED c130939]
+### BUG-073  E0714 flagged the documented shell fix — `"ls -l " + shlex.quote(p)`, the f-string form, `" ".join(shlex.quote(a) for a in args)`, `shlex.join` — at 0.95  [FIXED fc05e15]
 test: tests/test_py_precision.py (`::test_c1_quoted_pieces_compose`);
 tests/test_sink_rows.py (`::test_every_sanitizer_maps_and_its_fix_is_clean`);
 tests/test_python_hints.py (`::test_every_python_hint_converges`)
 
-Found 2026-09-24 by the whole-repo audit (C1, P0). Repro on `a4cd812`:
+Found 2026-09-24 by the whole-repo audit (C1, P0). Repro on `a60b16e`:
 `subprocess.run("ls -l " + shlex.quote(path), shell=True, check=True)` →
 E0714 0.95 ("command is built by string concatenation - use shellArg(...)");
 the same through an f-string and through `" ".join(<genexpr of
@@ -1925,7 +1925,7 @@ Root cause: `_arg_reason` refused every `+` concatenation without looking
 at its operands (`detector_specs.py`), and `shlex.join` / `str.join` were
 opaque `py:` calls.
 
-Fix (`c130939`): `_concat_reason` judges a `+` tree by its operands. Every
+Fix (`fc05e15`): `_concat_reason` judges a `+` tree by its operands. Every
 operand a literal or a proven-safe name is a literal for every rule (bans
 read per run of adjacent literals). A frontend wrapper call as an operand
 is accepted only by a rule with a `pieces` check; E0714's
@@ -1948,11 +1948,11 @@ Measured: framework corpus 0 E0714 changes (no site used the idiom);
 probes `cmd_shlex_quote`, `cmd_shlex_quote_fstr`, `cmd_shlex_join`,
 `cmd_list_join_shell` 0.95 → clean.
 
-### BUG-074  E0718: no Python spelling cleared it — `redirect(url_for(...))`, `redirect(reverse(...))`, `request.url_for`, Django's allow-list check all fired at 0.95  [FIXED c130939]
+### BUG-074  E0718: no Python spelling cleared it — `redirect(url_for(...))`, `redirect(reverse(...))`, `request.url_for`, Django's allow-list check all fired at 0.95  [FIXED fc05e15]
 test: tests/test_py_precision.py (`::test_c2_own_origin_redirects`);
 tests/test_sink_rows.py (4 `safeRedirect` pins)
 
-Found 2026-09-24 by the audit (C2, P0). Repro on `a4cd812`:
+Found 2026-09-24 by the audit (C2, P0). Repro on `a60b16e`:
 `return redirect(url_for("index"))`, `redirect(url_for("login",
 next=request.path))`, `redirect(reverse("detail", args=[pk]))`,
 `RedirectResponse(request.url_for("home"))` with `request: Request`, and
@@ -1963,7 +1963,7 @@ use safeRedirect(host, path)").
 Root cause: no `safeRedirect` entry in `SANITIZER_BY_QUALIFIED`; guards
 dominating a redirect were not modeled.
 
-Fix (`c130939`): `flask.url_for`, `quart.url_for`, `django.urls.reverse`,
+Fix (`fc05e15`): `flask.url_for`, `quart.url_for`, `django.urls.reverse`,
 `django.urls.reverse_lazy` → `safeRedirect` (whole-target; they build a
 URL of the app's own routes). `django.shortcuts.resolve_url` is
 deliberately absent: it returns an absolute URL passed to it as is.
@@ -1984,11 +1984,11 @@ intraprocedural model); probes `rd_url_for`, `rd_url_for_next`,
 `rd_django_reverse`, `rd_fastapi_url_for`, `rd_django_is_safe`,
 `rd_referrer_or` 0.95 → clean, `rd_starlette_url_path_for` 0.95 → 0.6.
 
-### BUG-075  E0713/E0719 precision: constants, psycopg `sql`, attribute Tables, IN-list placeholders; Jinja's sandbox and a same-file `from_string`  [FIXED c130939]
+### BUG-075  E0713/E0719 precision: constants, psycopg `sql`, attribute Tables, IN-list placeholders; Jinja's sandbox and a same-file `from_string`  [FIXED fc05e15]
 test: tests/test_py_precision.py (`::test_c3_sql_constants_and_composition`,
 `::test_c4_sandbox_and_own_from_string`)
 
-Found 2026-09-24 by the audit (C3, C4, P1). Repro on `a4cd812` (E0713 0.6
+Found 2026-09-24 by the audit (C3, C4, P1). Repro on `a60b16e` (E0713 0.6
 unless noted): `TABLE = "users"` then `"SELECT * FROM " + TABLE + " WHERE
 id = %s"`; `LIMIT = 10` in an f-string; `"a " + "b"`; class-level `Q =
 "..."` read as `self.Q`; module-level `Q = text("... :id")`;
@@ -2003,7 +2003,7 @@ folding; psycopg's `sql` module unknown; `_SQL_TABLE_METHODS` accepted a
 bare-name receiver only; the by-method `from_string` row had no receiver
 exception.
 
-Fix (`c130939`): module-level names bound once to a str/int/float literal
+Fix (`fc05e15`): module-level names bound once to a str/int/float literal
 inline as that literal (`_scalar_text`), and names bound once to a
 sanctioned call (sanitizer row, SQLAlchemy expression, psycopg
 composition) read as that wrapper (`_sanctioned_value`); class constants —
@@ -2028,7 +2028,7 @@ removed openhands' `Environment(loader=BaseLoader).from_string(self.prompt)`
 through `class MicroAgent: prompt = ''` — a placeholder the registry's
 subclasses fill in, i.e. a miss. With UPPER_CASE only it fires again.
 
-### BUG-076  confidence measured the callee, not the argument; Python findings named Aether functions under `category: capability`; C7 small rows  [FIXED c130939]
+### BUG-076  confidence measured the callee, not the argument; Python findings named Aether functions under `category: capability`; C7 small rows  [FIXED fc05e15]
 test: tests/test_confidence.py (`::test_argument_shape_demotion_is_output_only`,
 `::test_docstring_credential_rates_at_the_floor`,
 `::test_sanitizer_name_set_matches_the_frontend`);
@@ -2037,7 +2037,7 @@ tests/test_python_hints.py (`::test_every_python_hint_converges`,
 tests/test_py_precision.py (`::test_c7_compile_exec_xml_and_docstring`,
 `::test_fp_probe_shapes_are_quiet_above_the_floor`)
 
-Found 2026-09-24 by the audit (C5, C6, C7). Repro on `a4cd812`:
+Found 2026-09-24 by the audit (C5, C6, C7). Repro on `a60b16e`:
 `subprocess.run(shlex.quote(path), shell=True)` E0714 0.95 — so
 `--min-confidence 0.9` kept the fix-shaped findings; every Python
 E0713/E0714/E0718/E0719/E0720/E0731 message said `'sqlQuery'` /
@@ -2048,7 +2048,7 @@ E0713/E0714/E0718/E0719/E0720/E0731 message said `'sqlQuery'` /
 then `exec(code)` two E0731s; `AKIAIOSFODNN7EXAMPLE` in a docstring E0723
 1.0; stdlib `ET.fromstring(s)` E0727 0.95 while its own text says no XXE.
 
-Fix (`c130939`):
+Fix (`fc05e15`):
 - C5: output-only `argument_shape` demotion — a Python finding whose
   judged argument contains a frontend-named sanitizer call
   (`PY_SANITIZER_NAMES`, kept equal to `SANITIZER_BY_QUALIFIED` +
@@ -2081,14 +2081,14 @@ Measured: framework `--min-confidence 0.9` 55 → 51 (the 4 stdlib
 `ET.fromstring`/`parse` sites → 0.6; 0 corpus findings demoted by
 argument shape); probes ≥ 0.9: 20 → 6.
 
-### BUG-077  exit codes conflated findings, parse errors, usage errors and crashes; a crash under `--json` was a raw traceback  [FIXED 69e1b3b]
+### BUG-077  exit codes conflated findings, parse errors, usage errors and crashes; a crash under `--json` was a raw traceback  [FIXED 50ed1f1]
 test: tests/test_exit_codes.py (`::test_check_exit_table`,
 `::test_check_crash_is_3_and_json_survives`, `::test_check_py_exit_table`,
 `::test_check_py_crash_is_3`, `::test_scan_exit_table_and_json`,
 `::test_fix_loop_exit_table`, `::test_real_process_exit_codes`);
 tests/test_action.py (`::test_scan_step_obeys_the_exit_code_table`)
 
-Found 2026-09-24 by the audit (D5, P1). Repro on `a4cd812`: `aether check
+Found 2026-09-24 by the audit (D5, P1). Repro on `a60b16e`: `aether check
 demos/payment_workflow/broken.aeth` → exit 2; `aether check` on a file with
 a parse error → exit 2; `aether check nope.aeth` → exit 2; `aether check
 --bogus` → exit 2 (argparse); a detector exception → raw traceback, exit 1,
@@ -2104,7 +2104,7 @@ two findings: step exit 0).
 Root cause: no shared table. Each command returned literal integers; `main`
 caught only `AetherError`/`FileNotFoundError`; argparse exited on its own.
 
-Fix (`69e1b3b`): `diagnostics.py` defines the table once —
+Fix (`50ed1f1`): `diagnostics.py` defines the table once —
 `EXIT_CLEAN 0 · EXIT_FINDINGS 1 · EXIT_USAGE 2 · EXIT_CRASH 3 ·
 EXIT_INCOMPLETE 4` and `exit_code(findings, incomplete, crashed)` (precedence
 3 > 1 > 4 > 0) — imported by `cli.py`, `fix_loop.py` and `tools/scan.py`.
@@ -2125,12 +2125,12 @@ seen even when findings make the exit 1) fails unless the new
 `aether test` keeps its fixture table (0/1/2) on purpose — `run_all.py` and
 `bench/harness.py` grade on it.
 
-### BUG-078  five JSON shapes: `--json check` wrote JSONL to stderr, `check-py --json` said `ok: true` with nothing analysed, `patch_target` existed only in the LSP  [FIXED 69e1b3b]
+### BUG-078  five JSON shapes: `--json check` wrote JSONL to stderr, `check-py --json` said `ok: true` with nothing analysed, `patch_target` existed only in the LSP  [FIXED 50ed1f1]
 test: tests/test_exit_codes.py (`::test_check_json_is_one_document_on_stdout`,
 `::test_check_py_json_complete_and_ok`, `::test_check_py_no_unprovable`,
 `::test_sdk_and_lsp_speak_to_dict`, `::test_sarif_rules_carry_descriptions`)
 
-Found by the audit (D6, P1; D10 partial; survey TC-08). Repro on `a4cd812`:
+Found by the audit (D6, P1; D10 partial; survey TC-08). Repro on `a60b16e`:
 `aether --json check broken.aeth` → nothing on stdout, three
 `{"ok": false, "diagnostic": {...}}` lines on **stderr**; `--collect-errors`
 → the same diagnostics on stdout AND stderr; `check-py --json` on a file
@@ -2140,7 +2140,7 @@ that does not parse → `{"ok": true, ...}`, exit 0; LSP `aether/check` →
 `patch_target` only in the LSP; SARIF rules → `shortDescription` = the bare
 code, no description, no help.
 
-Fix (`69e1b3b`): `Diagnostic` gains `stage` (set by every surface
+Fix (`50ed1f1`): `Diagnostic` gains `stage` (set by every surface
 that runs `analyze()`: CLI, `sdk.check`, `check-py`'s `_scan_one`,
 `tools/scan.py`; `smt` for E0901/E0902) and `to_dict(ast=None)` always
 emits `stage` and `patch_target` (computed by `passes/patch_target.py`,
@@ -2172,12 +2172,12 @@ remove both in 0.6. `tools/alsp_surface.py` and `tools/py_surface.py` build
 their own dicts (with `col`) and were not changed (not owned, not
 `aether/check`).
 
-### BUG-079  `check-py` exited 0 with `ok: true` when the files could not be parsed — valid 3.12 source scanned on 3.10/3.11 included  [FIXED 69e1b3b]
+### BUG-079  `check-py` exited 0 with `ok: true` when the files could not be parsed — valid 3.12 source scanned on 3.10/3.11 included  [FIXED 50ed1f1]
 test: tests/test_exit_codes.py (`::test_newer_python_syntax_is_incomplete_with_hint`,
 `::test_check_py_exit_table`); tests/test_py_frontend_sinks.py
 (`::test_unreadable_and_skipped_are_visible_in_every_mode`)
 
-Found by the audit (B6, P1). Repro on `a4cd812` under Python 3.11:
+Found by the audit (B6, P1). Repro on `a60b16e` under Python 3.11:
 `import os\ndef f(d):\n    os.system(f"echo {d["k"]}")` (PEP 701) →
 stderr note `could not parse ... f-string: unmatched '['`, stdout
 `{"ok": true, "files": [], ...}`, exit 0 — an E0714 missed with a green
@@ -2185,7 +2185,7 @@ result. Same for a PEP 695 `type X = ...` line.
 
 Root cause: the documented policy "unparseable input never fails the run".
 
-Fix (`69e1b3b`): an unreadable/unparsed file makes the run incomplete:
+Fix (`50ed1f1`): an unreadable/unparsed file makes the run incomplete:
 exit 4 when nothing was found, 1 when something was (`complete: false`
 either way), in text, `--json` and `--sarif`. On 3.10/3.11 a SyntaxError
 whose message starts `f-string` or whose line has a PEP 695 shape
@@ -2195,12 +2195,12 @@ JSON, SARIF). A heuristic on the error text, hence the question mark: a
 genuinely malformed f-string on 3.11 gets the hint too; py2 `print 'x'`
 does not. Verified on 3.13: the PEP 701 repro parses and exits 1 (E0714).
 
-### BUG-080  Every detector re-walked every function; on Python half the analysis time went to eight marker rows that cannot fire there  [FIXED 95abe86]
+### BUG-080  Every detector re-walked every function; on Python half the analysis time went to eight marker rows that cannot fire there  [FIXED 5bd1334]
 test: tests/test_perf_index.py (`::test_walk_budget_per_function`,
 `::test_marker_skip_is_output_identical`, `::test_shared_index_is_output_identical`)
 
 Found 2026-09-24 by the architecture audit (F5, P2). Measured on
-`2f686b2`: `check-py --jobs 1` over the framework corpus (4,946 files)
+`0653115`: `check-py --jobs 1` over the framework corpus (4,946 files)
 365.9 s wall; in-process, 94.8 s frontend + 249.1 s analysis. cProfile on
 the three slowest files (`agno/workflow/workflow.py`,
 `browser_use/beta/service.py`, `agno/db/postgres/postgres.py`): 5.38M
@@ -2218,7 +2218,7 @@ constructor, which is every Python program (the frontend emits neither).
 Their early-exit guard `not tainted and not src_l and not mfields` never
 fired because `src_l` always holds the stdlib constructors.
 
-Fix (`95abe86`): `passes/ast_walk.py` gains `shared_index()`, entered by
+Fix (`5bd1334`): `passes/ast_walk.py` gains `shared_index()`, entered by
 `passes.analyze()`: `contexts()`, `binders()`, a new `fn_calls()`,
 `all_nodes()` and `names_in()` are computed once per node per analysis
 (keyed by node identity, the node kept in the entry and compared with
@@ -2240,7 +2240,7 @@ Measurement: walks per function on a 40-function Python module 97 → 14.
 The three slowest files, analysis only: 7.36 s → 0.48 s. Output
 byte-identical (see Measurements).
 
-### BUG-081  The Python frontend re-walked each function six times for its bindings  [FIXED cd97b8a]
+### BUG-081  The Python frontend re-walked each function six times for its bindings  [FIXED 2c65c12]
 test: tests/test_perf_index.py (the framework-corpus byte-identity is the
 check; the timing is in Measurements — no walk-count test pins it)
 
@@ -2251,18 +2251,18 @@ to ~20 s, the frontend was the top hotspot. `_bindings_of` was 8.5 of
 alias resolver, the XML parser binder, the guard scan, parameter seeding,
 the per-def counts) each re-walked the same function's Python AST.
 
-Fix (`cd97b8a`): `_bindings_of` is memoized per node while `py_to_ir`
+Fix (`2c65c12`): `_bindings_of` is memoized per node while `py_to_ir`
 translates the `def`s (a `ContextVar` set around that loop only). The
 scope phase then strips `def`s out of class and module nodes in place
 (`_ScopeStripper`), which would make a cached entry stale, so nothing is
 cached there. Callers get a fresh list each time. Frontend on the three
 slowest files 2.8 s → 1.7 s; framework-corpus JSON byte-identical.
 
-### BUG-082  E0801 pointed at the function declaration, not the offending call; Aether `Call` and `ExprStmt` had no position  [FIXED 0084ef1]
+### BUG-082  E0801 pointed at the function declaration, not the offending call; Aether `Call` and `ExprStmt` had no position  [FIXED 881a3b5]
 test: tests/test_call_positions.py (all five)
 
 Found 2026-09-24 by the tool auditor (D10, P2); deferred by Wave 5a
-(`parser.py` outside its set). Repro on `2f686b2`:
+(`parser.py` outside its set). Repro on `0653115`:
 
     function main() returns Unit
       effects pure
@@ -2284,7 +2284,7 @@ Root cause: `parser.py` built `{"kind": "Call", "func", "args"}` and
 the declaration's; `check_effects` used the declaration's position even
 where a call position existed.
 
-Fix (`0084ef1`): `Call` carries the position of the first token of its
+Fix (`881a3b5`): `Call` carries the position of the first token of its
 callee expression (`_parse_postfix` records it before the primary — a
 chain `a.b(c)(d)` shares one start); `ExprStmt` the statement's first
 token. E0801 is reported at the call (the declaration only for an
@@ -2305,7 +2305,7 @@ identical in all 418 (list below). Python (`check-py`, framework corpus
 and in-repo trees, default and `--strict`) byte-identical — the frontend
 already positioned its calls.
 
-### BUG-083  `effects pure, log` passed `check` and failed `--effect-strict`  [FIXED 0084ef1]
+### BUG-083  `effects pure, log` passed `check` and failed `--effect-strict`  [FIXED 881a3b5]
 test: tests/test_module_validation.py (`::test_A11_pure_alongside_other_effects_is_a_parse_error`)
 
 Found 2026-09-24 by the language auditor (A11, P2; repro
@@ -2316,12 +2316,12 @@ the first `print`) — the two disagreed on what the function may do.
 Root cause: `parse_effect_list` accepted `pure` as one element of any
 list (`grammar.ebnf`: `effect = "pure" | dotted_ident ...`).
 
-Fix (`0084ef1`): a list of more than one effect containing `pure` is
+Fix (`881a3b5`): a list of more than one effect containing `pure` is
 E0201 at the `pure` token ("'pure' declares no effects and cannot be
 combined with other effects"), in either order. The corpus never writes
 it (0 of 418 files). E0201 row text updated.
 
-### BUG-084  An effect naming an unknown capability was accepted silently  [FIXED 0084ef1]
+### BUG-084  An effect naming an unknown capability was accepted silently  [FIXED 881a3b5]
 test: tests/test_module_validation.py (`::test_A11_effect_with_unknown_capability_is_E0704`)
 
 Found 2026-09-24 by the language auditor (A11). Repro: `effects log,
@@ -2333,7 +2333,7 @@ as if it were a missing grant.
 Root cause: nothing validated effect names; `effect_capability()` maps an
 effect to its first path segment and nobody checked that segment.
 
-Fix (`0084ef1`): `check_modules` (modules stage, runs with or without a
+Fix (`881a3b5`): `check_modules` (modules stage, runs with or without a
 module) reports E0704 for an effect in Aether source whose first path
 segment is not in `_KNOWN_CAPABILITIES` (and is not `pure`), positioned
 at the function, `extra` = `function`, `effect`, `capability`, `known`.

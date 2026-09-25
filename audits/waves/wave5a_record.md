@@ -2,11 +2,11 @@
 
 Plan: `audits/audit_2026-09-24_plan.md` §C, Wave 5 items 1–3 (C1–C7) plus
 BUG-039 and D10. Exit codes / JSON contract (D5/D6/D9) are Wave 5b's.
-Branch forked from `v0.5-audit-waves` @ `a4cd812`; every "before" below is
-`a4cd812`. Ids: BUG-073..076, iteration 60.
+Branch forked from `v0.5-audit-waves` @ `a60b16e`; every "before" below is
+`a60b16e`. Ids: BUG-073..076, iteration 60.
 
 Commits:
-- `c130939` fix(py): stop flagging the fix; findings speak Python (audit C1-C7, BUG-039)
+- `fc05e15` fix(py): stop flagging the fix; findings speak Python (audit C1-C7, BUG-039)
 - this record
 
 Files changed (all inside the wave's ownership list):
@@ -20,16 +20,16 @@ text, no new code), `tests/test_sink_rows.py`, `tests/test_confidence.py`,
 `lsp.py`, `diagnostics.py`, `tools/scan.py`, `action.yml`,
 `patch_target.py`, README, BUGS.md, LOOP_LOG, vault.
 
-Red first: every item was reproduced on `a4cd812` with the precision
+Red first: every item was reproduced on `a60b16e` with the precision
 auditor's probes (`scratchpad\fp\p\*.py`, `p2\*.py`, 108 files: 37
 findings, 20 of them at ≥ 0.9) plus 56 adversarial near-miss shapes
-(`scratchpad\w5a\neg.py`). The new tests were copied into an `a4cd812`
+(`scratchpad\w5a\neg.py`). The new tests were copied into an `a60b16e`
 tree and run function by function: all 7 of `test_py_precision.py`, 2 of 3
 of `test_python_hints.py` (the third, `test_aether_source_keeps_its_wording`,
 guards behaviour that must NOT change and passes on both sides), the 3 new
 `test_confidence.py` tests, and `test_sink_rows.py::test_every_row_is_pinned`
 / `::test_every_sanitizer_maps_and_its_fix_is_clean` FAIL there; all pass
-at `c130939`.
+at `fc05e15`.
 
 ## BUGS entries
 
@@ -38,7 +38,7 @@ test: tests/test_py_precision.py (`::test_c1_quoted_pieces_compose`);
 tests/test_sink_rows.py (`::test_every_sanitizer_maps_and_its_fix_is_clean`);
 tests/test_python_hints.py (`::test_every_python_hint_converges`)
 
-Found 2026-09-24 by the whole-repo audit (C1, P0). Repro on `a4cd812`:
+Found 2026-09-24 by the whole-repo audit (C1, P0). Repro on `a60b16e`:
 `subprocess.run("ls -l " + shlex.quote(path), shell=True, check=True)` →
 E0714 0.95 ("command is built by string concatenation - use shellArg(...)");
 the same through an f-string and through `" ".join(<genexpr of
@@ -51,7 +51,7 @@ Root cause: `_arg_reason` refused every `+` concatenation without looking
 at its operands (`detector_specs.py`), and `shlex.join` / `str.join` were
 opaque `py:` calls.
 
-Fix (`c130939`): `_concat_reason` judges a `+` tree by its operands. Every
+Fix (`fc05e15`): `_concat_reason` judges a `+` tree by its operands. Every
 operand a literal or a proven-safe name is a literal for every rule (bans
 read per run of adjacent literals). A frontend wrapper call as an operand
 is accepted only by a rule with a `pieces` check; E0714's
@@ -78,7 +78,7 @@ probes `cmd_shlex_quote`, `cmd_shlex_quote_fstr`, `cmd_shlex_join`,
 test: tests/test_py_precision.py (`::test_c2_own_origin_redirects`);
 tests/test_sink_rows.py (4 `safeRedirect` pins)
 
-Found 2026-09-24 by the audit (C2, P0). Repro on `a4cd812`:
+Found 2026-09-24 by the audit (C2, P0). Repro on `a60b16e`:
 `return redirect(url_for("index"))`, `redirect(url_for("login",
 next=request.path))`, `redirect(reverse("detail", args=[pk]))`,
 `RedirectResponse(request.url_for("home"))` with `request: Request`, and
@@ -89,7 +89,7 @@ use safeRedirect(host, path)").
 Root cause: no `safeRedirect` entry in `SANITIZER_BY_QUALIFIED`; guards
 dominating a redirect were not modeled.
 
-Fix (`c130939`): `flask.url_for`, `quart.url_for`, `django.urls.reverse`,
+Fix (`fc05e15`): `flask.url_for`, `quart.url_for`, `django.urls.reverse`,
 `django.urls.reverse_lazy` → `safeRedirect` (whole-target; they build a
 URL of the app's own routes). `django.shortcuts.resolve_url` is
 deliberately absent: it returns an absolute URL passed to it as is.
@@ -114,7 +114,7 @@ intraprocedural model); probes `rd_url_for`, `rd_url_for_next`,
 test: tests/test_py_precision.py (`::test_c3_sql_constants_and_composition`,
 `::test_c4_sandbox_and_own_from_string`)
 
-Found 2026-09-24 by the audit (C3, C4, P1). Repro on `a4cd812` (E0713 0.6
+Found 2026-09-24 by the audit (C3, C4, P1). Repro on `a60b16e` (E0713 0.6
 unless noted): `TABLE = "users"` then `"SELECT * FROM " + TABLE + " WHERE
 id = %s"`; `LIMIT = 10` in an f-string; `"a " + "b"`; class-level `Q =
 "..."` read as `self.Q`; module-level `Q = text("... :id")`;
@@ -129,7 +129,7 @@ folding; psycopg's `sql` module unknown; `_SQL_TABLE_METHODS` accepted a
 bare-name receiver only; the by-method `from_string` row had no receiver
 exception.
 
-Fix (`c130939`): module-level names bound once to a str/int/float literal
+Fix (`fc05e15`): module-level names bound once to a str/int/float literal
 inline as that literal (`_scalar_text`), and names bound once to a
 sanctioned call (sanitizer row, SQLAlchemy expression, psycopg
 composition) read as that wrapper (`_sanctioned_value`); class constants —
@@ -163,7 +163,7 @@ tests/test_python_hints.py (`::test_every_python_hint_converges`,
 tests/test_py_precision.py (`::test_c7_compile_exec_xml_and_docstring`,
 `::test_fp_probe_shapes_are_quiet_above_the_floor`)
 
-Found 2026-09-24 by the audit (C5, C6, C7). Repro on `a4cd812`:
+Found 2026-09-24 by the audit (C5, C6, C7). Repro on `a60b16e`:
 `subprocess.run(shlex.quote(path), shell=True)` E0714 0.95 — so
 `--min-confidence 0.9` kept the fix-shaped findings; every Python
 E0713/E0714/E0718/E0719/E0720/E0731 message said `'sqlQuery'` /
@@ -174,7 +174,7 @@ E0713/E0714/E0718/E0719/E0720/E0731 message said `'sqlQuery'` /
 then `exec(code)` two E0731s; `AKIAIOSFODNN7EXAMPLE` in a docstring E0723
 1.0; stdlib `ET.fromstring(s)` E0727 0.95 while its own text says no XXE.
 
-Fix (`c130939`):
+Fix (`fc05e15`):
 - C5: output-only `argument_shape` demotion — a Python finding whose
   judged argument contains a frontend-named sanitizer call
   (`PY_SANITIZER_NAMES`, kept equal to `SANITIZER_BY_QUALIFIED` +
@@ -208,7 +208,7 @@ Measured: framework `--min-confidence 0.9` 55 → 51 (the 4 stdlib
 argument shape); probes ≥ 0.9: 20 → 6.
 
 ### BUG-039 closure (coordinator: stamp the existing entry)
-`[FIXED c130939]`, test: tests/test_py_precision.py
+`[FIXED fc05e15]`, test: tests/test_py_precision.py
 (`::test_bug039_secure_filename_join`); tests/test_python_hints.py (E0711
 `os.path.join(BASE_DIR, secure_filename(name))`). Fix:
 `_sanitized_path_join` — `os.path.join` / `posixpath.join` /
@@ -227,7 +227,7 @@ site); the BUG-039 repro shapes 2 × E0711 → clean.
   the checker flagged the remediation its own hint names, so an agent
   fix-loop could not converge, and a Python finding named Aether
   functions a Python user cannot call.
-- **Probe-confirmed first (on `a4cd812`):** 108 precision-auditor probes
+- **Probe-confirmed first (on `a60b16e`):** 108 precision-auditor probes
   gave 37 findings (20 at ≥ 0.9) — `"ls -l " + shlex.quote(p)`,
   `redirect(url_for(...))`, psycopg `sql`, module/class constants,
   `self.table.delete()`, `SandboxedEnvironment().from_string`,
@@ -311,7 +311,7 @@ site); the BUG-039 repro shapes 2 × E0711 → clean.
 ## Measurements
 
 - **Framework corpus** (`bench/framework_scan/_work/src`, 4,946 files,
-  `check-py --json`, same interpreter): `a4cd812` **707** → `c130939`
+  `check-py --json`, same interpreter): `a60b16e` **707** → `fc05e15`
   **683** (−24, +0); 0 errors / 0 unparseable both sides. By code: E0713
   629 → 608, E0719 26 → 24, E0731 10 → 9; E0714 14, E0718 5, E0720 17,
   E0727 6 unchanged.
@@ -370,7 +370,7 @@ site); the BUG-039 repro shapes 2 × E0711 → clean.
   `flask.url_for`, `quart.url_for`, `django.urls.reverse`,
   `django.urls.reverse_lazy`); `test_sink_rows`: 88 sink, 24 guard, 16
   sanitizer rows.
-- **Gate:** `python -B scripts/run_all.py` exit 0 at `c130939` (`smt`
+- **Gate:** `python -B scripts/run_all.py` exit 0 at `fc05e15` (`smt`
   SKIP, z3 absent).
 
 ## Changed tests that pinned old behaviour

@@ -377,5 +377,5 @@ source and is a documented safe idiom (file:line list in
 Four stdlib ElementTree calls without a parser argument move from 0.95 to
 0.6 and stay reported. `--min-confidence 0.9` hides 632 of 683 (it hid
 652 of 707). Iterations 61-62 (the exit-code table, then the performance
-wave) do not change this finding set: 683 at `b83068e`, re-measured by
+wave) do not change this finding set: 683 at `c721635`, re-measured by
 the coordinator.
