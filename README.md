@@ -3,6 +3,13 @@
 **A security checker for Python, aimed at the code AI agents write and
 run.**
 
+Aether is a security checker for Python, built on the typed intermediate
+representation of the Aether language. `aether check-py` translates an
+unmodified Python file into that IR and runs the security rules on it;
+Aether source (`.aeth`) is checked by the same rules plus the language's
+effect, capability and marker-type checks, which Python code has no
+declarations for.
+
 Point it at a Python file. It finds SQL injection, command injection, code
 injection through `exec`/`eval`, open redirect, SSTI, insecure
 deserialization, hardcoded credentials and untrusted XML parsing (XXE
@@ -262,12 +269,14 @@ Findings sort worst-first by the per-code risk rating, then, within a
 rating, most-certain first: a callee resolved through the file's imports
 rates 0.95 confidence, a method matched only by its name on a receiver of
 unknown type 0.6. `--min-confidence 0.9` hides the 0.6 findings — 628 of
-676 on the 15-framework corpus. It is a filter, not a verdict on what it
+676 on the 15-framework corpus (re-scanned 2026-09-11 at 0.4.0,
+[`bench/framework_scan/REPORT.md`](https://github.com/fitness-trener/Aether/blob/main/bench/framework_scan/REPORT.md);
+framework versions pinned in `bench/framework_scan/frameworks.lock.txt`). It is a filter, not a verdict on what it
 hides (those are what the rules flag, measured over-flags included), and
 it filters the exit code too: a run whose only findings are below the
 floor exits 0. On a multi-core machine, trees of more than 32 files are
-analysed in parallel; `--jobs N` overrides (1,024 files: 241 s serially,
-69 s on 8 workers, byte-identical output). Details in
+analysed in parallel; `--jobs N` overrides (measured 2026-09-03 on
+1,024 files: 241 s serially, 69 s on 8 workers, byte-identical output). Details in
 [`docs/SCANNING.md`](https://github.com/fitness-trener/Aether/blob/main/docs/SCANNING.md).
 
 ## CI and GitHub Code Scanning
@@ -373,7 +382,7 @@ modeled surface", never as "sound".
     tests/          Integration tests and the monotonic ratchet
     scripts/        run_all.py — the full gate
 
-Full gate: `python -B scripts/run_all.py` (exit 0 = green; 41 PASS suites, and `smt` reports SKIP
+Full gate: `python -B scripts/run_all.py` (exit 0 = green; 42 PASS suites, and `smt` reports SKIP
 when z3 is not installed).
 
 ## Documentation
@@ -383,6 +392,7 @@ when z3 is not installed).
 - [`grammar/diagnostics.md`](https://github.com/fitness-trener/Aether/blob/main/grammar/diagnostics.md) — every diagnostic code
 - [`demos/case_studies/LOOP_LOG.md`](https://github.com/fitness-trener/Aether/blob/main/demos/case_studies/LOOP_LOG.md) — how each detector was built and what it still misses
 - [`BUGS.md`](https://github.com/fitness-trener/Aether/blob/main/BUGS.md) — open and fixed defects in Aether itself
+- [`docs/history/`](https://github.com/fitness-trener/Aether/blob/main/docs/history/README.md) — superseded reports from earlier phases, dated and kept for the record
 
 ## License
 

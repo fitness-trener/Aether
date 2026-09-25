@@ -1,21 +1,34 @@
-# Scanning AI-generated code with Aether
+# Scanning code with Aether
 
-Aether is a compile-time firewall for AI-generated code. Point the scanner
-at a directory of `.aeth` source and it runs the full default-on suite —
-the base effect/capability/refinement passes, the security family
-(E0710–E0731), and the static-semantic checks (E0202–E0207) — and reports
-every finding. Aether is stdlib-only (Python 3.10+); there is nothing to
-install.
+Aether is a security checker for Python, built on the typed intermediate
+representation of the Aether language. `aether check-py` translates an
+unmodified Python file into that IR and runs the security rules on it;
+Aether source (`.aeth`) is checked by the same rules plus the language's
+effect, capability and marker-type checks, which Python code has no
+declarations for.
 
-## Local scan
+Install: `pip install aether-lang` (Python 3.10+; the core has no
+third-party dependencies), then `aether check-py <path>` — see *Scanning
+Python* below. The `.aeth` corpus scanner `tools/scan.py` ships with the
+source checkout, not with the package.
+
+## Scanning `.aeth` source — `tools/scan.py`
+
+From a checkout, `tools/scan.py` runs the full default-on suite over a
+directory of `.aeth` source — the effect and capability passes, the
+security family (`E0710`–`E0731`), and the static-semantic checks
+(`E0202`–`E0207`) — and reports every finding.
 
     python -m tools.scan path/to/dir          # human-readable report
     python -m tools.scan path/to/dir --json    # machine-readable
     python -m tools.scan path/to/dir --sarif    # SARIF v2.1.0
     python -m tools.scan path/to/dir --min-risk high        # triage floor
     python -m tools.scan path/to/dir --min-confidence 0.9   # certainty floor
+    python -m tools.scan path/to/dir --expect  # gate on the diff from `// expect:` headers
 
-Exit code: `0` = no findings, `1` = at least one finding, `2` = usage
+Exit code: `0` = no findings (with `--expect`: no difference from the
+declared headers), `1` = at least one finding (with `--expect`: an
+undeclared finding or a declared one that stopped firing), `2` = usage
 error. Parse errors (invalid syntax — a generation failure) are counted
 and reported separately from architectural/security findings.
 
@@ -29,12 +42,21 @@ Example:
     scanned 34 files · 2 with findings · 0 parse errors
     findings by code: E0206×1, E0713×1
 
-## CI gate (GitHub Code Scanning)
+## CI gate for `.aeth` corpora (GitHub Code Scanning)
 
-Copy `.github/workflows/aether-scan.yml` into your repo. On every push and
-PR it runs the scanner, uploads findings to the **Security → Code Scanning**
-tab as SARIF, and fails the build if anything is found. Set `SCAN_PATH` in
-the workflow env if your `.aeth` files live under one directory.
+For Python, use the GitHub Action in the README (*CI and GitHub Code
+Scanning*). For `.aeth` source, `.github/workflows/aether-scan.yml` is the
+working reference. On every push and PR it runs
+`python -m tools.scan $SCAN_PATH --expect`, uploads the **undeclared**
+findings to the **Security → Code Scanning** tab as SARIF, and fails the
+build when the findings differ from what the files declare: each `.aeth`
+states the codes it produces in a `// expect:` header, and the gate fails
+on an undeclared finding or on a declared finding that stopped firing. A
+file with no header is held to `clean`, so in a repo that uses no headers
+`--expect` fails on any finding. This repository sets `SCAN_PATH` to its
+corpus roots (`demos playground/examples`) because its demos are flagged
+on purpose; a consumer repo sets `SCAN_PATH: .`. It needs a checkout of
+this repository for `tools/scan.py`.
 
 The SARIF integration means Aether findings appear inline on the PR diff,
 just like CodeQL — each with its rule id (`E07xx`/`E02xx`), file, and line.
@@ -52,9 +74,9 @@ refinement types).
 ## Scanning Python — `aether check-py`
 
 `tools/scan.py` walks `.aeth` source. **Unmodified Python does not need a
-port**: `tools/py_frontend.py` translates it into the same IR, so the
-sink+literal and literal-content families run with no rewrite and no
-annotations.
+port**: `transpiler/aether/py_frontend.py` translates it into the same IR,
+so the sink+literal and literal-content families run with no rewrite and
+no annotations.
 
     aether check-py path/to/file.py            # one file
     aether check-py src/ scripts/              # any mix of files and directories
@@ -73,8 +95,9 @@ most-certain-first by the per-finding confidence below.
 ### `--jobs`: parallel file analysis
 
 Each file is analyzed independently, so `check-py` can spread them over
-worker processes. Measured on 8 logical cores over the whole `agno`
-package in `bench/framework_scan/_work/src` (1,024 files, 430 findings):
+worker processes. Measured 2026-09-03 (`demos/case_studies/LOOP_LOG.md`,
+iteration 52) on 8 logical cores over the whole `agno` package in
+`bench/framework_scan/_work/src` (1,024 files, 430 findings):
 **241.0 s / 248.3 s serially, 69.5 s / 68.7 s pooled — 3.5x**, with all
 four `--json` outputs byte-identical.
 
@@ -105,8 +128,10 @@ probability of exploitability.
 `--min-confidence FLOAT` hides everything below the floor. It changes
 nothing about what the detectors found, but it filters the exit code as
 well as the output: a run whose only findings are below the floor exits
-0. On the 15-framework corpus (`bench/framework_scan/`), 676 findings
-split 0.95 x44, 0.9 x4, 0.6 x628 — so `--min-confidence 0.9` hides 628 of
+0. On the 15-framework corpus (`bench/framework_scan/`, re-scanned
+2026-09-11 at 0.4.0; framework versions pinned in
+`bench/framework_scan/frameworks.lock.txt`), 676 findings split 0.95 x44,
+0.9 x4, 0.6 x628 — so `--min-confidence 0.9` hides 628 of
 676 (93%): 624 method-name matches, almost all `cursor.execute`-shaped
 SQL, and 4 `compile()` calls whose result is never run. Those findings
 are what the rules are designed to flag, measured over-flags included,
@@ -153,7 +178,9 @@ Measured results, both reproducible: `bench/py_frontend/REPORT.md`
 (ground truth this repo wrote, and it says so), `bench/pypi_scan/REPORT.md`
 (1.19M lines of third-party PyPI code — 0 crashes, 0 parse failures,
 0.033 findings/KLOC, triaged line by line) and `bench/pypi_scan/RECALL.md`
-(86.8% agreement with bandit as an independent oracle). On `.aeth`
+(86.8% agreement with bandit as an independent oracle **on comparable
+categories**, 125 agreed / 19 candidate misses; 34.2% raw agreement over
+all of bandit's categories — RECALL.md explains the difference). On `.aeth`
 corpora, the aetherbench candidate scan found 13 real bugs
 (`bench/SCAN_FINDINGS.md`); faithful ports of real-world shapes are in
 `bench/REALWORLD_VALIDATION.md`.
