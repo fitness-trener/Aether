@@ -274,8 +274,9 @@ framework versions pinned in `bench/framework_scan/frameworks.lock.txt`). It is 
 hides (those are what the rules flag, measured over-flags included), and
 it filters the exit code too: a run whose only findings are below the
 floor exits 0. On a multi-core machine, trees of more than 32 files are
-analysed in parallel; `--jobs N` overrides (measured 2026-09-03 on
-1,024 files: 241 s serially, 69 s on 8 workers, byte-identical output). Details in
+analysed in parallel; `--jobs N` overrides (measured 2026-09-25 on the
+4,946-file framework corpus, 8 logical cores: 85 s serially, 26 s on 8
+workers, byte-identical output). Details in
 [`docs/SCANNING.md`](https://github.com/fitness-trener/Aether/blob/main/docs/SCANNING.md).
 
 ## CI and GitHub Code Scanning
@@ -385,7 +386,7 @@ modeled surface", never as "sound".
     tests/          Integration tests and the monotonic ratchet
     scripts/        run_all.py — the full gate
 
-Full gate: `python -B scripts/run_all.py` (exit 0 = green; 42 PASS suites, and `smt` reports SKIP
+Full gate: `python -B scripts/run_all.py` (exit 0 = green; 49 PASS suites, and `smt` reports SKIP
 when z3 is not installed).
 
 ## Documentation

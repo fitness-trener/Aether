@@ -105,10 +105,9 @@ param            = IDENT ":" type_expr ;
 contract_clause  = "requires" expr
                  | "ensures"  expr ;
 
-effects_clause   = "effects" effect_list ;
+effects_clause   = "effects" ( "pure" | effect_list ) ;
 effect_list      = effect { "," effect } ;
-effect           = "pure"
-                 | dotted_ident [ "(" expr ")" ] ;
+effect           = dotted_ident [ "(" expr ")" ] ;
 
 (* ============================================================ *)
 (* Statements and blocks                                        *)

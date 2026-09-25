@@ -2623,6 +2623,37 @@ State carried forward: the full gate suite must stay green
 
 ---
 
+## Iteration 62 — Wave 7 of the 2026-09-24 audit: 4.3× faster scans, findings at the call, validated effects clauses (no new detector)
+
+- **Target:** not a backlog row. Plan F5 (perf) + the D10 and A11
+  leftovers.
+- **Probe-confirmed first (on `2f686b2`):** `check-py --jobs 1` over the
+  framework corpus 365.9 s (analysis 249 s of it); 97 AST walks per
+  function; marker rows ≈ 50% of analysis on Python, where they cannot
+  fire. Two E0801 in one body both at `1:1` and both patched to the same
+  call. `effects pure, log` and `effects bogus.effect` accepted.
+- **Fixes (each once, where every caller routes through):** one
+  per-analysis index in `passes/ast_walk.py` (`shared_index()`, entered
+  by `analyze()`); `marker_absent()` early return for the eight marker
+  rows; `_bindings_of` memo in the frontend's def phase; `Call`/`ExprStmt`
+  positions in the parser and E0801 at the call; `pure`-with-siblings is
+  E0201, an unknown effect capability is E0704.
+- **Measured (8 logical cores):** framework corpus `--jobs 1` 365.9 s →
+  85.0 s, default jobs 111.3 s → 25.5 s; single largest files 4.1 / 3.5 /
+  3.4 s → 1.1 / 1.0 / 1.0 s. Findings byte-identical: 683 (framework,
+  default), `--strict`, in-repo trees. `.aeth` corpus: 113 positions moved
+  in 98 files, codes/exit codes identical, 0 new findings.
+- **Residuals (pushed to q1):** see q1 rows below.
+- **TYPE gap surfaced for next iter:** the frontend is now ~75% of
+  `check-py` time (95 s of the pre-wave 344 s in-process total; analysis
+  is ~20 s). Its remaining cost is one Python-AST walk per function per
+  consumer family; a single visitor pass building the per-def tables is
+  the next lever, not another detector-side cache.
+- **Suite:** exit 0 (`smt` SKIP, z3 not installed locally); two new suites
+  (`perf_index`, `call_positions`).
+
+---
+
 ---
 
 ## Next-iteration checklist (for the loop)

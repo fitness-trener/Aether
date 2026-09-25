@@ -31,8 +31,8 @@ code disagree.
 A function may also declare effects no stdlib function performs. The one
 the checker reads is `net.fetch(url-glob)`: its URL glob is what the
 `E0710` (unpinned host), `E0721` (cleartext `http://`) and `E0722`
-(link-local / metadata address) rows inspect. Any other dotted path is
-accepted as a declaration and takes part in composition (`E0801`) and
+(link-local / metadata address) rows inspect. Any other dotted path whose
+first segment is a known capability is accepted as a declaration and takes part in composition (`E0801`) and
 capability checking (`E0701`) like any other effect.
 
 ## Composition rule — checked statically (`E0801`)
@@ -48,11 +48,17 @@ passed as a value counts as a callee of the call it is handed to.
 - a caller effect **without** an argument covers the same path with any
   argument (`net.fetch` covers `net.fetch("https://api.x/*")`);
 - a caller effect **with** a glob argument covers a callee argument the
-  glob matches, where `*` matches any run of characters.
+  glob matches. Cover is decided on the parsed URL: a `*` in the host
+  part never crosses `/`, `@` or `:` (so `https://*.corp.example/*` does
+  not cover `https://evil.com/.corp.example/x`), and elsewhere `*`
+  matches any run of characters.
 
-Not decided statically at this version: `pure` written alongside other
-effects is not rejected, and effect names are not validated against a
-list (`audits/audit_2026-09-24_plan.md`, A11).
+An `effects` clause is validated statically. `pure` written alongside
+another effect is a parse error (`E0201`), and an effect whose first path
+segment is not a known capability is `E0704` (no module could grant it).
+A known capability with any action (`fs.delete`) is accepted as a
+declaration. When a function has more than one `effects` clause, the last
+one wins without a diagnostic (a recorded residual).
 
 ## Capability gating — checked statically (`E0701`)
 

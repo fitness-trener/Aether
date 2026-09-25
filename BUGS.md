@@ -2194,3 +2194,153 @@ scan with 3.12+ (this is Python 3.x)" appended to its detail (stderr,
 JSON, SARIF). A heuristic on the error text, hence the question mark: a
 genuinely malformed f-string on 3.11 gets the hint too; py2 `print 'x'`
 does not. Verified on 3.13: the PEP 701 repro parses and exits 1 (E0714).
+
+### BUG-080  Every detector re-walked every function; on Python half the analysis time went to eight marker rows that cannot fire there  [OPEN]
+test: tests/test_perf_index.py (`::test_walk_budget_per_function`,
+`::test_marker_skip_is_output_identical`, `::test_shared_index_is_output_identical`)
+
+Found 2026-09-24 by the architecture audit (F5, P2). Measured on
+`2f686b2`: `check-py --jobs 1` over the framework corpus (4,946 files)
+365.9 s wall; in-process, 94.8 s frontend + 249.1 s analysis. cProfile on
+the three slowest files (`agno/workflow/workflow.py`,
+`browser_use/beta/service.py`, `agno/db/postgres/postgres.py`): 5.38M
+`walk()` frames, 28.5 of 37.2 s under the profiler; `binders()` alone
+22.8 s. Per detector (same three files, 7.36 s): E0730 12.6%, E0729 12.4%,
+the six marker-flow rows ~4.2% each (≈ 50% together), each
+literal-or-wrapper row ~4.5%.
+
+Root cause: `contexts()`, `binders()` and `walk(fn_exprs(d), "Call")` are
+recomputed by each of ~25 detectors per function (`_safe_names` alone
+walked the binders twice per row); and the marker rows (E0712, E0715,
+E0724, E0725, E0726, E0728, E0729, E0730) ran their whole per-function
+fixpoint even when the program has no marker type and no marker
+constructor, which is every Python program (the frontend emits neither).
+Their early-exit guard `not tainted and not src_l and not mfields` never
+fired because `src_l` always holds the stdlib constructors.
+
+Fix (`95abe86`): `passes/ast_walk.py` gains `shared_index()`, entered by
+`passes.analyze()`: `contexts()`, `binders()`, a new `fn_calls()`,
+`all_nodes()` and `names_in()` are computed once per node per analysis
+(keyed by node identity, the node kept in the entry and compared with
+`is`, so a recycled `id` cannot alias; scoped to one `analyze()` call,
+so a detector called directly is uncached exactly as before). Every
+`walk(fn_exprs(d), "Call")` in the passes now reads `fn_calls(d)`.
+`detector_specs.marker_absent(ast, marker)` is True when no node anywhere
+is named the marker or one of its stdlib constructors (`classify`,
+`classifyPII`, `classifyUntrusted`); then every input the row reads
+(carriers, marked params/fields/annotations, source functions other than
+the constructors, aliases of them) is empty, no name is tainted and no
+leak test can succeed, so the six marker-flow rows, E0729 and E0730 skip
+it — output-identical by construction, checked by forcing them to run on
+every corpus `.aeth` and a Python module. E0716 obligations 2 and 3 skip
+when there is no `Authorized` anywhere / no gated function (they could
+yield nothing). E0723's literal scan reads `all_nodes()`.
+
+Measurement: walks per function on a 40-function Python module 97 → 14.
+The three slowest files, analysis only: 7.36 s → 0.48 s. Output
+byte-identical (see Measurements).
+
+### BUG-081  The Python frontend re-walked each function six times for its bindings  [OPEN]
+test: tests/test_perf_index.py (the framework-corpus byte-identity is the
+check; the timing is in Measurements — no walk-count test pins it)
+
+Found 2026-09-25 by this wave's profile after BUG-080: with analysis cut
+to ~20 s, the frontend was the top hotspot. `_bindings_of` was 8.5 of
+14.2 s of frontend time on the three slowest files (4,011 calls for
+668 functions): its call sites in `py_frontend.py` (binding tables, the
+alias resolver, the XML parser binder, the guard scan, parameter seeding,
+the per-def counts) each re-walked the same function's Python AST.
+
+Fix (`cd97b8a`): `_bindings_of` is memoized per node while `py_to_ir`
+translates the `def`s (a `ContextVar` set around that loop only). The
+scope phase then strips `def`s out of class and module nodes in place
+(`_ScopeStripper`), which would make a cached entry stale, so nothing is
+cached there. Callers get a fresh list each time. Frontend on the three
+slowest files 2.8 s → 1.7 s; framework-corpus JSON byte-identical.
+
+### BUG-082  E0801 pointed at the function declaration, not the offending call; Aether `Call` and `ExprStmt` had no position  [OPEN]
+test: tests/test_call_positions.py (all five)
+
+Found 2026-09-24 by the tool auditor (D10, P2); deferred by Wave 5a
+(`parser.py` outside its set). Repro on `2f686b2`:
+
+    function main() returns Unit
+      effects pure
+    do
+      let x = 1
+      print("one")
+      if x > 0 then
+        print("two")
+      end
+    end
+
+→ two E0801, both at `1:1`, and `compute_patch_target` sent both to the
+first `print`. A dead `print(...)` after `return` was reported (E0204) on
+the `return` line; `fmt` dropped a comment above a bare call with no
+literal in it (nothing on that line carried a position).
+
+Root cause: `parser.py` built `{"kind": "Call", "func", "args"}` and
+`{"kind": "ExprStmt", "expr"}` with no `pos`, so every driver fell back to
+the declaration's; `check_effects` used the declaration's position even
+where a call position existed.
+
+Fix (`0084ef1`): `Call` carries the position of the first token of its
+callee expression (`_parse_postfix` records it before the primary — a
+chain `a.b(c)(d)` shares one start); `ExprStmt` the statement's first
+token. E0801 is reported at the call (the declaration only for an
+unpositioned call — none from the parser now), for the direct,
+function-value and unknown-callee variants alike. `_patch_E0801` takes the
+call at the reported position (the one whose callee is `callee` when a
+chain shares the start), then falls back to the old first-by-name search.
+Everything that already read `call.get("pos") or <decl pos>` moves to
+the call without code change. E0701 stays at the declaration on purpose:
+it is a per-function aggregate over the transitive effect closure, not a
+per-call finding. `parse(pretty(parse(src))) == parse(src)` still holds
+(`asts_equal_ignoring_pos` strips `pos`); `pretty` gains anchor lines,
+which only lets it keep comments it used to drop.
+
+Measurement: every tracked `.aeth` (418) through `check --json --no-prove`
+before/after: 98 outputs change, 113 positions move, codes and exit codes
+identical in all 418 (list below). Python (`check-py`, framework corpus
+and in-repo trees, default and `--strict`) byte-identical — the frontend
+already positioned its calls.
+
+### BUG-083  `effects pure, log` passed `check` and failed `--effect-strict`  [OPEN]
+test: tests/test_module_validation.py (`::test_A11_pure_alongside_other_effects_is_a_parse_error`)
+
+Found 2026-09-24 by the language auditor (A11, P2; repro
+`scratchpad\lang\e06_pure_plus.aeth`). The static checker read the clause
+as `{log}` (`pure` is the empty path set), the runtime as `pure` (E0501 on
+the first `print`) — the two disagreed on what the function may do.
+
+Root cause: `parse_effect_list` accepted `pure` as one element of any
+list (`grammar.ebnf`: `effect = "pure" | dotted_ident ...`).
+
+Fix (`0084ef1`): a list of more than one effect containing `pure` is
+E0201 at the `pure` token ("'pure' declares no effects and cannot be
+combined with other effects"), in either order. The corpus never writes
+it (0 of 418 files). E0201 row text updated.
+
+### BUG-084  An effect naming an unknown capability was accepted silently  [OPEN]
+test: tests/test_module_validation.py (`::test_A11_effect_with_unknown_capability_is_E0704`)
+
+Found 2026-09-24 by the language auditor (A11). Repro: `effects log,
+bogus.effect, fs` in a module-less program → `check` OK. Under a module it
+surfaced only as E0701 against a capability (`bogus`) that E0704 forbids a
+module to declare — a requirement no program can ever satisfy, reported
+as if it were a missing grant.
+
+Root cause: nothing validated effect names; `effect_capability()` maps an
+effect to its first path segment and nobody checked that segment.
+
+Fix (`0084ef1`): `check_modules` (modules stage, runs with or without a
+module) reports E0704 for an effect in Aether source whose first path
+segment is not in `_KNOWN_CAPABILITIES` (and is not `pure`), positioned
+at the function, `extra` = `function`, `effect`, `capability`, `known`.
+Existing code, row extended; no new code. A known head with any tail
+(`fs.delete`) stays a declaration — `grammar/effects.md` says any other
+dotted path is accepted. Python ASTs (`lang == "python"`) are skipped:
+their effects are inferred by the frontend, which emits `env` and
+`process` heads outside the vocabulary (0 new Python findings, measured).
+Corpus: 0 new findings (every declared head in the 407 parseable files is
+`db`, `exec`, `fs`, `log`, `net`, `time` or `pure`).

@@ -1,5 +1,11 @@
 # Operation Log (append-only — newest on top)
 
+## [2026-09-25] Q1 rows | iteration 62: faster scans, findings at the call, validated effects clauses
+- **3 q1 row(s)** from Wave 7. A function with repeated `effects` clauses keeps the
+  last one, with no diagnostic. The frontend is now about 75% of `check-py` time.
+- **Coordinator check:** framework-corpus `--json` output is identical before and
+  after (683 findings), in 26 s at default jobs.
+
 ## [2026-09-25] Q1 rows | iteration 61: one exit-code table, one JSON contract
 - **3 q1 row(s)** from Wave 5b. The next gap it records: `aether run --json` still
   mixes the program's own stdout with the JSON document.
