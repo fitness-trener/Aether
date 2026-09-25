@@ -37,6 +37,10 @@ class EmitContext:
         # --release mode: elide effect frames and ensures asserts; keep
         # requires + refinement boundary checks (wave 1, gap 6).
         self.release = False
+        # Declared return type of each function being emitted, and the
+        # annotated let/var types of the current one (A6 refinement sites).
+        self.ret_type_stack: List[Any] = []
+        self.local_types: Dict[str, Any] = {}
         # Name of the emitted capability-grant constant, or None when the
         # program declares no module (implicit all-grant).
         self.grant: Optional[str] = None
@@ -113,7 +117,16 @@ def emit(ast: Dict[str, Any], release: bool = False) -> str:
             pred_src = emit_expr(ctx, refn_data["predicate"])
             ctx.emit(f"def {_H}refn_{refn_name}(_ae_self):")
             with ctx.block():
-                ctx.emit(f"return bool({pred_src})")
+                # A refined alias of a refined type must satisfy the base
+                # predicate too: `type Small = PositiveInt where self < 10`
+                # accepted -50 (audit 2026-09-24 A6).
+                base = refn_data["base_name"]
+                if refn_data["base_kind"] == "TypeName" and base in ctx.refinements \
+                        and base != refn_name:
+                    ctx.emit(f"return bool({_H}refn_{base}(_ae_self)) "
+                             f"and bool({pred_src})")
+                else:
+                    ctx.emit(f"return bool({pred_src})")
 
     # Emit each top-level declaration. After each, flush any helper functions.
     for d in ast["decls"]:
@@ -151,7 +164,8 @@ def emit_top_decl(ctx: EmitContext, d: Dict[str, Any]):
     elif k == "UnionDecl":
         emit_union_constructors(ctx, d)
     elif k == "ConstDecl":
-        ctx.emit(f"{mangle(d['name'])} = {emit_expr(ctx, d['value'])}")
+        ctx.emit(f"{mangle(d['name'])} = " + refine_check(
+            ctx, d.get("type"), emit_expr(ctx, d['value']), d['name']))
     elif k == "ModuleDecl":
         ctx.emit(f"# module {d['name']} requires capabilities: {d['capabilities']}")
         ctx.emit(f"# exports: {d['exports']}")
@@ -167,6 +181,11 @@ def emit_record_constructor(ctx: EmitContext, d: Dict[str, Any]):
     ctx.emit()
     ctx.emit(f"def {mangle(d['name'])}({args}):")
     with ctx.block():
+        for f in d["fields"]:
+            checked = refine_check(ctx, f.get("type"), f["name"],
+                                   f"{d['name']}.{f['name']}")
+            if checked != f["name"]:
+                ctx.emit(f"{f['name']} = {checked}")
         kind_lit = repr(d["name"])
         items = ", ".join(f"{f!r}: {f}" for f in fields)
         if items:
@@ -201,6 +220,10 @@ def emit_function(ctx: EmitContext, d: Dict[str, Any]):
     name = d["name"]
     params = [mangle(p["name"]) for p in d["params"]]
     ctx.fn_name_stack.append(name)
+    ctx.ret_type_stack.append(d.get("return_type"))
+    # Annotated let/var names of this function: an assignment to one is
+    # checked against its annotation (flow-insensitive, like the passes).
+    ctx.local_types = {n["name"]: n.get("type") for n in _typed_binds(d["body"])}
     ctx.old_exprs_stack.append([])
     ctx.ensures_stack.append(d["ensures"])
     ctx.emit()
@@ -220,17 +243,12 @@ def emit_function(ctx: EmitContext, d: Dict[str, Any]):
         # where self > 0" reads better than "value 0 fails refinement
         # PositiveInt".
         for p in d["params"]:
-            ty = p.get("type") or {}
-            if ty.get("kind") == "TypeName" and ty.get("name") in ctx.refinements:
-                refn_name = ty["name"]
-                pname_m = mangle(p["name"])
-                pred_ast = ctx.refinements[refn_name]["predicate"]
-                pred_text = _pretty(pred_ast)
-                ctx.emit(
-                    f"{_H}check_refinement({pname_m}, "
-                    f"{_H}refn_{refn_name}, "
-                    f"{refn_name!r}, {p['name']!r}, {pred_text!r})"
-                )
+            pname_m = mangle(p["name"])
+            checked = refine_check(ctx, p.get("type"), pname_m, p["name"])
+            if checked != pname_m:
+                ty = p.get("type") or {}
+                ctx.emit(checked if ty.get("kind") == "TypeName"
+                         else f"{pname_m} = {checked}")
         for clause in d["requires"]:
             cond_src = emit_expr(ctx, clause)
             ctx.emit(f"{_H}assert_contract(bool({cond_src}), 'requires', "
@@ -274,6 +292,8 @@ def emit_function(ctx: EmitContext, d: Dict[str, Any]):
             ctx.lines[old_marker_idx:old_marker_idx] = old_lines
 
     ctx.fn_name_stack.pop()
+    ctx.ret_type_stack.pop()
+    ctx.local_types = {}
     ctx.old_exprs_stack.pop()
     ctx.ensures_stack.pop()
 
@@ -325,6 +345,44 @@ def _body_terminates(stmts: List[Dict[str, Any]]) -> bool:
     return False
 
 
+def _typed_binds(body: Any):
+    """Let/Var nodes with a type annotation, anywhere in `body`."""
+    if isinstance(body, dict):
+        if body.get("kind") in ("Let", "Var") and body.get("type"):
+            yield body
+        for v in body.values():
+            yield from _typed_binds(v)
+    elif isinstance(body, list):
+        for x in body:
+            yield from _typed_binds(x)
+
+
+def refine_check(ctx: EmitContext, ty: Any, src: str, binding: str) -> str:
+    """`src` wrapped in the runtime refinement check its declared type
+    demands, or `src` unchanged. One place for every site a refined
+    value is bound: parameters, returns, annotated let/var and their
+    re-assignments, consts, record fields, and the elements of a
+    `List<Refined>` (audit 2026-09-24 A6; params were the only site).
+    A RUNTIME guarantee: it fires when the value is bound."""
+    if not isinstance(ty, dict):
+        return src
+    if ty.get("kind") == "TypeName" and ty.get("name") in ctx.refinements:
+        t = ty["name"]
+        text = _pretty(ctx.refinements[t]["predicate"])
+        base = ctx.refinements[t]["base_name"]
+        if base in ctx.refinements and base != t:
+            text = f"{base} and {text}"   # the chained base predicate
+        return (f"{_H}check_refinement({src}, {_H}refn_{t}, {t!r}, "
+                f"{binding!r}, {text!r})")
+    if ty.get("kind") == "GenericType" and ty.get("name") == "List" \
+            and len(ty.get("args") or []) == 1:
+        var = ctx.fresh("elem")
+        inner = refine_check(ctx, ty["args"][0], var, f"element of {binding}")
+        if inner != var:
+            return f"[{inner} for {var} in {src}]"
+    return src
+
+
 # ----------------------------------------------------------------------
 # Statement / block
 # ----------------------------------------------------------------------
@@ -340,9 +398,13 @@ def emit_block(ctx: EmitContext, stmts: List[Dict[str, Any]]):
 def emit_stmt(ctx: EmitContext, s: Dict[str, Any]):
     k = s["kind"]
     if k in ("Let", "Var"):
-        ctx.emit(f"{mangle(s['name'])} = {emit_expr(ctx, s['value'])}")
+        ctx.emit(f"{mangle(s['name'])} = "
+                 + refine_check(ctx, s.get("type"), emit_expr(ctx, s['value']),
+                                s['name']))
     elif k == "Assign":
-        ctx.emit(f"{mangle(s['target'])} = {emit_expr(ctx, s['value'])}")
+        ctx.emit(f"{mangle(s['target'])} = "
+                 + refine_check(ctx, ctx.local_types.get(s['target']),
+                                emit_expr(ctx, s['value']), s['target']))
     elif k == "If":
         emit_if_stmt(ctx, s)
     elif k == "While":
@@ -403,7 +465,10 @@ def emit_return(ctx: EmitContext, s: Dict[str, Any]):
     if s["value"] is None:
         ctx.emit("_ae_result = None")
     else:
-        ctx.emit(f"_ae_result = {emit_expr(ctx, s['value'])}")
+        ret_ty = ctx.ret_type_stack[-1] if ctx.ret_type_stack else None
+        fn = ctx.fn_name_stack[-1] if ctx.fn_name_stack else "?"
+        ctx.emit("_ae_result = " + refine_check(
+            ctx, ret_ty, emit_expr(ctx, s['value']), f"return of {fn}"))
     emit_ensures_checks(ctx)
     ctx.emit("return _ae_result")
 

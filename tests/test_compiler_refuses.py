@@ -726,6 +726,79 @@ def test_a7_subdomain_and_path_globs_still_cover():
                   "https://api.example.com/charge/*") == []
 
 
+# ----------------------------------------------------------------------
+# A6 — refinements checked wherever a refined value is bound (RUNTIME)
+# ----------------------------------------------------------------------
+
+POS = "type PositiveInt = Int where self > 0\n"
+
+
+def _main(body: str, decls: str = "") -> tuple:
+    return run(POS + decls + """
+function main() returns Unit
+  effects log
+do
+""" + body + """
+end
+""")
+
+
+def test_a6_every_binding_site_is_checked():
+    cases = {
+        "return": ("  print(intToString(bad()))", """
+function bad() returns PositiveInt
+  effects pure
+do
+  return 0 - 5
+end
+"""),
+        "typed let": ("  let n: PositiveInt = 0 - 7\n  print(intToString(n))", ""),
+        "var reassign": ("  var n: PositiveInt = 1\n  n = 0 - 2\n  print(intToString(n))", ""),
+        "record field": ("  let a = Account(0 - 100)\n  print(intToString(a.balance))",
+                         "record Account do\n  balance: PositiveInt\nend\n"),
+        "list element": ("  print(intToString(total([3, 0 - 4])))", """
+function total(xs: List<PositiveInt>) returns Int
+  effects pure
+do
+  return sum(xs)
+end
+"""),
+        "const": ("  print(intToString(LIMIT))", "const LIMIT: PositiveInt = 0 - 1\n"),
+        "chained base": ("  print(intToString(useSmall(0 - 50)))", """
+type Small = PositiveInt where self < 10
+function useSmall(n: Small) returns Int
+  effects pure
+do
+  return n
+end
+"""),
+    }
+    for label, (body, decls) in cases.items():
+        out, code = _main(body, decls)
+        assert (out, code) == ("", "E0302"), (label, out, code)
+
+
+def test_a6_valid_values_pass():
+    out, code = _main("""  let n: PositiveInt = 3
+  let a = Account(n)
+  print(intToString(total([a.balance, good()]) + LIMIT))""", """
+record Account do
+  balance: PositiveInt
+end
+const LIMIT: PositiveInt = 1
+function good() returns PositiveInt
+  effects pure
+do
+  return 2
+end
+function total(xs: List<PositiveInt>) returns Int
+  effects pure
+do
+  return sum(xs)
+end
+""")
+    assert (out, code) == ("6\n", None), (out, code)
+
 if __name__ == "__main__":
     n = 0
     for name, fn in sorted(globals().items()):
