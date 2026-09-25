@@ -1907,7 +1907,7 @@ the literal scan walks; `_scope_has_content` counts a bytes assignment.
 Measurement: no E0723 moved or appeared on the framework corpus or the
 in-repo trees except the new test's own AWS documented-example fixture.
 
-### BUG-073  E0714 flagged the documented shell fix — `"ls -l " + shlex.quote(p)`, the f-string form, `" ".join(shlex.quote(a) for a in args)`, `shlex.join` — at 0.95  [OPEN]
+### BUG-073  E0714 flagged the documented shell fix — `"ls -l " + shlex.quote(p)`, the f-string form, `" ".join(shlex.quote(a) for a in args)`, `shlex.join` — at 0.95  [FIXED c130939]
 test: tests/test_py_precision.py (`::test_c1_quoted_pieces_compose`);
 tests/test_sink_rows.py (`::test_every_sanitizer_maps_and_its_fix_is_clean`);
 tests/test_python_hints.py (`::test_every_python_hint_converges`)
@@ -1948,7 +1948,7 @@ Measured: framework corpus 0 E0714 changes (no site used the idiom);
 probes `cmd_shlex_quote`, `cmd_shlex_quote_fstr`, `cmd_shlex_join`,
 `cmd_list_join_shell` 0.95 → clean.
 
-### BUG-074  E0718: no Python spelling cleared it — `redirect(url_for(...))`, `redirect(reverse(...))`, `request.url_for`, Django's allow-list check all fired at 0.95  [OPEN]
+### BUG-074  E0718: no Python spelling cleared it — `redirect(url_for(...))`, `redirect(reverse(...))`, `request.url_for`, Django's allow-list check all fired at 0.95  [FIXED c130939]
 test: tests/test_py_precision.py (`::test_c2_own_origin_redirects`);
 tests/test_sink_rows.py (4 `safeRedirect` pins)
 
@@ -1984,7 +1984,7 @@ intraprocedural model); probes `rd_url_for`, `rd_url_for_next`,
 `rd_django_reverse`, `rd_fastapi_url_for`, `rd_django_is_safe`,
 `rd_referrer_or` 0.95 → clean, `rd_starlette_url_path_for` 0.95 → 0.6.
 
-### BUG-075  E0713/E0719 precision: constants, psycopg `sql`, attribute Tables, IN-list placeholders; Jinja's sandbox and a same-file `from_string`  [OPEN]
+### BUG-075  E0713/E0719 precision: constants, psycopg `sql`, attribute Tables, IN-list placeholders; Jinja's sandbox and a same-file `from_string`  [FIXED c130939]
 test: tests/test_py_precision.py (`::test_c3_sql_constants_and_composition`,
 `::test_c4_sandbox_and_own_from_string`)
 
@@ -2028,7 +2028,7 @@ removed openhands' `Environment(loader=BaseLoader).from_string(self.prompt)`
 through `class MicroAgent: prompt = ''` — a placeholder the registry's
 subclasses fill in, i.e. a miss. With UPPER_CASE only it fires again.
 
-### BUG-076  confidence measured the callee, not the argument; Python findings named Aether functions under `category: capability`; C7 small rows  [OPEN]
+### BUG-076  confidence measured the callee, not the argument; Python findings named Aether functions under `category: capability`; C7 small rows  [FIXED c130939]
 test: tests/test_confidence.py (`::test_argument_shape_demotion_is_output_only`,
 `::test_docstring_credential_rates_at_the_floor`,
 `::test_sanitizer_name_set_matches_the_frontend`);
