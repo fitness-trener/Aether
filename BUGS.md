@@ -1557,7 +1557,7 @@ size 1. Measurement: none needed (no detector touches `remove`).
 `grammar/stdlib.md` "Set<T>" now carries a "Known defect" note — delete it
 with the fix.
 
-### BUG-055  `for` / `match` binders (and parameters) re-bound a name the safe / stable / authorized proofs had proven  [OPEN]
+### BUG-055  `for` / `match` binders (and parameters) re-bound a name the safe / stable / authorized proofs had proven  [FIXED c193b21]
 test: tests/test_compiler_refuses.py
 (`::test_a5_for_shadow_path`, `::test_a5_match_shadow_path`,
 `::test_a5_for_shadow_sql`, `::test_a5_for_shadow_idor`,
@@ -1592,7 +1592,7 @@ parameter for `_record_names`). Taint propagates through `source`.
 Measurement: in-repo `.aeth` corpus 200 findings before and after,
 identical (file, code, line); Python corpora unchanged (see Measurements).
 
-### BUG-056  effects and injections in `requires` / `ensures`, refinement predicates and `const` initializers were never checked  [OPEN]
+### BUG-056  effects and injections in `requires` / `ensures`, refinement predicates and `const` initializers were never checked  [FIXED c193b21]
 test: tests/test_compiler_refuses.py
 (`::test_a1_requires_effect`, `::test_a1_ensures_effect`,
 `::test_a1_refinement_predicate_effect`, `::test_a1_const_initializer_effect`,
@@ -1616,7 +1616,7 @@ marker-flow and literal-or-wrapper rows, E0716, E0717, E0729) iterates
 FunctionDecls. Effects in a predicate or const are E0801 (pure context)
 and, under a module, E0701.
 
-### BUG-057  function values laundered effects and capabilities unless they were a bare Ident argument  [OPEN]
+### BUG-057  function values laundered effects and capabilities unless they were a bare Ident argument  [FIXED c193b21]
 test: tests/test_compiler_refuses.py
 (`::test_a2_indexed_list_under_module`, `::test_a2_returned_function`,
 `::test_a2_const_alias`, `::test_a2_list_element_to_hof`,
@@ -1658,7 +1658,7 @@ Measurement: in-repo `.aeth` corpus 200 = 200 (no corpus program calls
 an unnameable callee with an effectful escaping function); framework
 corpus 676 = 676 default, 10,808 = 10,808 `--strict`.
 
-### BUG-058  name mangling was not injective and shared the namespace of the runtime's own helpers  [OPEN]
+### BUG-058  name mangling was not injective and shared the namespace of the runtime's own helpers  [FIXED 8722ce6]
 test: tests/test_compiler_refuses.py
 (`::test_a4_user_function_cannot_replace_contract_checker`,
 `::test_a4_user_function_cannot_replace_refinement_checker`,
@@ -1683,7 +1683,7 @@ with. `_ae_result` / `_ae_self` stay: they are the user's own `result`
 and `self`. Test: every `build_namespace()` entry is either reachable
 exactly as its stdlib name or unreachable from every identifier.
 
-### BUG-059  the runtime enforced no capabilities  [OPEN]
+### BUG-059  the runtime enforced no capabilities  [FIXED 8722ce6]
 test: tests/test_compiler_refuses.py
 (`::test_a3_effect_outside_grant_fails_at_runtime`,
 `::test_a3_release_mode_enforces_too`, `::test_a3_const_initializer_under_module`,
@@ -1708,7 +1708,7 @@ declared effects of the running program, not a static proof. Ceiling:
 checked, against one process-wide grant (two packed modules imported
 into one process share the last one set).
 
-### BUG-060  a net.fetch glob `*` crossed `/ @ :` in the authority  [OPEN]
+### BUG-060  a net.fetch glob `*` crossed `/ @ :` in the authority  [FIXED 065ee74]
 test: tests/test_compiler_refuses.py (`::test_a7_glob_does_not_span_the_path`,
 `::test_a7_glob_does_not_span_userinfo`, `::test_a7_subdomain_and_path_globs_still_cover`)
 
@@ -1718,7 +1718,7 @@ URL globs the cover is decided per part of the parsed URL; `*` in the
 scheme or authority is `[^/@:?#]*`, in the path `.*`. `.aeth` corpus
 200 = 200.
 
-### BUG-061  refinements were checked only on direct `TypeName` parameters  [OPEN]
+### BUG-061  refinements were checked only on direct `TypeName` parameters  [FIXED b02eafe]
 test: tests/test_compiler_refuses.py (`::test_a6_every_binding_site_is_checked`,
 `::test_a6_valid_values_pass`)
 
@@ -1731,7 +1731,7 @@ them, consts, record constructor fields and `List<Refined>` elements;
 the hoisted predicate of a refined alias calls its base's predicate.
 Runtime guarantees (E0302 when the value is bound).
 
-### BUG-062  deep input crashed the parser / passes / emitter with a Python traceback  [OPEN]
+### BUG-062  deep input crashed the parser / passes / emitter with a Python traceback  [FIXED eaa5d91]
 test: tests/test_compiler_refuses.py (`::test_a10_deep_parens_and_long_chains_are_e0201`,
 `::test_a10_bounded_depth_still_analyzes_and_runs`, `::test_a10_unemittable_construct_is_e9001`)
 
