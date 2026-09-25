@@ -21,20 +21,19 @@ Sample output on this page is wrapped to fit and trimmed; `...` marks
 elided text.
 
     $ aether check-py bench/py_frontend/corpus/sqli_repro.py
-    [E0713] error (capability) at line 20, col 12: function 'find_user' builds a SQL query for
-    'sqlQuery' unsafely (query is built by string concatenation - use sqlBind(...)); untrusted
-    input concatenated into a query is an injection
-      hint: use a fixed literal, or parameterize with sqlBind("... ? ...", value) which escapes
-      the value so it cannot break out of the query
-    [E0713] error (capability) at line 26, col 12: function 'find_user_fstring' builds a SQL
-    query for 'sqlQuery' unsafely ...
+    [E0713] error (security) at line 20, col 12: function 'find_user' builds a SQL query for
+    execute unsafely (query is built by string concatenation); untrusted input concatenated into
+    a query is an injection
+      hint: keep the query text fixed and pass the values separately: cursor.execute("SELECT *
+      FROM t WHERE id = %s", (value,)) (the placeholder is the driver's: %s, ? or :name), or
+      SQLAlchemy text("SELECT * FROM t WHERE id = :id").bindparams(id=value) / select(t)
+    [E0713] error (security) at line 26, col 12: function 'find_user_fstring' builds a SQL
+    query for execute unsafely ...
 
     2 finding(s) in 3 function(s); 3 unprovable region(s) in 3 function(s).
     NOT checked on Python (no declared effects clause, no marker types): ...
     ...
 
-`sqlBind` is Aether's name for a parameterized query; see the limits below
-for how to read Aether names in findings on Python.
 
 Exit `0` clean, `1` findings, `2` usage error (a missing path), `3`
 analyzer crash, `4` incomplete (a file could not be parsed and nothing
@@ -68,8 +67,8 @@ form, no shell — on line 24.
     ...:24: B603[bandit]: LOW: subprocess call - check for execution of untrusted input.
 
     $ aether check-py bench/realworld_subprocess_cmdi/subprocess_repro.py
-    [E0714] error (capability) at line 18, col 12: function 'make_thumbnail' builds a shell
-    command for 'shellExec' unsafely ...
+    [E0714] error (security) at line 18, col 12: function 'make_thumbnail' builds a shell
+    command for subprocess.call unsafely ...
     ...
 
 Both find line 18. Only one of them also warns about the fix. A checker
@@ -83,7 +82,7 @@ value `AKIAIOSFODNN7EXAMPLE`, which has the shape of a real key):
     (no output, exit 0)
 
     $ aether check-py bench/py_frontend/corpus/hardcoded_secret_repro.py
-    [E0723] error (capability) at line 19, col 18: string literal contains a hardcoded AWS
+    [E0723] error (security) at line 19, col 18: string literal contains a hardcoded AWS
     access key id; a credential in source is committed to version control and shipped in
     every build
     ...
@@ -207,23 +206,19 @@ unresolved type; those findings are rated 0.6 confidence, so they sort
 below the import-resolved findings of the same risk rating. Single file, no cross-module resolution, no control flow.
 Full list in [`bench/py_frontend/REPORT.md`](https://github.com/fitness-trener/Aether/blob/main/bench/py_frontend/REPORT.md) §4.
 
-Findings on Python still use Aether's names. Messages name the Aether sink
-(`sqlQuery`, `shellExec`, `deserialize`, `evalCode`, `renderTemplate`,
-`readFile`) rather than your call, and the messages or hints for `E0711`
-(`--strict`), `E0713`, `E0714`, `E0718`, `E0720`, `E0723` and `E0731` name
-functions Python does not have: `safeJoin`, `sqlBind`, `shellArg`,
-`safeRedirect`, `schemaDecode`, `getEnv`, `trusted`. `executescript` findings name `sqlExec`, and the
-`E0716` hint names `authorize` and `Authorized<String>`. Under `--strict`,
-the `E0701` hint suggests an Aether `module ... requires capability`
-declaration or `effects pure`; `E0710`/`E0721`/`E0722` say a function
-"declares effect 'net.fetch'" when a mapped `fetch` call fires them,
-though Python declares nothing. Read them as the
-Python fix they stand for: a parameterized query for `sqlBind`, an argv
-list or `shlex.quote` for `shellArg`, a resolved path checked to stay
-under a fixed base directory for `safeJoin`, a host allow-list for
-`safeRedirect`, a data-only format such as `json` validated against a
-schema for `schemaDecode`, `os.environ` for `getEnv`. The `E0727` hints
-name Python fixes; the `E0719` hint names no function.
+Findings on Python name your call and a Python fix: the message names
+the callee as the frontend spelled it (`execute`, `subprocess.call`,
+`lxml.etree.fromstring`), and the hints of the default-on codes and of
+`E0711` under `--strict` give the Python remedy (a parameterized
+`cursor.execute`, an argv list or `shlex.quote` per argument, `url_for` or
+an allow-list check, `json.loads`/`yaml.safe_load`, `os.environ`,
+`ast.literal_eval`, `werkzeug.utils.safe_join`). Python findings carry
+`category: "security"`. Three rows still speak Aether: `E0716` on
+`executescript` names `sqlExec`, `authorize` and `Authorized<String>`;
+under `--strict`, the `E0701` hint suggests an Aether `module ... requires
+capability` declaration or `effects pure`; and `E0710`/`E0721`/`E0722`
+say a function "declares effect 'net.fetch'" when a mapped `fetch` call
+fires them, though Python declares nothing.
 
 ## Install
 
@@ -255,11 +250,11 @@ the findings you can actually fix:
 
     $ aether check-py bench/realworld_subprocess_cmdi/ bench/realworld_xxe/
     bench/realworld_subprocess_cmdi/subprocess_repro.py
-    [E0714] error (capability) at line 18, col 12: function 'make_thumbnail' builds a shell
-    command for 'shellExec' unsafely ...
+    [E0714] error (security) at line 18, col 12: function 'make_thumbnail' builds a shell
+    command for subprocess.call unsafely ...
     ...
     bench/realworld_xxe/lxml_repro.py
-    [E0727] error (capability) at line 17, col 12: function 'load_config' parses untrusted
+    [E0727] error (security) at line 17, col 12: function 'load_config' parses untrusted
     XML via lxml.etree.fromstring ...
     ...
 
@@ -270,8 +265,10 @@ the findings you can actually fix:
 Findings sort worst-first by the per-code risk rating, then, within a
 rating, most-certain first: a callee resolved through the file's imports
 rates 0.95 confidence, a method matched only by its name on a receiver of
-unknown type 0.6. `--min-confidence 0.9` hides the 0.6 findings — 628 of
-676 on the 15-framework corpus (re-scanned 2026-09-11 at 0.4.0,
+unknown type 0.6, and so does a finding whose argument already contains a
+sanitizer or an own-origin URL builder. `--min-confidence 0.9` hides the
+0.6 findings — 632 of 683 on the 15-framework corpus (re-scanned
+2026-09-25 on the 0.5.0 branch,
 [`bench/framework_scan/REPORT.md`](https://github.com/fitness-trener/Aether/blob/main/bench/framework_scan/REPORT.md);
 framework versions pinned in `bench/framework_scan/frameworks.lock.txt`). It is a filter, not a verdict on what it
 hides (those are what the rules flag, measured over-flags included), and

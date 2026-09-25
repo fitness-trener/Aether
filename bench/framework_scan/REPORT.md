@@ -358,3 +358,24 @@ rockset, manticore, ODPS), 4 f-string LanceDB `.where(...)` filters
 (agno, crewai), and 5 over-flags of the any-receiver `.text` row
 (streamlit, outlines, LanceDB full-text) at 0.6. E0731 8 → 10:
 `runpy.run_path` in agno's Python tool. 26 of 31 true by rule. The Stripe `rk_live_` credential row was added by the coordinator after this measurement (no corpus site).
+
+## 10. Re-measured 2026-09-25, after iteration 60 (Wave 5a): 707 → 683
+
+Same 4,946 files, same interpreter. −24, +0. Each removal was read at
+source and is a documented safe idiom (file:line list in
+`audits/waves/wave5a_record.md`):
+- E0713 629 → 608:
+  - 6 SQLAlchemy Table forms on an attribute receiver
+    (`self.table.delete()`);
+  - 2 literal + literal queries;
+  - 13 psycopg `sql.SQL(...).format(sql.Identifier(...))` compositions.
+- E0719 26 → 24: a same-file class's own `from_string`, and one
+  `SandboxedEnvironment().from_string`. The sandbox is Jinja's control
+  for untrusted templates; its escapes are a q1 residual.
+- E0731 10 → 9: `compile(..., ast.PyCF_ONLY_AST)`.
+
+Four stdlib ElementTree calls without a parser argument move from 0.95 to
+0.6 and stay reported. `--min-confidence 0.9` hides 632 of 683 (it hid
+652 of 707). Iterations 61-62 (the exit-code table, then the performance
+wave) do not change this finding set: 683 at `b83068e`, re-measured by
+the coordinator.
