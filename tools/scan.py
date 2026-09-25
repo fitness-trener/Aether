@@ -11,10 +11,19 @@ CVE", but "scan real code and surface real issues".
 Usage:
     python -m tools.scan <dir-or-file>... [--json|--sarif] [--expect]
                          [--min-risk RATING] [--min-confidence FLOAT]
+                         [--allow-parse-errors]
 
-Exit code: 0 if no findings, 1 if any file has findings, 2 on usage error.
-Parse errors (E0201) are reported separately as generation failures, not
-architectural findings.
+Exit code: 0 if no findings, 1 if any file has findings OR any file did not
+parse, 2 on usage error. A file that does not parse (E01xx lex / E02xx
+parse) was not analysed, so it is a failure, not a clean file — it used to
+be counted and the run still exited 0, so a tree where EVERY file failed
+to parse passed (audit 2026-09-24 D3). `--allow-parse-errors` is the
+explicit opt-out for a corpus of generated code where some candidates
+are known not to parse. Parse errors are reported as structured
+diagnostics (`parse_error: {code, message, line, column}`), separately
+from architectural findings. Files are read as `utf-8-sig`, like
+`aether check`, and loaded (parse + `import` resolution) by the same
+`load_program` every other surface uses.
 
 `--expect` judges each file against the `// expect:` header it declares
 (see `tools/expectations.py`) and gates on the DIFFERENCE — an unexpected
@@ -43,9 +52,8 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "transpiler"))
 sys.path.insert(0, ROOT)
 
-from aether.parser import parse                        # noqa: E402
-from aether.diagnostics import AetherError             # noqa: E402
 from aether.passes import analyze_flat                 # noqa: E402
+from aether.passes.imports import load_program         # noqa: E402
 from tools.expectations import parse_header            # noqa: E402
 from aether.risk import (risk_of, rank, at_or_above, ORDER,   # noqa: E402
                          SECURITY_SEVERITY)
@@ -67,21 +75,33 @@ def _files(target: str):
     return sorted(glob.glob(os.path.join(target, "**", "*.aeth"), recursive=True))
 
 
+def _finding(d) -> dict:
+    return {"code": d.code, "message": d.message,
+            "line": d.position.line, "column": d.position.column,
+            "risk": risk_of(d.code), "confidence": d.confidence,
+            "suggestion": d.suggestion,
+            "extra": d.extra}
+
+
 def scan_file(path: str) -> dict:
-    """Return {path, parse_error?, findings:[{code,message,line}], declared?}."""
-    with open(path, encoding="utf-8") as f:
+    """Return {path, parse_error?, findings:[{code,message,line}], declared?}.
+    `path` is forward-slashed, whatever the platform."""
+    # utf-8-sig: a BOM is not a lex error (it was E0101 here while `check`
+    # read the same file fine).
+    with open(path, encoding="utf-8-sig") as f:
         src = f.read()
-    try:
-        ast = parse(src, path)
-    except AetherError as e:
-        # Generation failure — invalid syntax. Reported separately.
-        return {"path": path, "parse_error": str(e), "findings": []}
-    findings = [{"code": d.code, "message": d.message,
-                 "line": d.position.line, "column": d.position.column,
-                 "risk": risk_of(d.code), "confidence": d.confidence,
-                 "suggestion": d.suggestion,
-                 "extra": d.extra}
-                for d in analyze_flat(ast)]
+    shown = path.replace(os.sep, "/")
+    ast, parse_diags, import_diags = load_program(src, path, collect=False)
+    if parse_diags:
+        # Generation failure — invalid syntax. Reported separately, and
+        # it fails the run unless --allow-parse-errors.
+        d = parse_diags[0]
+        return {"path": shown, "findings": [], "parse_error": {
+            "code": d.code, "message": d.message,
+            "line": d.position.line, "column": d.position.column}}
+    # An unresolved import stops before analysis on every surface.
+    diags = import_diags or analyze_flat(ast)
+    findings = [_finding(d) for d in diags]
     # Worst-first, then most-certain-first: a reviewer reading only the
     # top of a 4,000-finding scan must be reading the critical ones, and
     # of two equally-risky findings the one the analysis is surest about
@@ -90,7 +110,7 @@ def scan_file(path: str) -> dict:
     findings.sort(key=lambda x: (-rank(x["code"]), -x["confidence"],
                                  x["line"], x["code"]))
     declared, _run = parse_header(src, path)
-    return {"path": path, "findings": findings, "declared": declared}
+    return {"path": shown, "findings": findings, "declared": declared}
 
 
 def diff_expected(result: dict) -> dict:
@@ -126,14 +146,20 @@ def to_sarif(results: list) -> dict:
 
     Paths are reported relative to the Aether checkout, which is the right
     base here: this scanner runs over a corpus inside the repository it was
-    invoked from. `check-py` passes its own base (the workspace)."""
-    return render_sarif(results, base=ROOT)
+    invoked from. `check-py` passes its own base (the workspace). A file
+    that did not parse becomes a tool-execution notification, so an
+    unreadable tree does not look green in Code Scanning."""
+    unreadable = [(r["path"], "[{code}] {message} at line {line}, col {column}"
+                   .format(**r["parse_error"]))
+                  for r in results if r.get("parse_error")]
+    return render_sarif(results, base=ROOT, unreadable=unreadable)
 
 
 def main(argv) -> int:
     as_json = "--json" in argv
     as_sarif = "--sarif" in argv
     expect = "--expect" in argv
+    allow_parse_errors = "--allow-parse-errors" in argv
 
     # `--min-risk <rating>` and `--min-confidence <float>` take values, so
     # their arguments must not be mistaken for scan targets.
@@ -179,7 +205,7 @@ def main(argv) -> int:
     if not args:
         sys.stderr.write("usage: python -m tools.scan <dir-or-file>... "
                          "[--json|--sarif] [--expect] [--min-risk RATING] "
-                         "[--min-confidence FLOAT]\n")
+                         "[--min-confidence FLOAT] [--allow-parse-errors]\n")
         return 2
     if expect and min_risk != "info":
         sys.stderr.write(
@@ -213,6 +239,7 @@ def main(argv) -> int:
         with_find = [r for r in results if r["findings"]]
         reported = results
         failed = bool(with_find)
+
     else:
         # Gate on the DIFFERENCE from what each file declares. `reported`
         # carries only the surplus, so SARIF/Code Scanning shows the
@@ -223,6 +250,7 @@ def main(argv) -> int:
         with_find = [r for r in reported if r["findings"]]
         missing = [(p, d["missing"]) for p, d in diffs.items() if d["missing"]]
         failed = bool(with_find or missing)
+    failed = failed or bool(parse_errs and not allow_parse_errors)
 
     if as_sarif:
         print(json.dumps(to_sarif(reported), indent=2))
@@ -251,11 +279,17 @@ def main(argv) -> int:
                 for code, n in m:
                     print(f"  DECLARED BUT NOT REPORTED  {code}x{n} "
                           f"— detector regressed, or the header is stale")
+        for r in parse_errs:
+            e = r["parse_error"]
+            print(f"\n{_rel(r['path'])}\n  L{e['line']:>4}  NOT PARSED "
+                  f"{e['code']}  {e['message'][:80]}")
         print(f"\n{'='*60}")
         label = "unexpected findings" if expect else "with findings"
         print(f"scanned {len(files)} files · "
               f"{len(with_find)} {label} · "
-              f"{len(parse_errs)} parse errors (generation failures)")
+              f"{len(parse_errs)} parse errors (generation failures"
+              + (", allowed by --allow-parse-errors)" if allow_parse_errors
+                 else "; each fails the run)"))
         if expect:
             declared = sum(sum((r.get("declared") or Counter()).values())
                            for r in results)

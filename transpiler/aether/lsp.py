@@ -198,19 +198,12 @@ def aether_check_payload(source: str, capability_strict: bool = False,
     """Run the agent SDK check on `source` and return a JSON-friendly
     response containing diagnostics enriched with patch_target paths.
 
-    Lex errors (E0101/E0102/E0103/E0104/E0105/E0106) bubble out of the
-    SDK as raised AetherError — catch them here and surface as a
-    diagnostic list with patch_target=null, matching the response
-    shape clients depend on.
+    Lex errors (E0101-E0106) come back from `sdk.check` as diagnostics
+    with no AST, so their patch_target is null.
     """
-    from .diagnostics import AetherError
-    try:
-        result = _sdk_check(source, filename=filename)
-        ast = result.ast
-        raw_diags = list(result.diagnostics)
-    except AetherError as e:
-        ast = None
-        raw_diags = list(e.diagnostics)
+    result = _sdk_check(source, filename=filename)
+    ast = result.ast
+    raw_diags = list(result.diagnostics)
     diags_out: List[Dict[str, Any]] = []
     for d in raw_diags:
         diags_out.append({
@@ -329,7 +322,7 @@ class LspServer:
                 "textDocumentSync": 1,
                 "hoverProvider": True,
                 "diagnosticProvider": {
-                    "interFileDependencies": False,
+                    "interFileDependencies": True,   # `import` resolves (D2)
                     "workspaceDiagnostics": False,
                 },
                 "completionProvider": {
@@ -393,6 +386,9 @@ class LspServer:
     def _update_document(self, uri: str, text: str) -> None:
         self.documents[uri] = text
         filename = uri_to_path(uri)
+        # sdk.check returns a lex error as a diagnostic. It used to raise,
+        # the request boundary swallowed it, and a document with an
+        # unterminated string published nothing — it showed as clean (D9).
         result = _sdk_check(text, filename=filename)
         self.diagnostics[uri] = list(result.diagnostics)
         # Cache the (possibly partial) AST so completion + definition
@@ -522,11 +518,14 @@ class LspServer:
 
 
 def uri_to_path(uri: str) -> str:
-    """Best-effort `file://...` -> filesystem path. Falls back to the
-    URI string for non-file schemes (used only for diagnostic
-    `filename` metadata; doesn't actually open the file)."""
+    """`file://...` -> filesystem path; the URI itself for any other
+    scheme. It is the anchor `import` resolves against (sdk.check ->
+    load_program), so it must be a real path: slicing off `file://` left
+    `/C:/...` on Windows and kept `%20` escapes."""
     if uri.startswith("file://"):
-        return uri[len("file://"):]
+        from urllib.parse import urlparse
+        from urllib.request import url2pathname
+        return url2pathname(urlparse(uri).path)
     return uri
 
 
