@@ -22,27 +22,26 @@ Supported requests / notifications:
     aether/check                  H.A.1.b: stateless check. Request
                                     {"source": str,
                                      "capability_strict": bool}
-                                    Reply
-                                    {"ok": bool,
-                                     "diagnostics": [{code, message,
-                                       position, data: {suggestion,
-                                       extra, patch_target}}, ...]}
+                                    Reply: `sdk.CheckResult.to_dict()` —
+                                    the `aether --json check` document,
+                                    {"ok", "complete", "diagnostics":
+                                     [Diagnostic.to_dict()]} (audit D6)
     shutdown                      -> null, then exit on `exit`
     exit                          terminates the process
 
-Diagnostics published use LSP severity 1 (Error). Each diagnostic
-carries:
+Diagnostics published map Aether's severity onto LSP's (error 1,
+warning 2, info 3). Each diagnostic carries:
     range:    derived from Diagnostic.position (line/col both 1-based
               in our Diagnostic; LSP expects 0-based — converted here)
     code:     Aether code (E0201, E0801, etc.)
     message:  human-readable text
     source:   "aether"
-    data:     dict carrying suggestion + extra + patch_target so
-              editors / agents can act on it programmatically. The
-              `patch_target` field (H.A.1.b) is a structural path into
-              the AST that names the smallest splice site for an
-              automatic repair; null when there is no AST anchor
-              (lex/parse errors).
+    data:     `Diagnostic.to_dict()` — category, severity, confidence,
+              stage, suggestion, extra and patch_target, the same dict
+              every other surface emits. `patch_target` (H.A.1.b) is a
+              structural path into the AST that names the smallest
+              splice site for an automatic repair; null when there is no
+              AST anchor (lex/parse errors).
 
 Run with:
     python3 -m transpiler.aether.lsp        # stdio mode
@@ -60,7 +59,6 @@ from .diagnostics import Diagnostic
 from .lexer import KEYWORDS as _AETHER_KEYWORDS
 from .runtime import build_namespace as _runtime_namespace, unmangle as _unmangle
 from .sdk import check as _sdk_check
-from .passes.patch_target import compute_patch_target as _compute_patch_target
 
 
 # ----------------------------------------------------------------------
@@ -156,6 +154,9 @@ def _write_message(stream, msg: Dict[str, Any]) -> None:
 # LSP <-> Aether diagnostic adapter
 # ----------------------------------------------------------------------
 
+_LSP_SEVERITY = {"error": 1, "warning": 2, "info": 3}
+
+
 def _diag_to_lsp(d: Diagnostic, ast: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     line = max(0, (d.position.line or 1) - 1)
     col = max(0, (d.position.column or 1) - 1)
@@ -164,18 +165,14 @@ def _diag_to_lsp(d: Diagnostic, ast: Optional[Dict[str, Any]] = None) -> Dict[st
             "start": {"line": line, "character": col},
             "end":   {"line": line, "character": col + 1},
         },
-        "severity": 1,             # 1=Error
+        # An E0902 SMT timeout is a warning; it used to publish as Error.
+        "severity": _LSP_SEVERITY.get(d.severity, 1),
         "code": d.code,
         "source": "aether",
         "message": d.message,
-        "data": {
-            "suggestion": d.suggestion,
-            "extra": d.extra,
-            "category": d.category,
-            # H.A.1.b: structural anchor a fix-loop can splice against.
-            # None when the diagnostic has no AST anchor (lex/parse).
-            "patch_target": _compute_patch_target(ast, d),
-        },
+        # The one serializer (D6): suggestion, extra, category and the
+        # H.A.1.b patch_target as before, plus severity, confidence, stage.
+        "data": d.to_dict(ast),
     }
 
 
@@ -199,28 +196,14 @@ def aether_check_payload(source: str, capability_strict: bool = False,
     Lex errors (E0101-E0106) come back from `sdk.check` as diagnostics
     with no AST, so their patch_target is null.
     """
-    result = _sdk_check(source, filename=filename)
-    ast = result.ast
-    raw_diags = list(result.diagnostics)
-    diags_out: List[Dict[str, Any]] = []
-    for d in raw_diags:
-        diags_out.append({
-            "code": d.code,
-            "message": d.message,
-            "position": {
-                "line": d.position.line,
-                "col": d.position.column,
-            },
-            "data": {
-                "suggestion": d.suggestion,
-                "extra": d.extra,
-                "patch_target": _compute_patch_target(ast, d),
-            },
-        })
-    return {
-        "ok": not raw_diags,
-        "diagnostics": diags_out,
-    }
+    doc = _sdk_check(source, filename=filename).to_dict()
+    for d in doc["diagnostics"]:
+        # The pre-0.5 shape, kept as ALIASES for the 0.5.x series and
+        # removed in 0.6: `position.col` (now `position.column`, as on
+        # every other surface) and `data` (its three keys are top-level).
+        d["position"]["col"] = d["position"]["column"]
+        d["data"] = {k: d[k] for k in ("suggestion", "extra", "patch_target")}
+    return doc
 
 
 # ----------------------------------------------------------------------
@@ -497,11 +480,9 @@ class LspServer:
     def handle_aether_check(self, msg: Dict[str, Any]) -> None:
         """Stateless check entry point. Request:
             {"source": str, "capability_strict": bool=false}
-        Reply:
-            {"ok": bool,
-             "diagnostics": [
-               {"code", "message", "position": {"line","col"},
-                "data": {"suggestion","extra","patch_target"}}, ...]}
+        Reply: `aether_check_payload` — {"ok", "complete",
+        "diagnostics": [Diagnostic.to_dict()]}, plus the deprecated
+        `position.col` / `data` aliases for the 0.5.x series.
 
         No document URI involved — the request carries the entire
         program text. Intended for fix-loop agents that don't want to

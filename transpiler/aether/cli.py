@@ -8,8 +8,11 @@ Subcommands:
     aether test   <dir>            Run a reference-program directory: expects
                                    `program.aeth` and `expected_stdout.txt`
 
-Global flag: --json — emit machine-readable error output. The CLI prints a
-single JSON object on stderr and exits non-zero on failure.
+Global flag: --json — machine-readable output: exactly ONE JSON document
+on stdout (stderr carries only human text). Every diagnostic in it is
+`Diagnostic.to_dict()`. Exit codes are the one table in diagnostics.py
+(0 clean, 1 findings, 2 usage, 3 crash, 4 incomplete) — see
+docs/SCANNING.md, "Exit codes and the JSON contract".
 """
 
 from __future__ import annotations
@@ -17,11 +20,15 @@ import argparse
 import io
 import json
 import os
+import re
 import sys
+import traceback
 from contextlib import redirect_stdout
 from typing import Any, Dict
 
-from .diagnostics import AetherError, Diagnostic
+from .diagnostics import (AetherError, Diagnostic, EXIT_CLEAN, EXIT_CRASH,
+                          EXIT_FINDINGS, EXIT_INCOMPLETE, EXIT_USAGE,
+                          error_doc, exit_code)
 from .lexer import tokenize
 from .parser import parse
 from .emitter import emit
@@ -35,21 +42,39 @@ from .runtime import build_namespace, set_effect_strict, set_deterministic
 # Helpers
 # ----------------------------------------------------------------------
 
-def _emit_error(diag: Diagnostic, as_json: bool, stage: str = None):
-    if as_json:
-        d = diag.to_dict()
-        if stage is not None:
-            d["stage"] = stage      # which STAGES entry produced it (D4)
-        json.dump({"ok": False, "diagnostic": d}, sys.stderr)
-        sys.stderr.write("\n")
+def _emit_error(diag: Diagnostic, as_json: bool = False):
+    """One diagnostic, as human text on stderr. `--json` never comes here:
+    it prints one document through `_report`/`_print_doc` (D6)."""
+    sys.stderr.write(
+        f"[{diag.code}] {diag.severity} ({diag.category}) "
+        f"at line {diag.position.line}, col {diag.position.column}: "
+        f"{diag.message}\n"
+    )
+    if diag.suggestion:
+        sys.stderr.write(f"  hint: {diag.suggestion}\n")
+
+
+def _print_doc(doc: dict) -> None:
+    """THE `--json` output: one document, on stdout. It used to be JSONL
+    on stderr for `check`, stdout AND stderr for `--collect-errors`, and a
+    stdout object for `check-py` (audit 2026-09-24 D6)."""
+    json.dump(doc, sys.stdout)   # ASCII-escaped: safe on any console codepage
+    sys.stdout.write("\n")
+
+
+def _report(args, diags, rc: int, *, ast=None, complete: bool = True,
+            **extra) -> int:
+    """Report `diags` for a run ending in `rc`: human lines on stderr, or
+    under `--json` one document {ok, complete, diagnostics, ...extra}.
+    Returns `rc` so a caller can `return _report(...)`."""
+    if args.json:
+        _print_doc(dict({"ok": rc == EXIT_CLEAN, "complete": complete,
+                         "diagnostics": [d.to_dict(ast) for d in diags]},
+                        **extra))
     else:
-        sys.stderr.write(
-            f"[{diag.code}] {diag.severity} ({diag.category}) "
-            f"at line {diag.position.line}, col {diag.position.column}: "
-            f"{diag.message}\n"
-        )
-        if diag.suggestion:
-            sys.stderr.write(f"  hint: {diag.suggestion}\n")
+        for d in diags:
+            _emit_error(d)
+    return rc
 
 
 def _read(path: str) -> str:
@@ -79,15 +104,16 @@ def _read_py(path: str) -> str:
 def _load(src: str, source_path: str, args, collect: bool = False) -> tuple:
     """Parse + H.E.3 import resolution through `load_program`, the one
     loader the SDK, LSP, fix-loop and `tools/scan.py` also use (audit
-    2026-09-24 D2). `--no-import-resolution` opts out. Emits every
-    diagnostic and returns (ast, 2) when the program did not load, else
-    (ast, 0)."""
+    2026-09-24 D2). `--no-import-resolution` opts out. Reports every
+    diagnostic and returns (ast, EXIT_INCOMPLETE) when the program did not
+    load — it was not analysed — else (ast, 0)."""
     ast, parse_diags, import_diags = load_program(
         src, source_path, collect=collect,
         resolve=not getattr(args, "no_import_resolution", False))
-    for d in parse_diags + import_diags:
-        _emit_error(d, args.json)
-    return ast, (2 if parse_diags or import_diags else 0)
+    if parse_diags or import_diags:
+        return ast, _report(args, parse_diags + import_diags,
+                            EXIT_INCOMPLETE, complete=False)
+    return ast, EXIT_CLEAN
 
 
 # ----------------------------------------------------------------------
@@ -122,9 +148,8 @@ def cmd_pack(args) -> int:
     py = emit(ast)
     name = args.name or os.path.splitext(os.path.basename(args.file))[0]
     if not name.isidentifier():
-        print(f"aether: package name {name!r} is not a valid Python "
-              f"identifier (use --name)", file=sys.stderr)
-        return 2
+        raise _UsageError(f"package name {name!r} is not a valid Python "
+                          f"identifier (use --name)")
     pkg_dir = os.path.join(args.out, name)
     os.makedirs(pkg_dir, exist_ok=True)
     fns = [d["name"] for d in ast["decls"] if d.get("kind") == "FunctionDecl"]
@@ -165,14 +190,13 @@ def cmd_fmt(args) -> int:
     # among them (D7; what is still lost is listed on `pretty`).
     formatted = pretty(ast, src)
     if getattr(args, "check", False):
-        if src == formatted:
-            return 0
-        if not args.json:
+        ok = src == formatted
+        if args.json:
+            _print_doc({"ok": ok, "complete": True, "diagnostics": [],
+                        "would_reformat": None if ok else args.file})
+        elif not ok:
             sys.stderr.write(f"would reformat: {args.file}\n")
-        else:
-            json.dump({"ok": False, "would_reformat": args.file}, sys.stderr)
-            sys.stderr.write("\n")
-        return 1
+        return 0 if ok else 1
     if getattr(args, "write", False):
         with open(args.file, "w", encoding="utf-8", newline="\n") as f:
             f.write(formatted)
@@ -195,8 +219,8 @@ _STAGE_OPT_OUT = {
 
 
 def _run_analysis(ast, args) -> int:
-    """Run the static-analysis registry in stage order; 2 if any stage
-    produced diagnostics, else 0.
+    """Run the static-analysis registry in stage order; EXIT_FINDINGS if
+    any stage produced diagnostics, else 0.
 
     `--json` prints EVERY stage's diagnostics, each tagged with its
     `stage` — the same set `sdk.check`, the LSP and `tools/scan.py`
@@ -208,45 +232,39 @@ def _run_analysis(ast, args) -> int:
             if getattr(args, flag, False)}
     found = [(stage, diags) for stage, diags in analyze(ast, skip=skip)
              if diags]
+    for stage, diags in found:
+        for d in diags:
+            d.stage = stage
     if not found:
         return 0
     if args.json:
-        for stage, diags in found:
-            for d in diags:
-                _emit_error(d, True, stage=stage)
-        return 2
+        return _report(args, [d for _s, diags in found for d in diags],
+                       EXIT_FINDINGS, ast=ast, decls=len(ast["decls"]))
     for d in found[0][1]:
-        _emit_error(d, False)
+        _emit_error(d)
     if len(found) > 1:
         n = sum(len(diags) for _stage, diags in found[1:])
         sys.stderr.write(
             f"({n} more diagnostic(s) from later stages not shown: "
             + ", ".join(f"{stage} {len(diags)}" for stage, diags in found[1:])
             + "; run with --json to see every stage)\n")
-    return 2
+    return EXIT_FINDINGS
 
 
-def _run_smt_check(ast, as_json, timeout_ms):
-    """Opt-in SMT contract proving (--prove, v2 roadmap 1.1).
-    Returns (rc, summary|None). rc 2 iff any clause was refuted."""
+def _run_smt_check(ast, timeout_ms):
+    """SMT contract proving (default-on with z3; --prove forces it).
+    Returns (rc, summary, diags). rc EXIT_FINDINGS iff a clause was
+    refuted (E0901); E0902 timeouts are warnings and pass. z3 missing
+    under --prove is a usage error: nothing was proved."""
     from .passes.smt import HAVE_Z3, check_contracts_smt
     if not HAVE_Z3:
-        msg = ("--prove requires the z3-solver package "
-               "(pip install 'aether-lang[smt]')")
-        if as_json:
-            json.dump({"ok": False, "error": msg}, sys.stdout)
-            sys.stdout.write("\n")
-        else:
-            print(f"aether: {msg}", file=sys.stderr)
-        return 2, None
+        raise _UsageError("--prove requires the z3-solver package "
+                          "(pip install 'aether-lang[smt]')")
     diags, summary = check_contracts_smt(ast, timeout_ms=timeout_ms)
     for d in diags:
-        _emit_error(d, as_json)
-    if not as_json:
-        print("prove: {proved} proved, {refuted} refuted, "
-              "{timeout} timeout, {skipped} skipped".format(**summary))
-    rc = 2 if any(d.severity == "error" for d in diags) else 0
-    return rc, summary
+        d.stage = "smt"
+    rc = EXIT_FINDINGS if any(d.severity == "error" for d in diags) else 0
+    return rc, summary, diags
 
 
 # Stages that do not apply to Python source.
@@ -317,6 +335,27 @@ def _py_files(target: str, skipped: list = None) -> list:
     return found
 
 
+# PEP 695 type parameters / `type` statements: what a 3.10/3.11 parser
+# rejects on a line that 3.12 accepts.
+_PEP695_LINE = re.compile(r"\s*(type\s+\w+\s*(\[.*\])?\s*=|(async\s+)?def\s+\w+\s*\[|"
+                          r"class\s+\w+\s*\[)")
+
+
+def _newer_syntax_hint(e) -> str:
+    """B6, best effort: on a 3.10/3.11 host a SyntaxError that looks like
+    3.12 syntax — a PEP 701 f-string (every 3.10/3.11 f-string error
+    starts "f-string") or a PEP 695 type parameter — says so. A heuristic
+    on the error, not a parse with a newer grammar, hence the question
+    mark: a malformed f-string gets the same hint."""
+    if sys.version_info >= (3, 12) or not isinstance(e, SyntaxError):
+        return ""
+    if str(e.msg or "").startswith("f-string") or \
+            _PEP695_LINE.match(e.text or ""):
+        return (" — valid on a newer Python? scan with 3.12+ (this is "
+                f"Python {sys.version_info[0]}.{sys.version_info[1]})")
+    return ""
+
+
 def _scan_one(job):
     """Analyze ONE Python file. Everything `cmd_check_py`'s loop collects
     for a file, as one picklable tuple, so the loop can run in a worker
@@ -334,8 +373,8 @@ def _scan_one(job):
     loses the whole run.
     """
     path, skip, strict = job
-    from .py_frontend import py_to_ir
-    from .passes import analyze_flat
+    from . import py_frontend
+    from .passes import analyze
     from .risk import rank
     try:
         src = _read_py(path)
@@ -348,12 +387,18 @@ def _scan_one(job):
         # here with the parse errors it was reported as "could not parse",
         # exit 0, its findings lost (BUG-035).
         try:
-            ast, unprovable, meta = py_to_ir(src)
+            ast, unprovable, meta = py_frontend.py_to_ir(src)
         except (SyntaxError, ValueError) as e:
             # py2 sources, templates and test fixtures are normal in a real
-            # tree; they are counted, not fatal.
-            return ("unreadable", path, type(e).__name__, str(e))
-        diags = analyze_flat(ast, skip=skip)
+            # tree; they are counted, and the run exits 4 (incomplete) —
+            # never 0, because what was not parsed was not checked (B6).
+            return ("unreadable", path, type(e).__name__,
+                    str(e) + _newer_syntax_hint(e))
+        diags = []
+        for stage, found in analyze(ast, skip=skip):
+            for d in found:
+                d.stage = stage
+            diags += found
     except RecursionError as e:
         # The frontend catches this per scope and reports an `unprovable`
         # region; one that still escapes is the analyzer's limit, not the
@@ -403,18 +448,14 @@ def cmd_check_py(args) -> int:
     targets = args.target
     missing = [t for t in targets if not os.path.exists(t)]
     if missing:
-        for t in missing:
-            sys.stderr.write(f"aether: no such file or directory: {t}\n")
-        return 2
+        raise _UsageError("; ".join(f"no such file or directory: {t}"
+                                    for t in missing))
     if getattr(args, "sarif", False) and args.json:
-        sys.stderr.write("aether: --sarif and --json are two different "
-                         "output formats; pick one\n")
-        return 2
+        raise _UsageError("--sarif and --json are two different output "
+                          "formats; pick one")
     min_conf = getattr(args, "min_confidence", 0.0) or 0.0
     if not 0.0 <= min_conf <= 1.0:
-        sys.stderr.write(f"aether: --min-confidence must be in [0,1], "
-                         f"got {min_conf}\n")
-        return 2
+        raise _UsageError(f"--min-confidence must be in [0,1], got {min_conf}")
     # A usage error on our own flag must read like one. Unvalidated,
     # `--jobs 0` scanned serially with no message and `--jobs 999` died
     # with a raw ValueError traceback and exit 1 — Windows caps
@@ -422,8 +463,7 @@ def cmd_check_py(args) -> int:
     # something the caller should have to know.
     jobs_arg = getattr(args, "jobs", None)
     if jobs_arg is not None and jobs_arg < 1:
-        sys.stderr.write(f"aether: --jobs must be >= 1, got {jobs_arg}\n")
-        return 2
+        raise _UsageError(f"--jobs must be >= 1, got {jobs_arg}")
     skipped_dirs: list = []
     paths = sorted({p for t in targets for p in _py_files(t, skipped_dirs)})
     skipped_dirs = sorted(set(skipped_dirs))
@@ -479,11 +519,13 @@ def cmd_check_py(args) -> int:
                          f"  this is a bug in Aether, not in your code — "
                          f"please report it (see BUGS.md)\n")
     # A file the scanner could not read is a missed finding, not a clean
-    # file. It is reported on stderr in EVERY output mode — a `--sarif`
-    # or `--json` run used to swallow it (the text mode said it for one
-    # file only, and then failed the run for it while the other modes
-    # did not). The rule, applied uniformly: unparseable input never
-    # fails the run; an analyzer crash always does.
+    # file. It is reported on stderr in EVERY output mode, and the exit
+    # code says so in every mode: 4 (incomplete) when nothing was found,
+    # 1 when something was — never 0. It used to be "unparseable input
+    # never fails the run", which let a tree of 3.12 syntax scanned on
+    # 3.11 exit 0 with `ok: true` and nothing analysed (audit B6). An
+    # analyzer crash is 3, whatever else happened.
+    rc = exit_code(n_find, incomplete=bool(unreadable), crashed=bool(crashed))
     for p, why, detail in unreadable:
         sys.stderr.write(f"aether: could not parse {p}: {why}: {detail}\n")
     if skipped_dirs:
@@ -493,40 +535,37 @@ def cmd_check_py(args) -> int:
                          + ", ".join(skipped_dirs) + "\n")
 
     if getattr(args, "sarif", False):
-        from .risk import risk_of
         from .sarif import to_sarif
         # Relative to the working directory, which under CI is the
         # checkout root. Code Scanning silently drops a result whose
-        # artifactLocation is not relative to it. Column, suggestion and
-        # `extra` ride along so the SARIF says what the JSON says.
+        # artifactLocation is not relative to it. Every finding is
+        # `to_dict()`, the JSON's own rows, so the SARIF says what the
+        # JSON says.
         print(json.dumps(to_sarif(
-            [{"path": p,
-              "findings": [{"code": d.code, "message": d.message,
-                            "line": d.position.line,
-                            "column": d.position.column,
-                            "risk": risk_of(d.code),
-                            "confidence": d.confidence,
-                            "suggestion": d.suggestion, "extra": d.extra}
-                           for d in ds]}
+            [{"path": p, "findings": [d.to_dict() for d in ds]}
              for p, ds, _u, _m in results], base=os.getcwd(),
-            unreadable=[(p, f"{why}: {detail}") for p, why, detail in unreadable]),
+            unreadable=[(p, f"{why}: {detail}") for p, why, detail in unreadable],
+            crashed=crashed),
             indent=2))
-        return 2 if (n_find or crashed) else 0
+        return rc
 
     if args.json:
-        json.dump({"ok": not n_find and not crashed, "lang": "python",
-                   "files": [{"path": p.replace(os.sep, "/"),
-                              "diagnostics": [d.to_dict() for d in ds],
-                              "unprovable": unp, "meta": meta}
-                             for p, ds, unp, meta in results],
-                   "unreadable": [{"path": p.replace(os.sep, "/"),
-                                   "reason": why, "detail": detail}
-                                  for p, why, detail in unreadable],
-                   "skipped_dirs": skipped_dirs,
-                   "errors": [{"path": p.replace(os.sep, "/"), "error": e}
-                              for p, e in crashed]}, sys.stdout)
-        sys.stdout.write("\n")
-        return 2 if (n_find or crashed) else 0
+        no_unp = getattr(args, "no_unprovable", False)
+        _print_doc({"ok": rc == EXIT_CLEAN,
+                    "complete": not (unreadable or crashed),
+                    "lang": "python",
+                    "files": [{"path": p.replace(os.sep, "/"),
+                               "diagnostics": [d.to_dict() for d in ds],
+                               "unprovable": {} if no_unp else unp,
+                               "meta": meta}
+                              for p, ds, unp, meta in results],
+                    "unreadable": [{"path": p.replace(os.sep, "/"),
+                                    "reason": why, "detail": detail}
+                                   for p, why, detail in unreadable],
+                    "skipped_dirs": skipped_dirs,
+                    "errors": [{"path": p.replace(os.sep, "/"), "error": e}
+                               for p, e in crashed]})
+        return rc
 
     for p, ds, _unp, _meta in results:
         if not ds:
@@ -569,7 +608,7 @@ def cmd_check_py(args) -> int:
               "filesystem paths, and the capability inventory (E0701). "
               "Held back by measurement, not taste - see "
               "bench/py_frontend/REPORT.md.")
-    return 2 if (n_find or crashed) else 0
+    return rc
 
 
 def cmd_check(args) -> int:
@@ -580,13 +619,7 @@ def cmd_check(args) -> int:
         # parse error in one pass, instead of bailing on the first.
         _ast, parse_diags, _ = load_program(src, args.file, resolve=False)
         if parse_diags:
-            for d in parse_diags:
-                _emit_error(d, args.json)
-            if args.json:
-                json.dump({"ok": False, "diagnostics": [d.to_dict() for d in parse_diags]},
-                          sys.stdout)
-                sys.stdout.write("\n")
-            return 2
+            return _report(args, parse_diags, EXIT_INCOMPLETE, complete=False)
     # H.E.3 multi-file resolution (default-on when ImportDecls present).
     ast, rc = _load(src, args.file, args, collect=collect)
     if rc != 0:
@@ -604,31 +637,30 @@ def cmd_check(args) -> int:
     # (wave 1 flip; was opt-in). --no-prove disables; --prove forces and
     # errors with an install hint when z3 is missing. E0901 refutations
     # fail the check; E0902 timeouts warn and pass.
-    prove_summary = None
+    prove_summary, smt_diags = None, []
     if not getattr(args, "no_prove", False):
         from .passes.smt import HAVE_Z3
         if HAVE_Z3 or getattr(args, "prove", False):
-            rc, prove_summary = _run_smt_check(
-                ast, args.json, getattr(args, "prove_timeout_ms", 5000))
-            if rc != 0:
-                return rc
-    if args.json:
-        out = {"ok": True, "decls": len(ast["decls"])}
+            rc, prove_summary, smt_diags = _run_smt_check(
+                ast, getattr(args, "prove_timeout_ms", 5000))
+    extra = {"decls": len(ast["decls"])}
+    if prove_summary is not None:
+        extra["prove"] = prove_summary
+    _report(args, smt_diags, rc, ast=ast, **extra)
+    if not args.json:
         if prove_summary is not None:
-            out["prove"] = prove_summary
-        json.dump(out, sys.stdout)
-        sys.stdout.write("\n")
-    else:
-        print(f"OK: {args.file} ({len(ast['decls'])} decls)")
-    return 0
+            print("prove: {proved} proved, {refuted} refuted, "
+                  "{timeout} timeout, {skipped} skipped".format(**prove_summary))
+        if rc == EXIT_CLEAN:
+            print(f"OK: {args.file} ({len(ast['decls'])} decls)")
+    return rc
 
 
 def cmd_run(args) -> int:
     if getattr(args, "release", False) and getattr(args, "effect_strict", False):
-        print("aether: --release and --effect-strict are mutually exclusive "
-              "(strict effect checking needs the frames --release removes)",
-              file=sys.stderr)
-        return 2
+        raise _UsageError("--release and --effect-strict are mutually "
+                          "exclusive (strict effect checking needs the "
+                          "frames --release removes)")
     if args.effect_strict:
         set_effect_strict(True)
     # C.5 deterministic test mode: pin clock + random seed for reproducible runs.
@@ -650,14 +682,25 @@ def cmd_run(args) -> int:
     g = build_namespace()
     g["__name__"] = "__main__"
     g["__file__"] = args.file + ".py"
-    exec(code, g)
+    try:
+        exec(code, g)
+    except AetherError:
+        raise           # a contract/refinement violation: main reports it
+    except Exception:
+        # The PROGRAM raised, not Aether: print it as Python would and
+        # exit 1, as Python does. Only an exception outside the user's
+        # program is an analyzer crash (exit 3).
+        traceback.print_exc()
+        return EXIT_FINDINGS
     return 0
 
 
 def cmd_test(args) -> int:
     """Run a directory containing program.aeth + expected_stdout.txt.
 
-    Exits 0 on match, 1 on mismatch, 2 on compile/runtime error.
+    Exits 0 on match, 1 on mismatch, 2 on compile/runtime error — the
+    fixture runner's own table, deliberately not the scan table in
+    diagnostics.py: its callers (run_all.py, bench/harness.py) grade on it.
 
     Runs NO static passes, deliberately (ADR-0001). This is the fixture
     runner — `scripts/run_all.py` drives it over every `reference/` dir
@@ -679,7 +722,7 @@ def cmd_test(args) -> int:
         # H.E.3 multi-file resolution (default-on when ImportDecls present).
         ast, rc = _load(src, src_path, args)
         if rc != 0:
-            return rc
+            return 2
         py = emit(ast)
         code = compile(py, src_path + ".py", "exec")
         g = build_namespace()
@@ -689,15 +732,18 @@ def cmd_test(args) -> int:
             exec(code, g)
         actual = buf.getvalue()
     except AetherError as e:
-        _emit_error(e.diag, args.json)
-        return 2
+        return _report(args, e.diagnostics, 2)
     except Exception as e:  # pragma: no cover
         sys.stderr.write(f"runtime error: {e}\n")
+        if args.json:
+            _print_doc({"ok": False, "complete": True, "diagnostics": [],
+                        "expected": expected, "actual": None,
+                        "runtime_error": f"{type(e).__name__}: {e}"})
         return 2
     ok = actual == expected
     if args.json:
-        json.dump({"ok": ok, "expected": expected, "actual": actual}, sys.stdout)
-        sys.stdout.write("\n")
+        _print_doc({"ok": ok, "complete": True, "diagnostics": [],
+                    "expected": expected, "actual": actual})
     elif ok:
         print(f"PASS  {pdir}")
     else:
@@ -736,10 +782,11 @@ def cmd_test(args) -> int:
 # ----------------------------------------------------------------------
 
 def cmd_fix_loop(args) -> int:
-    """Dispatch to deterministic (default) or --live LLM path."""
+    """Dispatch to deterministic (default) or --live LLM path.
+    Exit: 0 clean, 1 not repaired (not_repaired / stuck / widened under
+    --allow-widen / rejected --live fix), 2 usage, 3 crash."""
     if not os.path.isfile(args.file):
-        sys.stderr.write(f"file not found: {args.file}\n")
-        return 2
+        raise _UsageError(f"file not found: {args.file}")
 
     if args.live:
         # Live LLM path — calls Anthropic. Requires ANTHROPIC_API_KEY.
@@ -783,17 +830,33 @@ def cmd_fix_loop(args) -> int:
     # Deterministic path (default) — part of the package, so it works in
     # a pip-installed copy. It used to be imported from demos/, which no
     # wheel has ever shipped (BUGS.md BUG-026).
-    from .fix_loop import main as deterministic_main
-    argv = [args.file]
-    if args.out_source:
-        argv += ["--out-source", args.out_source]
-    if args.out_transcript:
-        argv += ["--out-transcript", args.out_transcript]
-    if args.quiet:
+    from . import fix_loop
+    from pathlib import Path
+    # The defaults are fix_loop.main's own; spelled here so `--json` can
+    # name and read what was written.
+    out_src = args.out_source or str(Path(args.file).with_suffix(".fixed.aeth"))
+    out_tr = args.out_transcript or str(
+        Path(args.file).with_suffix(".transcript.json"))
+    argv = [args.file, "--out-source", out_src, "--out-transcript", out_tr]
+    if args.quiet or args.json:
         argv += ["--quiet"]
     if args.allow_widen:
         argv += ["--allow-widen"]
-    return deterministic_main(argv)
+    rc = fix_loop.main(argv)
+    if args.json and rc in (EXIT_USAGE, EXIT_CRASH):
+        _print_doc(error_doc("usage" if rc == EXIT_USAGE else "crash",
+                             "fix-loop failed; the reason is on stderr"))
+        return rc
+    if args.json:
+        with open(out_tr, encoding="utf-8") as f:
+            transcript = json.load(f)
+        _print_doc({"ok": rc == EXIT_CLEAN, "complete": True,
+                    "diagnostics": [],
+                    "status": transcript[-1].get("status"),
+                    "final": transcript[-1],
+                    "fixed_source": out_src.replace(os.sep, "/"),
+                    "transcript": out_tr.replace(os.sep, "/")})
+    return rc
 
 
 def _judge_live_fix(transcript_path: str, args) -> int:
@@ -829,10 +892,82 @@ def _judge_live_fix(transcript_path: str, args) -> int:
 # argparse wiring
 # ----------------------------------------------------------------------
 
+class _UsageError(Exception):
+    """A bad flag, value or path: exit 2, nothing was analysed."""
+
+
+class _Parser(argparse.ArgumentParser):
+    """argparse, but a usage error comes back to `main` instead of
+    `sys.exit(2)`, so `--json` can still print its one document. Sub-
+    parsers are built from the parent's class, so they inherit this."""
+
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        raise _UsageError(f"{self.prog}: error: {message}")
+
+
+# How an AetherError that escaped a command ends the run: the source did
+# not parse (4), Aether could not emit/run it (3: its limit, not yours),
+# or the program violated a checked rule — a finding (1).
+_ESCAPED_EXIT = {"lex": EXIT_INCOMPLETE, "parse": EXIT_INCOMPLETE,
+                 "emit": EXIT_CRASH, "internal": EXIT_CRASH}
+
+
 def main(argv=None) -> int:
-    p = argparse.ArgumentParser(prog="aether", description="Aether v0.1 toolchain")
+    """Every exit goes through here, so every exit is one of the table's
+    five codes and every `--json` run prints one JSON document, even when
+    the run crashed (it used to be a raw traceback and exit 1)."""
+    raw = sys.argv[1:] if argv is None else list(argv)
+    as_json, debug = "--json" in raw, "--debug" in raw
+    try:
+        args = _build_parser().parse_args(raw)
+    except _UsageError as e:
+        return _fail(as_json, EXIT_USAGE, "usage", str(e))
+    try:
+        return _dispatch(args)
+    except _UsageError as e:
+        return _fail(as_json, EXIT_USAGE, "usage", f"aether: {e}")
+    except AetherError as e:
+        rc = _ESCAPED_EXIT.get(e.diag.category, EXIT_FINDINGS)
+        return _report(args, e.diagnostics, rc, complete=rc == EXIT_FINDINGS)
+    except FileNotFoundError as e:
+        return _fail(as_json, EXIT_USAGE, "usage", f"file not found: {e}")
+    except (UnicodeDecodeError, IsADirectoryError, PermissionError) as e:
+        return _fail(as_json, EXIT_INCOMPLETE, "input",
+                     f"aether: could not read the input: {type(e).__name__}: {e}")
+    except Exception as e:
+        # Aether itself failed: a bug in Aether, not in the input.
+        if debug or not as_json:
+            traceback.print_exc()
+        return _fail(as_json, EXIT_CRASH, "crash",
+                     f"aether: internal error: {type(e).__name__}: {e} — "
+                     "this is a bug in Aether, not in your code; please "
+                     "report it (see BUGS.md)")
+
+
+def _fail(as_json: bool, rc: int, kind: str, message: str) -> int:
+    sys.stderr.write(message.rstrip() + "\n")
+    if as_json:
+        _print_doc(error_doc(kind, message))
+    return rc
+
+
+def _dispatch(args) -> int:
+    return {"parse": cmd_parse, "emit": cmd_emit, "pack": cmd_pack,
+            "check": cmd_check, "check-py": cmd_check_py, "run": cmd_run,
+            "test": cmd_test, "fmt": cmd_fmt,
+            "fix-loop": cmd_fix_loop}[args.cmd](args)
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    p = _Parser(prog="aether", description="Aether toolchain")
     p.add_argument("--json", action="store_true",
-                   help="emit machine-readable JSON output for diagnostics")
+                   help="print exactly one JSON document on stdout (every "
+                        "diagnostic as Diagnostic.to_dict()); stderr keeps "
+                        "only human text")
+    p.add_argument("--debug", action="store_true",
+                   help="print the traceback of an internal error even "
+                        "under --json")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sp = sub.add_parser("parse", help="parse a file and print its AST")
@@ -891,6 +1026,10 @@ def main(argv=None) -> int:
                          "else the serial loop — so single-file and "
                          "small-tree runs stay byte-identical. --jobs 1 "
                          "forces serial. Output order does not depend on it")
+    sp.add_argument("--no-unprovable", action="store_true",
+                    help="with --json, leave each file's `unprovable` rows "
+                         "empty (they are most of the document on a real "
+                         "tree); findings and the exit code are unchanged")
 
     sp = sub.add_parser("check", help="parse + emit (no execution)")
     sp.add_argument("file")
@@ -998,24 +1137,7 @@ def main(argv=None) -> int:
     sp.add_argument("--quiet", action="store_true",
                     help="suppress progress output")
 
-    args = p.parse_args(argv)
-    try:
-        if args.cmd == "parse":    return cmd_parse(args)
-        if args.cmd == "emit":     return cmd_emit(args)
-        if args.cmd == "pack":     return cmd_pack(args)
-        if args.cmd == "check":    return cmd_check(args)
-        if args.cmd == "check-py": return cmd_check_py(args)
-        if args.cmd == "run":      return cmd_run(args)
-        if args.cmd == "test":     return cmd_test(args)
-        if args.cmd == "fmt":      return cmd_fmt(args)
-        if args.cmd == "fix-loop": return cmd_fix_loop(args)
-    except AetherError as e:
-        _emit_error(e.diag, args.json)
-        return 2
-    except FileNotFoundError as e:
-        sys.stderr.write(f"file not found: {e}\n")
-        return 2
-    return 0
+    return p
 
 
 if __name__ == "__main__":  # pragma: no cover

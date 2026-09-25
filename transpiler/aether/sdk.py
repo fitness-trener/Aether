@@ -24,7 +24,8 @@ filename together.
 Diagnostics returned by the SDK are the same `aether.diagnostics.Diagnostic`
 dataclass used internally — `.code`, `.message`, `.position`, `.suggestion`,
 `.extra` — so anything the compiler knows about a problem is reachable
-without parsing strings.
+without parsing strings. `CheckResult.to_dict()` is the document
+`aether --json check` prints, every diagnostic as `Diagnostic.to_dict()`.
 
 `TIMEOUT_ENFORCED` is part of this surface: False means this platform has
 no POSIX SIGALRM, so `timeout_ms` is not enforced and a runaway program
@@ -44,7 +45,7 @@ from .emitter import emit as _emit
 from .pretty import pretty as _pretty
 from .runtime import build_namespace, set_deterministic
 from .runner import compile_and_run as _compile_and_run, TIMEOUT_ENFORCED
-from .passes import analyze_flat
+from .passes import analyze
 from .passes.imports import load_program
 from .diagnostics import Diagnostic, Position, AetherError
 
@@ -67,13 +68,22 @@ class ParseResult:
 
 @dataclass
 class CheckResult:
-    """Outcome of all static passes (parse + effects + capability)."""
+    """Outcome of all static passes (parse + effects + capability).
+    `complete` is False when some of the source did not parse or an
+    import did not resolve — what was not loaded was not analysed."""
     ast: Optional[Dict[str, Any]]
     diagnostics: List[Diagnostic] = field(default_factory=list)
+    complete: bool = True
 
     @property
     def ok(self) -> bool:
         return not self.diagnostics
+
+    def to_dict(self) -> Dict[str, Any]:
+        """The same document `aether --json check` prints: {ok, complete,
+        diagnostics: [Diagnostic.to_dict(ast)]} (audit 2026-09-24 D6)."""
+        return {"ok": self.ok, "complete": self.complete,
+                "diagnostics": [d.to_dict(self.ast) for d in self.diagnostics]}
 
 
 @dataclass
@@ -166,11 +176,16 @@ def check(source_or_ast, filename: str = "<sdk>") -> CheckResult:
     imported file) stops before analysis, as it does on the CLI.
     """
     ast, all_diags, import_diags = load_program(source_or_ast, filename)
+    complete = not (all_diags or import_diags)
     if import_diags:
-        return CheckResult(ast=ast, diagnostics=all_diags + import_diags)
+        return CheckResult(ast=ast, diagnostics=all_diags + import_diags,
+                           complete=False)
     if ast is not None and ast.get("decls"):
-        all_diags.extend(analyze_flat(ast))
-    return CheckResult(ast=ast, diagnostics=all_diags)
+        for stage, diags in analyze(ast):
+            for d in diags:
+                d.stage = stage     # rides along in to_dict() (D6)
+            all_diags.extend(diags)
+    return CheckResult(ast=ast, diagnostics=all_diags, complete=complete)
 
 
 def _rehydrate(d: Dict[str, Any]) -> Diagnostic:

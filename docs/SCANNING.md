@@ -26,11 +26,14 @@ security family (`E0710`–`E0731`), and the static-semantic checks
     python -m tools.scan path/to/dir --min-confidence 0.9   # certainty floor
     python -m tools.scan path/to/dir --expect  # gate on the diff from `// expect:` headers
 
-Exit code: `0` = no findings (with `--expect`: no difference from the
-declared headers), `1` = at least one finding (with `--expect`: an
-undeclared finding or a declared one that stopped firing), `2` = usage
-error. Parse errors (invalid syntax — a generation failure) are counted
-and reported separately from architectural/security findings.
+Exit code (the table in *Exit codes and the JSON contract* below): `0` =
+no findings (with `--expect`: no difference from the declared headers),
+`1` = at least one finding (with `--expect`: an undeclared finding or a
+declared one that stopped firing), `2` = usage error (a missing path
+included), `3` = analyzer crash, `4` = a file did not parse or could not
+be read and nothing was found. Parse errors (invalid syntax — a
+generation failure) are reported separately from architectural/security
+findings; `--allow-parse-errors` keeps them out of the exit code.
 
 Example:
 
@@ -39,7 +42,7 @@ Example:
       L  12  E0713  function 'lookup' builds a SQL query for 'sqlQuery' unsafely ...
       L  27  E0206  function 'save' discards the Result of 'writeFile' ...
     ============================================================
-    scanned 34 files · 2 with findings · 0 parse errors
+    scanned 34 files · 2 with findings · 0 parse errors (generation failures; any makes the run incomplete: exit 4, or 1 with findings)
     findings by code: E0206×1, E0713×1
 
 ## CI gate for `.aeth` corpora (GitHub Code Scanning)
@@ -83,6 +86,7 @@ no annotations.
     aether check-py src/ --strict              # + E0711 and the E0701 inventory
     aether check-py src/ --min-confidence 0.9  # hide the by-name matches
     aether check-py src/ --jobs 4              # 4 worker processes
+    aether --json check-py src/ --no-unprovable  # JSON without the unprovable rows
     python -B -m transpiler.aether.cli check-py src/   # without installing
 
 A directory is walked recursively for `.py`, skipping `.git`, `.venv`,
@@ -137,11 +141,17 @@ SQL, and 4 `compile()` calls whose result is never run. Those findings
 are what the rules are designed to flag, measured over-flags included,
 and they stay in the default output.
 
-Exit code: `0` = clean, `2` = findings **or an analyzer crash**. A file
-that cannot be parsed (py2 sources, templates, fixtures) is counted on its
-own summary line and does not fail the run; a crash inside a detector is a
-bug in Aether and does, per `passes/__init__.py`'s rule that a crashing
-detector must go red rather than silent.
+Exit code: `0` = clean, `1` = findings, `2` = usage error, `3` = an
+analyzer crash, `4` = incomplete. A file that cannot be parsed (py2
+sources, templates, fixtures — or valid 3.12+ syntax such as a PEP 701
+f-string or a PEP 695 type parameter on a 3.10/3.11 interpreter) was not
+checked: it is reported on stderr in every mode and counted on its own
+summary line, and a run with no findings exits `4`, never `0`. On 3.10/
+3.11 a SyntaxError that looks like 3.12 syntax adds "valid on a newer
+Python? scan with 3.12+" (a heuristic on the error text). A crash inside a
+detector is a bug in Aether and exits `3` whatever else was found, per
+`passes/__init__.py`'s rule that a crashing detector must go red rather
+than silent.
 
     scanned 128 file(s) · 3 with findings · 1 unparseable · 0 analyzer error(s)
     findings by code: E0713x2, E0723x1
@@ -165,6 +175,84 @@ it, an `authorize(...)` second argument or an `Authorized` annotation
 included (measured).
 `E0711` and the `E0701` capability inventory are held back from the
 default set by measurement — see `bench/py_frontend/REPORT.md` §2.
+
+## Exit codes and the JSON contract
+
+Since 0.5.0 one table, defined once (`transpiler/aether/diagnostics.py`),
+holds for `aether check`, `aether check-py`, `aether fix-loop` and
+`tools/scan.py`, in text, `--json` and `--sarif` mode:
+
+| exit | meaning |
+|---|---|
+| `0` | clean: everything was analysed and nothing was found |
+| `1` | findings (`fix-loop`: not repaired — `not_repaired`, `stuck`, `widened`, `max_iters_reached`) |
+| `2` | usage error: an unknown flag, a bad value, a missing path; nothing was analysed |
+| `3` | analyzer crash: Aether itself failed — a bug in Aether, not in your code |
+| `4` | incomplete: some input could not be read or parsed, and nothing was found |
+
+When several apply: `3` over `1` over `4` over `0`. A run with findings
+AND an unparsed file exits `1`, and its JSON says `"complete": false`.
+`check-py --min-confidence` filters the exit code as well as the output.
+On `.aeth`: a lex/parse error, or an `import` that does not resolve
+(E0705/E0706), is `4` — the program was not analysed; an SMT refutation
+(E0901) is `1`; `--prove` without z3 is `2`. `aether run` exits `1` on a
+runtime contract violation and on an exception the program itself
+raised. `aether test` keeps its fixture table (0 match, 1 mismatch, 2
+error). Before 0.5.0, `check` exited `2` on findings, parse errors,
+import errors and usage errors alike; `check-py` exited `2` on findings
+and on a per-file analyzer crash and `0` on a tree it could not parse;
+`tools/scan.py` exited `1` on findings and parse errors; and any other
+crash was a raw traceback with exit `1`, even under `--json`.
+
+**One JSON document.** Every `--json` run prints exactly one JSON document
+on stdout — including a usage error and a crash; stderr carries only human
+text (a crash's traceback goes to stderr in text mode, or with `--debug`).
+`ok` is true exactly when the exit code is `0`; `complete` is false when
+some input was not analysed.
+
+**One diagnostic shape.** Every diagnostic on every surface — `check
+--json`, `check-py --json`, `tools/scan.py --json` (findings and
+`parse_error`), `sdk.CheckResult.to_dict()`, the LSP's `aether/check`
+reply and `publishDiagnostics` `data`, and the SARIF result properties —
+is `Diagnostic.to_dict()`, with every key always present:
+
+    {"code": "E0713", "category": "capability", "severity": "error",
+     "message": "...", "position": {"line": 2, "column": 5},
+     "suggestion": "..." | null, "confidence": 0.6, "extra": {...},
+     "stage": "security" | null, "patch_target": [["decls", 0], ...] | null}
+
+`stage` is the analysis stage that produced it (`effects`, `security`,
+`semantic`, `capability`, `modules`, or `smt`); null for lex, parse,
+import and runtime diagnostics. `patch_target` is the splice site in the
+Aether AST (`transpiler/aether/passes/patch_target.py`) for the codes that
+have one; always null on a Python finding, whose IR is not your source.
+`category` is one of `lex`, `parse`, `type`, `effect`, `capability`
+(which includes the E07xx security rows), `module`, `contract`,
+`refinement`, `runtime`, `timeout`, `emit`, `internal`.
+
+The documents:
+
+| command | stdout document |
+|---|---|
+| `aether --json check FILE` | `{ok, complete, diagnostics, decls?, prove?}` |
+| `aether --json check-py PATH...` | `{ok, complete, lang: "python", files: [{path, diagnostics, unprovable, meta}], unreadable: [{path, reason, detail}], skipped_dirs, errors: [{path, error}]}` |
+| `aether --json fix-loop FILE` | `{ok, complete, diagnostics: [], status, final, fixed_source, transcript}` |
+| `python -m tools.scan --json` | `{ok, complete, scanned, files_with_findings, parse_errors, results: [{path, findings: [to_dict + risk], declared?, parse_error?, unreadable?}], errors}` (+ `mode`, `missing` with `--expect`) |
+| any of them, when nothing was analysed (exit 2, 3, or unreadable input) | `{ok: false, complete: false, diagnostics: [], error: {kind: "usage" \| "crash" \| "input", message}}` |
+
+`check-py --no-unprovable` empties each file's `unprovable` rows (most
+of the document on a real tree); findings and the exit code do not
+change. The LSP `aether/check` reply also carries the pre-0.5 aliases
+`position.col` and `data: {suggestion, extra, patch_target}` for the
+0.5.x series; they go in 0.6.
+
+**SARIF** carries the same rows: each result has its line and column,
+and `properties` holds `confidence`, `suggestion`, `stage` and the
+`extra` dict (as `aether`); each rule has `fullDescription` and `help`
+(the message and suggestion of its first finding) and a `helpUri` into
+`grammar/diagnostics.md`. An unparsed file is a warning
+`toolExecutionNotification`; an analyzer crash is an error notification
+and sets `executionSuccessful: false`.
 
 ## Honest scope
 

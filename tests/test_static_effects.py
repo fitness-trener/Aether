@@ -417,7 +417,7 @@ end
         [sys.executable, "-B", "-m", "transpiler.aether.cli", "check", p],
         cwd=ROOT, env=env, capture_output=True, text=True,
     )
-    assert r.returncode == 2, f"expected exit 2, got {r.returncode}; stderr={r.stderr}"
+    assert r.returncode == 1, f"expected exit 1 (findings; Wave 5b D5), got {r.returncode}; stderr={r.stderr}"
     assert "E0801" in r.stderr, f"expected E0801 in stderr; got {r.stderr}"
     # And opt-out should pass.
     r = subprocess.run(

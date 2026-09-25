@@ -815,15 +815,15 @@ def test_e0711_is_held_back_by_default():
 def test_e0711_appears_under_strict():
     rc, out = _run_check_py(_OPEN_PARAM_SRC, "--strict")
     assert "[E0711]" in out, f"--strict must report E0711: {out}"
-    assert rc == 2, "a finding must exit 2"
+    assert rc == 1, "a finding must exit 1"     # was 2 before Wave 5b (D5)
     print("cli: --strict reports E0711")
 
 
-def test_check_py_cli_reports_and_exits_2():
+def test_check_py_cli_reports_and_exits_1():
     rc, out = _run_check_py("import subprocess\n"
                             "def r(host):\n"
                             "    subprocess.run('ping ' + host, shell=True)\n")
-    assert rc == 2, f"a finding must exit 2, got {rc}: {out}"
+    assert rc == 1, f"a finding must exit 1, got {rc}: {out}"   # was 2 (D5)
     assert "E0714" in out, out
     assert "not checked" in out.lower(), \
         "the reduced guarantee set must be stated on the output, not implied"
@@ -867,7 +867,7 @@ def test_directory_walk_scans_every_file():
         "app/sub/b.py": "def f(cur, n):\n    cur.execute('SELECT ' + n)\n",
         "app/clean.py": "def add(a, b):\n    return a + b\n",
     })
-    assert rc == 2, f"findings in a tree must exit 2: {out}"
+    assert rc == 1, f"findings in a tree must exit 1: {out}"
     assert "E0714" in out and "E0713" in out, \
         f"both files' findings must be reported: {out}"
     assert "a.py" in out and "b.py" in out, \
@@ -899,7 +899,8 @@ def test_unparseable_file_does_not_abort_the_walk():
         "app/a_py2.py": "print 'hello'\n",       # sorts before b.py
         "app/b.py": _CMDI_SRC,
     })
-    assert rc == 2, f"the finding after the bad file must still be found: {out}"
+    # 1, not 4: there are findings; the unparsed file is in the summary.
+    assert rc == 1, f"the finding after the bad file must still be found: {out}"
     assert "E0714" in out, out
     assert "1 unparseable" in out, f"the skip must be counted, not hidden: {out}"
     print("cli: an unparseable file does not abort the walk")
@@ -915,7 +916,7 @@ def test_utf8_bom_file_is_scanned_not_silently_skipped():
     })
     assert "0 unparseable" in out, \
         f"a BOM must not make a file unreadable: {out}"
-    assert "E0714" in out and rc == 2, \
+    assert "E0714" in out and rc == 1, \
         f"the finding in a BOM'd file must still be reported: {out}"
     print("cli: a UTF-8 BOM does not hide a file from the scanner")
 
@@ -1336,7 +1337,7 @@ def test_pep263_cookie_file_is_scanned():
         r = sp.run([sys.executable, "-B", "-m", "transpiler.aether.cli",
                     "--json", "check-py", p], cwd=ROOT, capture_output=True, text=True)
     out = _json.loads(r.stdout)
-    assert r.returncode == 2 and not out["unreadable"], (r.returncode, out["unreadable"])
+    assert r.returncode == 1 and not out["unreadable"], (r.returncode, out["unreadable"])
     assert [x["code"] for f in out["files"] for x in f["diagnostics"]] == ["E0713"]
     print("BUG-012: a PEP 263 coding cookie is honoured, not 'unreadable'")
 
@@ -1499,7 +1500,8 @@ def test_unreadable_and_skipped_are_visible_in_every_mode():
              "build/gen.py": _CMDI_SRC}
     rc, out, err = run(files, "--json")
     js = _json.loads(out)
-    assert rc == 2 and js["unreadable"] and js["unreadable"][0]["detail"], js["unreadable"]
+    assert rc == 1 and js["unreadable"] and js["unreadable"][0]["detail"], js["unreadable"]
+    assert js["complete"] is False and js["ok"] is False, js
     assert js["skipped_dirs"] == ["build"], js["skipped_dirs"]
     assert "could not parse" in err and "skipped as vendored/build output" in err, err
     rc, out, err = run(files, sub=("--sarif",))
@@ -1511,11 +1513,13 @@ def test_unreadable_and_skipped_are_visible_in_every_mode():
     assert res["properties"]["suggestion"], res
     assert "could not parse" in err, err
     rc, out, err = run(files)
-    assert rc == 2 and "could not parse" in err and "1 unparseable" in out \
+    assert rc == 1 and "could not parse" in err and "1 unparseable" in out \
         and "1 dir(s) skipped" in out, (out, err)
-    # an unparseable file alone never fails the run, in any mode
-    rc, out, err = run({"only.py": "def f(:\n"}, target="only.py")
-    assert rc == 0 and "could not parse" in err, (rc, out, err)
+    # An unparseable file alone is exit 4 (incomplete), in every mode. It
+    # used to be exit 0 — "never fails the run" (audit B6, Wave 5b).
+    for flags, sub in (((), ()), (("--json",), ()), ((), ("--sarif",))):
+        rc, out, err = run({"only.py": "def f(:\n"}, *flags, target="only.py", sub=sub)
+        assert rc == 4 and "could not parse" in err, (flags, sub, rc, out, err)
     print("cli: unreadable files and skipped dirs reported in json/sarif/text; exit codes agree")
 
 
@@ -1538,7 +1542,7 @@ def test_file_too_deep_for_python_is_unparseable_not_a_crash():
            "def g(a):\n    return " + "+".join(["a"] * 20000) + "\n")
     rc, out = _run_check_py_tree({"deep.py": src}, target="deep.py")
     assert "ANALYZER ERROR" not in out, out[-600:]
-    assert rc == 0 or "E0714" in out, (rc, out[-600:])
+    assert rc == 4 or "E0714" in out, (rc, out[-600:])   # 4 = unparsed (D5)
     print("BUG-029: a file too deep for Python's own parser is unparseable, not an analyzer crash")
 
 
@@ -1623,15 +1627,16 @@ def test_detector_value_error_is_a_crash_not_unreadable():
         p = os.path.join(d, "v.py")
         with open(p, "w", encoding="utf-8") as fh:
             fh.write("import os\ndef f(c):\n    os.system(c)\n")
-        real = passes.analyze_flat
+        # `_scan_one` walks `analyze` (per stage) since Wave 5b.
+        real = passes.analyze
 
         def boom(*_a, **_k):
             raise ValueError("detector bug")
-        passes.analyze_flat = boom
+        passes.analyze = boom
         try:
             res = cli._scan_one((p, PY_SKIP_STAGES, False))
         finally:
-            passes.analyze_flat = real
+            passes.analyze = real
     assert res[0] == "crashed" and "ValueError" in res[2], res
     print("BUG-035: a detector ValueError is an analyzer crash, not an unreadable file")
 
@@ -1874,7 +1879,7 @@ if __name__ == "__main__":
     test_pypi_scan_row_set_matches_cli()
     test_unmapped_call_cannot_collide_with_an_aether_sink_name()
     test_real_mapped_sinks_still_fire_after_prefixing()
-    test_check_py_cli_reports_and_exits_2()
+    test_check_py_cli_reports_and_exits_1()
     test_check_py_clean_exits_0()
     test_e0711_is_held_back_by_default()
     test_e0711_appears_under_strict()
