@@ -2552,6 +2552,44 @@ State carried forward: the full gate suite must stay green
 
 ---
 
+## Iteration 60 — Wave 5a of the 2026-09-24 audit: stop flagging the fix; findings speak Python (no new detector)
+
+- **Target:** not a backlog row. Plan Wave 5 items 1–3 (C1–C7) + BUG-039:
+  the checker flagged the remediation its own hint names, so an agent
+  fix-loop could not converge, and a Python finding named Aether
+  functions a Python user cannot call.
+- **Probe-confirmed first (on `a4cd812`):** 108 precision-auditor probes
+  gave 37 findings (20 at ≥ 0.9) — `"ls -l " + shlex.quote(p)`,
+  `redirect(url_for(...))`, psycopg `sql`, module/class constants,
+  `self.table.delete()`, `SandboxedEnvironment().from_string`,
+  `compile(..., PyCF_ONLY_AST)`, the docstring example key; plus BUG-039.
+- **Fixes (each once, where every caller routes through):** a `+`
+  concatenation is judged by its operands (`_concat_reason`; shell pieces
+  by `_shell_pieces_ok`); joins spelled as the concatenation they build;
+  own-origin URL builders and Django's check (`_redirect_guards`);
+  module/class constants and psycopg composition; receiver exceptions on
+  the by-method rows; output-only `argument_shape` / `docstring` /
+  `stdlib_xml` ratings; a Python `CalleeText` per row + `category:
+  security`.
+- **Measured:** framework corpus (4,946 files) 707 → 683, −24 / +0, every
+  removal a documented safe idiom (21 E0713, 2 E0719, 1 E0731), 4
+  confidence changes (stdlib XML → 0.6), 0 errors / 0 unparseable;
+  `--min-confidence 0.9` 55 → 51; `--strict` 1,017 → 993 (E0711 310
+  unchanged). In-repo trees 115 → 107: 8 `code = compile(...); exec(code)`
+  pairs in tests now report once. Probes 37 → 11 findings, ≥ 0.9 20 → 6.
+- **Residuals (pushed to q1):** see q1 rows below.
+- **TYPE gap surfaced for next iter:** argument injection. The argv form
+  and the quoted-concat form now agree that a quoted word is safe unless
+  the program runs it, but "runs it" is a program list, not a model:
+  `git -c core.pager=...`, `ssh host <cmd>` spelled with an absolute path
+  under another name, `tar --to-command` are accepted in both forms. A
+  per-program argument-semantics row (which flags take code) is the
+  next lever — measure the corpus's argv programs first (q3).
+- **Suite:** exit 0 (`smt` SKIP, z3 not installed locally); two new suites
+  (`py_precision`, `python_hints`).
+
+---
+
 ---
 
 ## Next-iteration checklist (for the loop)

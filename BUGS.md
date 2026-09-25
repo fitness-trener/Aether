@@ -1349,8 +1349,8 @@ a stage. `capability._STDLIB_EFFECT_PATHS` is derived from
 `effects._STDLIB_EFFECTS` in one expression (verified equal first:
 10 entries, identical path sets).
 
-### BUG-039  E0711 (`--strict`) flags `os.path.join(base, secure_filename(name))`, the documented Werkzeug fix  [OPEN]
-test: none yet (deferred)
+### BUG-039  E0711 (`--strict`) flags `os.path.join(base, secure_filename(name))`, the documented Werkzeug fix  [FIXED c130939]
+test: tests/test_py_precision.py (`::test_bug039_secure_filename_join`; also tests/test_python_hints.py)
 
 Found 2026-09-24 while writing `tests/test_sink_rows.py` (F2 sanitizer
 half). `werkzeug.utils.secure_filename` maps to `safeJoin`, and
@@ -1906,3 +1906,177 @@ the literal scan walks; `_scope_has_content` counts a bytes assignment.
 
 Measurement: no E0723 moved or appeared on the framework corpus or the
 in-repo trees except the new test's own AWS documented-example fixture.
+
+### BUG-073  E0714 flagged the documented shell fix — `"ls -l " + shlex.quote(p)`, the f-string form, `" ".join(shlex.quote(a) for a in args)`, `shlex.join` — at 0.95  [OPEN]
+test: tests/test_py_precision.py (`::test_c1_quoted_pieces_compose`);
+tests/test_sink_rows.py (`::test_every_sanitizer_maps_and_its_fix_is_clean`);
+tests/test_python_hints.py (`::test_every_python_hint_converges`)
+
+Found 2026-09-24 by the whole-repo audit (C1, P0). Repro on `a4cd812`:
+`subprocess.run("ls -l " + shlex.quote(path), shell=True, check=True)` →
+E0714 0.95 ("command is built by string concatenation - use shellArg(...)");
+the same through an f-string and through `" ".join(<genexpr of
+shlex.quote>)` bound to a name; `subprocess.run(shlex.join(["git", "log",
+*args]), shell=True)` → E0714 0.95 ("computed call"). The hint names
+exactly this fix, so an agent fix-loop cannot converge.
+`tests/test_sink_rows.py` pinned it as `KNOWN_FLAGGED_FIX`.
+
+Root cause: `_arg_reason` refused every `+` concatenation without looking
+at its operands (`detector_specs.py`), and `shlex.join` / `str.join` were
+opaque `py:` calls.
+
+Fix (`c130939`): `_concat_reason` judges a `+` tree by its operands. Every
+operand a literal or a proven-safe name is a literal for every rule (bans
+read per run of adjacent literals). A frontend wrapper call as an operand
+is accepted only by a rule with a `pieces` check; E0714's
+(`_shell_pieces_ok`) requires the leading literal run to END the
+program's word (`"ls" + q` lets the input extend the program name), no
+literal word to be a program that runs its argument
+(`_CODE_TAKING_PROGRAMS`: shells, `eval`, `env`, `sudo`, `ssh`, `xargs`,
+interpreters, `find`, `awk`, ...), and every piece to start outside quotes
+and not after `\` or `$`. `sep.join(...)` of a display / comprehension /
+`[x] * n` is spelled as the concatenation it builds (`_join_expr`);
+`shlex.join` maps to `shellArg` (a piece; a literal list display is spelled
+element by element, literals quoted as written, so its literal program is
+visible). `{x!r}` / `{x:spec}` and `%r`-style conversions are opaque (repr
+re-quotes). Still E0714: the whole command as one quoted word (BUG-034,
+now rated 0.6, see BUG-076), `shlex.quote(prog) + " -l"`, `"sh -c " +
+shlex.quote(c)`, `"sudo rm " + shlex.quote(p)`, `"ls '" + shlex.quote(p) +
+"'"`, `f'echo "{shlex.quote(p)}"'`, `"ls \\" + shlex.quote(p)`, a raw
+element in the join.
+Measured: framework corpus 0 E0714 changes (no site used the idiom);
+probes `cmd_shlex_quote`, `cmd_shlex_quote_fstr`, `cmd_shlex_join`,
+`cmd_list_join_shell` 0.95 → clean.
+
+### BUG-074  E0718: no Python spelling cleared it — `redirect(url_for(...))`, `redirect(reverse(...))`, `request.url_for`, Django's allow-list check all fired at 0.95  [OPEN]
+test: tests/test_py_precision.py (`::test_c2_own_origin_redirects`);
+tests/test_sink_rows.py (4 `safeRedirect` pins)
+
+Found 2026-09-24 by the audit (C2, P0). Repro on `a4cd812`:
+`return redirect(url_for("index"))`, `redirect(url_for("login",
+next=request.path))`, `redirect(reverse("detail", args=[pk]))`,
+`RedirectResponse(request.url_for("home"))` with `request: Request`, and
+`if not url_has_allowed_host_and_scheme(nxt, allowed_hosts=...): nxt =
+"/"` then `redirect(nxt)` → E0718 0.95 each ("target is a computed call -
+use safeRedirect(host, path)").
+
+Root cause: no `safeRedirect` entry in `SANITIZER_BY_QUALIFIED`; guards
+dominating a redirect were not modeled.
+
+Fix (`c130939`): `flask.url_for`, `quart.url_for`, `django.urls.reverse`,
+`django.urls.reverse_lazy` → `safeRedirect` (whole-target; they build a
+URL of the app's own routes). `django.shortcuts.resolve_url` is
+deliberately absent: it returns an absolute URL passed to it as is.
+`request.url_for(...)` clears only when `request` is a parameter
+annotated, through the imports, as `fastapi.Request` /
+`fastapi.requests.Request` / `starlette.requests.Request`; any other
+`.url_for` / `.url_path_for` / unresolved bare `url_for` stays a finding
+and is marked `own_origin` (rated 0.6, BUG-076). `_redirect_guards`: a
+redirect to `x` is cleared when Django's
+`url_has_allowed_host_and_scheme(x, ...)` / `is_safe_url(x, ...)` guards it
+at the function's own statement level — inside `if check(x):`, or after
+`if not check(x):` whose body ends in return/raise/`abort(...)` or rebinds
+`x` only to str literals — and `x` is not rebound where guarded.
+Measured: framework corpus E0718 5 → 5 — none of the 5 is an own-origin
+builder or a Django check (OAuth `redirect_uri` round-trips in
+agno/mcp and a storage URL; validated elsewhere, outside the
+intraprocedural model); probes `rd_url_for`, `rd_url_for_next`,
+`rd_django_reverse`, `rd_fastapi_url_for`, `rd_django_is_safe`,
+`rd_referrer_or` 0.95 → clean, `rd_starlette_url_path_for` 0.95 → 0.6.
+
+### BUG-075  E0713/E0719 precision: constants, psycopg `sql`, attribute Tables, IN-list placeholders; Jinja's sandbox and a same-file `from_string`  [OPEN]
+test: tests/test_py_precision.py (`::test_c3_sql_constants_and_composition`,
+`::test_c4_sandbox_and_own_from_string`)
+
+Found 2026-09-24 by the audit (C3, C4, P1). Repro on `a4cd812` (E0713 0.6
+unless noted): `TABLE = "users"` then `"SELECT * FROM " + TABLE + " WHERE
+id = %s"`; `LIMIT = 10` in an f-string; `"a " + "b"`; class-level `Q =
+"..."` read as `self.Q`; module-level `Q = text("... :id")`;
+`sql.SQL("... {}").format(sql.Identifier(t))` (psycopg2 and psycopg);
+`sess.execute(self.table.delete().where(...))`; `",".join("?" *
+len(ids))` / `", ".join(["%s"] * n)`. E0719 0.6 on
+`SandboxedEnvironment().from_string(t)` and on `Mode.from_string(s)`
+where `Mode` is this file's class with its own `from_string`.
+
+Root cause: `_safe_names` sees only the function body; no constant
+folding; psycopg's `sql` module unknown; `_SQL_TABLE_METHODS` accepted a
+bare-name receiver only; the by-method `from_string` row had no receiver
+exception.
+
+Fix (`c130939`): module-level names bound once to a str/int/float literal
+inline as that literal (`_scalar_text`), and names bound once to a
+sanctioned call (sanitizer row, SQLAlchemy expression, psycopg
+composition) read as that wrapper (`_sanctioned_value`); class constants —
+UPPER_CASE, bound once in the class body, bound by no other class in the
+file, never an attribute-assignment target anywhere (nor `setattr`) —
+inline at `self.X` / `cls.X`; literal + literal folds (BUG-073's
+`_concat_reason`); `_psycopg_composed` accepts `sql.SQL(<literal>)`,
+`Identifier`/`Literal`/`Placeholder`, `.format(...)` / `.join(...)` of
+those, `Composed([...])`; the argument-free Table form accepts an
+attribute receiver; a `sep.join` over literal elements is literal.
+`_sandboxed_env`: `.from_string` on `jinja2.sandbox.SandboxedEnvironment`
+/ `ImmutableSandboxedEnvironment` constructed there or bound once is not a
+sink. `_own_class_method`: `Cls.m(...)` / `Cls(...).m(...)` where `Cls` is a
+top-level class this file binds once with its own `def m` is not a
+by-method row (its body is judged where it is defined) — for every
+`SINK_BY_METHOD` row, not only `from_string`; `self.m` is not (a subclass
+may override).
+Measured (framework corpus): E0713 629 → 608 and E0719 26 → 24, every
+removal listed under Measurements.
+The case rule was added after measurement: the first cut (any case)
+removed openhands' `Environment(loader=BaseLoader).from_string(self.prompt)`
+through `class MicroAgent: prompt = ''` — a placeholder the registry's
+subclasses fill in, i.e. a miss. With UPPER_CASE only it fires again.
+
+### BUG-076  confidence measured the callee, not the argument; Python findings named Aether functions under `category: capability`; C7 small rows  [OPEN]
+test: tests/test_confidence.py (`::test_argument_shape_demotion_is_output_only`,
+`::test_docstring_credential_rates_at_the_floor`,
+`::test_sanitizer_name_set_matches_the_frontend`);
+tests/test_python_hints.py (`::test_every_python_hint_converges`,
+`::test_python_findings_name_no_aether_function`);
+tests/test_py_precision.py (`::test_c7_compile_exec_xml_and_docstring`,
+`::test_fp_probe_shapes_are_quiet_above_the_floor`)
+
+Found 2026-09-24 by the audit (C5, C6, C7). Repro on `a4cd812`:
+`subprocess.run(shlex.quote(path), shell=True)` E0714 0.95 — so
+`--min-confidence 0.9` kept the fix-shaped findings; every Python
+E0713/E0714/E0718/E0719/E0720/E0731 message said `'sqlQuery'` /
+`'shellExec'` / ... and the hint `sqlBind(...)`, `shellArg(...)`,
+`safeRedirect(...)`, `schemaDecode(...)`, `trusted(...)`; E0723's hint said
+`getEnv("...")`; all `category: "capability"`.
+`compile(src, fn, "exec", ast.PyCF_ONLY_AST)` E0731; `code = compile(...)`
+then `exec(code)` two E0731s; `AKIAIOSFODNN7EXAMPLE` in a docstring E0723
+1.0; stdlib `ET.fromstring(s)` E0727 0.95 while its own text says no XXE.
+
+Fix (`c130939`):
+- C5: output-only `argument_shape` demotion — a Python finding whose
+  judged argument contains a frontend-named sanitizer call
+  (`PY_SANITIZER_NAMES`, kept equal to `SANITIZER_BY_QUALIFIED` +
+  `sqlBind` by test) or an `own_origin` URL builder rates `FLOOR` (0.6),
+  `extra.demoted: "argument_shape"`. The finding set is unchanged.
+- C6: each literal-or-wrapper row gets a catch-all Python `CalleeText`
+  (prefix `""`): message names `{callee}`, the reason drops its Aether
+  remedy (`_py_reason`), the suggestion names a Python fix the frontend
+  clears (per code, see `grammar/diagnostics.md`); E0723 on Python
+  (`Program.lang == "python"`) names `os.environ["NAME"]`. Python
+  findings' `category` is `"security"`; Aether-source findings keep the
+  Aether text and `"capability"`. `tests/test_python_hints.py` is the
+  plan's LLM-free fix loop: for one repro per code (9 codes incl. E0711
+  under --strict) it applies each named fix mechanically and asserts it
+  is clean (21 fixes).
+- C7: `compile(...)` with `PyCF_ONLY_AST` in its flags is no sink;
+  `exec`/`eval` of a LOCAL name bound once to a `compile()` sink is not a
+  second finding and the compile rates `builtin` (0.9) like
+  `exec(compile(...))` (BUG-030); a stdlib XML parse that cannot have been
+  handed a parser (`xml.sax.*`, `expatbuilder`, or ElementTree/minidom/
+  pulldom with no 2nd positional / `parser=` / splat) matches as the new
+  kind `stdlib_xml` (0.6); an E0723 shape in a bare string statement
+  (docstring) rates 0.6, `extra.demoted: "docstring"`.
+- AWS example key: option (a) — keep firing on it, rate only the
+  docstring case at 0.6. The README demo (`hardcoded_secret_repro.py`,
+  the key in code) stays truthful at 1.0 with zero churn; allowlisting it
+  would have needed a new push-protection-safe fixture in README, bench
+  and two test files.
+Measured: framework `--min-confidence 0.9` 55 → 51 (the 4 stdlib
+`ET.fromstring`/`parse` sites → 0.6; 0 corpus findings demoted by
+argument shape); probes ≥ 0.9: 20 → 6.

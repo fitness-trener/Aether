@@ -1,5 +1,12 @@
 # Operation Log (append-only — newest on top)
 
+## [2026-09-25] Q1 residuals + BUG-039 closed | iteration 60: stop flagging the fix
+- **5 q1 rows.** Two judgement calls followed the plan: `SandboxedEnvironment`
+  clears E0719 although Jinja has had sandbox escapes, and a same-file class's
+  own method clears every method-name rule. The sink inside that method is
+  still judged, so the flaw is reported at the wrapper (probed by the coordinator).
+- **Closed:** BUG-039 (Werkzeug `os.path.join(base, secure_filename(x))`).
+
 ## [2026-09-25] Q1 residuals | iteration 59: the Python scanner stops missing
 - **5 q1 rows** from Wave 4. A raw `text()` built in a helper or stored on
   `self` reports twice. Aliases are followed only through names assigned once.
