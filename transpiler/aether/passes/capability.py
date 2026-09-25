@@ -57,7 +57,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Set, Tuple, Optional
 
 from ..diagnostics import Diagnostic, Position
-from .ast_walk import walk, callee_name, contexts, fn_exprs
+from .ast_walk import callee_name, contexts, fn_calls
 from .effects import _STDLIB_EFFECTS, program_callables, context_names, resolve_call
 
 
@@ -183,7 +183,7 @@ def check_capabilities(ast: Dict[str, Any]) -> List[Diagnostic]:
         direct_effects[name] = _direct_effect_paths(d)
         cx = context_names(d, prog)
         callees: Set[str] = set()
-        for call in walk(fn_exprs(d), "Call"):
+        for call in fn_calls(d):
             n = callee_name(call)
             if n is not None:
                 callees.add(n)

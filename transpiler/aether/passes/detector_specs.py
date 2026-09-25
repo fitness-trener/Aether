@@ -41,7 +41,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from ..confidence import confidence_of
 from ..diagnostics import Diagnostic, Position
-from .ast_walk import walk, callee_name, binders, fn_exprs, contexts
+from .ast_walk import walk, callee_name, binders, contexts, fn_calls, names_in
 
 
 # ----------------------------------------------------------------------
@@ -138,6 +138,18 @@ _STDLIB_MARKER_CONSTRUCTORS: Dict[str, frozenset] = {
     "PII":       frozenset({"classifyPII"}),
     "Untrusted": frozenset({"classifyUntrusted"}),
 }
+
+
+def marker_absent(ast: Dict[str, Any], marker: str) -> bool:
+    """True when nothing in the program is named `marker` or one of its
+    stdlib constructors. Then every input the marker rows read is empty
+    — no carrier record, no marked param/field/annotation, no source
+    call — so no function is tainted and the row cannot fire; skipping it
+    is output-identical. It is the Python case: the frontend emits no
+    marker types, and those rows were ~50% of `check-py` analysis time
+    (audit 2026-09-24 F5)."""
+    words = {marker} | _STDLIB_MARKER_CONSTRUCTORS.get(marker, frozenset())
+    return not (words & names_in(ast))
 
 
 def _marker_source_fns(ast: Dict[str, Any], marker: str) -> frozenset:
@@ -1217,7 +1229,7 @@ def param_sink_reach(ast: Dict[str, Any]) -> Dict[str, Dict[int, frozenset]]:
             continue
         al = _fn_aliases(d, frozenset(sinks))
         per: Dict[int, Set[str]] = {}
-        for call in walk(fn_exprs(d), "Call"):
+        for call in fn_calls(d):
             args = call.get("args") or []
             for sink in _sink_targets(callee_name(call), al, sinks):
                 idx = sinks[sink]
@@ -1407,7 +1419,7 @@ def literal_or_wrapper(spec: LiteralOrWrapperSpec) -> Callable[[Dict[str, Any]],
             fpos = d.get("pos") or {"line": 0, "column": 0}
             safe_names = _safe_names(d, safe_rule)
             aliases = _fn_aliases(d, sink_set)
-            for call in walk(fn_exprs(d), "Call"):
+            for call in fn_calls(d):
                 # An alias of a sink is the sink (`let run = sqlQuery`).
                 targets = _sink_targets(callee_name(call), aliases, sink_set)
                 if not targets:
@@ -1464,6 +1476,8 @@ def marker_flow(spec: MarkerFlowSpec) -> Callable[[Dict[str, Any]], List[Diagnos
 
     def check(ast: Dict[str, Any]) -> List[Diagnostic]:
         diags: List[Diagnostic] = []
+        if marker_absent(ast, spec.marker):
+            return diags
         src_fns = _marker_source_fns(ast, spec.marker)
         pmask = _marker_param_mask(ast, spec.marker)
         mfields = _marker_field_names(ast, spec.marker)
@@ -1485,7 +1499,7 @@ def marker_flow(spec: MarkerFlowSpec) -> Callable[[Dict[str, Any]], List[Diagnos
                 continue
             fn = d["name"]
             fpos = d.get("pos") or {"line": 0, "column": 0}
-            for call in walk(fn_exprs(d), "Call"):
+            for call in fn_calls(d):
                 # An alias of a sink is the sink (`let out = print`).
                 hits = _sink_targets(callee_name(call), al, sink_names)
                 if not hits:
