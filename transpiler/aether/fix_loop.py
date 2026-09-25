@@ -38,7 +38,9 @@ model's fix with the same `widening` rule.
 The loop runs until `sdk.check` returns clean, a repair would widen
 (`not_repaired`), or no diagnostic has a registered transformer
 (`stuck`; the real agent would hand control to its LLM at that point).
-Exit 0 only on `clean`.
+Exit (the table in diagnostics.py): 0 only on `clean`; 1 for
+`not_repaired`, `stuck`, `widened`, `max_iters_reached`; 2 usage; 3 the
+loop itself crashed.
 
 Outputs (UTF-8, LF line ends; neither may be the input file):
   - `<source>.transcript.json` — ordered list of steps
@@ -62,6 +64,7 @@ import sys
 from pathlib import Path
 
 from . import sdk
+from .diagnostics import EXIT_CLEAN, EXIT_CRASH, EXIT_FINDINGS, EXIT_USAGE
 from .parser import parse
 from .pretty import asts_equal_ignoring_pos
 from .passes.effects import _declared_effects, _effect_covered, _format_effect
@@ -284,10 +287,20 @@ def main(argv=None):
     if len({src_path.resolve(), out_src.resolve(), out_tr.resolve()}) != 3:
         sys.stderr.write("fix-loop: the input, --out-source and "
                          "--out-transcript must be three different files\n")
-        return 2
-    src = src_path.read_text(encoding="utf-8-sig")
-    fixed, transcript = fix_loop(src, filename=str(src_path),
-                                 allow_widen=args.allow_widen)
+        return EXIT_USAGE
+    try:
+        src = src_path.read_text(encoding="utf-8-sig")
+    except OSError as e:
+        sys.stderr.write(f"fix-loop: cannot read {src_path}: {e}\n")
+        return EXIT_USAGE
+    try:
+        fixed, transcript = fix_loop(src, filename=str(src_path),
+                                     allow_widen=args.allow_widen)
+    except Exception:
+        # The loop itself failed: a bug in Aether, never "not repaired".
+        import traceback
+        traceback.print_exc()
+        return EXIT_CRASH
     with open(out_src, "w", encoding="utf-8", newline="\n") as f:
         f.write(fixed)
     with open(out_tr, "w", encoding="utf-8", newline="\n") as f:
@@ -309,7 +322,7 @@ def main(argv=None):
         print(f"final state: {status}")
         print(f"wrote fixed source: {out_src}")
         print(f"wrote transcript:   {out_tr}")
-    return 0 if status == "clean" else 1
+    return EXIT_CLEAN if status == "clean" else EXIT_FINDINGS
 
 
 if __name__ == "__main__":

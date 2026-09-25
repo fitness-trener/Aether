@@ -172,7 +172,7 @@ end
             [sys.executable, "-B", "-m", "transpiler.aether.cli", "check", p],
             cwd=ROOT, capture_output=True, text=True,
         )
-        assert r.returncode == 2, r
+        assert r.returncode == 1, r   # 1 = findings (Wave 5b D5; was 2)
         assert "E0702" in r.stderr, r.stderr
         # Now with the opt-out flag — exit 0
         r2 = subprocess.run(

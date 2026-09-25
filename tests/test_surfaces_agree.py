@@ -88,10 +88,9 @@ def _cli(*args):
 
 
 def _cli_json_codes(path):
-    rc, _out, err = _cli("--json", "check", "--no-prove", path)
-    diags = [json.loads(l)["diagnostic"] for l in err.splitlines()
-             if l.startswith("{")]
-    return rc, diags
+    # One JSON document on stdout since Wave 5b (D6); it was JSONL on stderr.
+    rc, out, _err = _cli("--json", "check", "--no-prove", path)
+    return rc, json.loads(out)["diagnostics"]
 
 
 def _lsp_codes(path, text):
@@ -132,7 +131,7 @@ def test_cross_file_E0801_on_every_surface():
         got, rc = _all_surfaces(prog, PROG)
     want = ["E0801"]
     bad = {k: v for k, v in got.items() if sorted(v or []) != want}
-    assert rc == 2 and not bad, (rc, got)
+    assert rc == 1 and not bad, (rc, got)      # 1 = findings (D5)
     print("D2: cross-file E0801 on cli, sdk, lsp, scan, fix-loop")
 
 
@@ -141,7 +140,7 @@ def test_unresolved_import_E0705_on_every_surface():
         p = _write(d, "imp.aeth", UNRESOLVED)
         got, rc = _all_surfaces(p, UNRESOLVED)
     bad = {k: v for k, v in got.items() if v != ["E0705"]}
-    assert rc == 2 and not bad, (rc, got)
+    assert rc == 4 and not bad, (rc, got)      # 4 = not fully loaded (D5)
     print("D2: unresolved import E0705 on cli, sdk, lsp, scan, fix-loop")
 
 
@@ -150,13 +149,13 @@ def test_json_check_reports_every_stage_tagged():
         p = _write(d, "mix.aeth", MIXED)
         rc, diags = _cli_json_codes(p)
         got = [(x["code"], x["stage"]) for x in diags]
-        assert rc == 2 and got == [("E0801", "effects"), ("E0801", "effects"),
+        assert rc == 1 and got == [("E0801", "effects"), ("E0801", "effects"),
                                    ("E0713", "security")], got
         assert [c for c, _ in got] == [x.code for x in sdk.check(MIXED, filename=p).diagnostics]
         assert sorted(c for c, _ in got) == sorted(_lsp_codes(p, MIXED)) == \
             sorted(f["code"] for f in scan.scan_file(p)["findings"])
         rc, _out, err = _cli("check", "--no-prove", p)
-        assert rc == 2 and "E0713" not in err, err
+        assert rc == 1 and "E0713" not in err, err
         assert "1 more diagnostic(s) from later stages not shown: security 1" in err, err
     print("D4: --json check = every stage, tagged; text mode says what it held back")
 
@@ -180,10 +179,11 @@ def test_scan_reads_bom_and_fails_on_parse_errors():
         r = scan.scan_file(os.path.join(d, "bom.aeth"))
         assert "parse_error" not in r and [f["code"] for f in r["findings"]] == ["E0801"], r
         e = scan.scan_file(lex)
-        assert e["parse_error"]["code"] == "E0103" and e["parse_error"]["line"] == 4, e
+        assert e["parse_error"]["code"] == "E0103" and e["parse_error"]["position"]["line"] == 4, e
         assert "\\" not in e["path"], e["path"]
-        for argv, want in (([lex], 1), ([lex, "--allow-parse-errors"], 0),
-                           ([lex, "--expect"], 1), ([d, "--json"], 1)):
+        # 4 = incomplete: a parse error, no findings (D5; was 1).
+        for argv, want in (([lex], 4), ([lex, "--allow-parse-errors"], 0),
+                           ([lex, "--expect"], 4), ([d, "--json"], 1)):
             buf = io.StringIO()
             with redirect_stdout(buf):
                 rc = scan.main(argv)
