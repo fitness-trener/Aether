@@ -216,7 +216,7 @@ some input was not analysed.
 reply and `publishDiagnostics` `data`, and the SARIF result properties —
 is `Diagnostic.to_dict()`, with every key always present:
 
-    {"code": "E0713", "category": "capability", "severity": "error",
+    {"code": "E0713", "category": "security", "severity": "error",
      "message": "...", "position": {"line": 2, "column": 5},
      "suggestion": "..." | null, "confidence": 0.6, "extra": {...},
      "stage": "security" | null, "patch_target": [["decls", 0], ...] | null}
@@ -227,7 +227,8 @@ import and runtime diagnostics. `patch_target` is the splice site in the
 Aether AST (`transpiler/aether/passes/patch_target.py`) for the codes that
 have one; always null on a Python finding, whose IR is not your source.
 `category` is one of `lex`, `parse`, `type`, `effect`, `capability`
-(which includes the E07xx security rows), `module`, `contract`,
+(which includes the E07xx security rows on Aether source), `security`
+(the same rows on a Python finding from `check-py`), `module`, `contract`,
 `refinement`, `runtime`, `timeout`, `emit`, `internal`.
 
 The documents:

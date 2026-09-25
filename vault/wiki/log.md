@@ -1,5 +1,9 @@
 # Operation Log (append-only — newest on top)
 
+## [2026-09-25] Q1 rows | iteration 61: one exit-code table, one JSON contract
+- **3 q1 row(s)** from Wave 5b. The next gap it records: `aether run --json` still
+  mixes the program's own stdout with the JSON document.
+
 ## [2026-09-25] Q1 residuals + BUG-039 closed | iteration 60: stop flagging the fix
 - **5 q1 rows.** Two judgement calls followed the plan: `SandboxedEnvironment`
   clears E0719 although Jinja has had sandbox escapes, and a same-file class's

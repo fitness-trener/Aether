@@ -2590,6 +2590,39 @@ State carried forward: the full gate suite must stay green
 
 ---
 
+## Iteration 61 — Wave 5b of the 2026-09-24 audit: one exit-code table, one JSON contract (no new detector)
+
+- **Target:** not a backlog row. Plan items D5, D6, B6 and D10-partial:
+  an agent or CI job could not tell "found something" from "could not
+  run" from "crashed", and every surface spoke its own JSON.
+- **Probe-confirmed first (on `a4cd812`):** `check` exit 2 for findings,
+  parse errors, import errors and usage alike; a crash under `--json` a raw
+  traceback, exit 1; `tools/scan.py` exit 0 on a missing path; the Action
+  passed a crash that had findings elsewhere; `--json check` JSONL on
+  stderr; `check-py --json` `ok: true`, exit 0 on a PEP 701 file under
+  3.11. BUG-077..079.
+- **Fix (once, where every caller routes through):** the table and
+  `exit_code()` in `diagnostics.py`; `Diagnostic.to_dict(ast)` with
+  `stage` + `patch_target`; `cli.main` wraps every command; one stdout
+  document per `--json` run; SARIF rule descriptions; Action reads the
+  table and runs once.
+- **Measured non-breaking for findings:** framework corpus 707 findings
+  before and after (0 unreadable, 0 errors on 3.11), exit 2 → 1; worktree
+  `bench tests tools playground demos` 115 findings, identical rows, exit
+  2 → 1. Corpus expect-headers unchanged.
+- **Breaking for callers (0.5.0, CHANGELOG):** exit codes and JSON shapes;
+  15 grader files and 11 test files that pinned exit 2 / the old shapes
+  updated (listed in the record).
+- **Residuals (pushed to q1):** see q1 rows.
+- **TYPE gap surfaced for next iter:** `aether run --json` still interleaves
+  the program's own stdout with the JSON document (the program's output is
+  the product); a `run` JSON contract needs the program's stdout captured
+  into the document — decide whether `run` is an agent surface at all.
+- **Suite:** exit 0 (`smt` SKIP locally — z3 absent under 3.11; `test_smt`
+  run green separately under Python 3.13 + z3 4.16).
+
+---
+
 ---
 
 ## Next-iteration checklist (for the loop)

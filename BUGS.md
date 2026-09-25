@@ -2080,3 +2080,117 @@ Fix (`c130939`):
 Measured: framework `--min-confidence 0.9` 55 → 51 (the 4 stdlib
 `ET.fromstring`/`parse` sites → 0.6; 0 corpus findings demoted by
 argument shape); probes ≥ 0.9: 20 → 6.
+
+### BUG-077  exit codes conflated findings, parse errors, usage errors and crashes; a crash under `--json` was a raw traceback  [OPEN]
+test: tests/test_exit_codes.py (`::test_check_exit_table`,
+`::test_check_crash_is_3_and_json_survives`, `::test_check_py_exit_table`,
+`::test_check_py_crash_is_3`, `::test_scan_exit_table_and_json`,
+`::test_fix_loop_exit_table`, `::test_real_process_exit_codes`);
+tests/test_action.py (`::test_scan_step_obeys_the_exit_code_table`)
+
+Found 2026-09-24 by the audit (D5, P1). Repro on `a4cd812`: `aether check
+demos/payment_workflow/broken.aeth` → exit 2; `aether check` on a file with
+a parse error → exit 2; `aether check nope.aeth` → exit 2; `aether check
+--bogus` → exit 2 (argparse); a detector exception → raw traceback, exit 1,
+even under `--json`; `aether check-py` → 2 on findings and 2 on a per-file
+analyzer crash; `tools/scan.py` → 1 on findings and 1 on parse errors, and
+**0 on a path that does not exist** (it globbed nothing). `action.yml`'s
+"an analyzer crash always fails the job" was false: the step detected a
+crash only as `rc == 2 && findings == 0`, so a crash in one file of a tree
+with findings elsewhere passed with `fail-on-findings: false` (reproduced
+by running the step's own script against a stand-in `aether` exiting 3 with
+two findings: step exit 0).
+
+Root cause: no shared table. Each command returned literal integers; `main`
+caught only `AetherError`/`FileNotFoundError`; argparse exited on its own.
+
+Fix (`69e1b3b`): `diagnostics.py` defines the table once —
+`EXIT_CLEAN 0 · EXIT_FINDINGS 1 · EXIT_USAGE 2 · EXIT_CRASH 3 ·
+EXIT_INCOMPLETE 4` and `exit_code(findings, incomplete, crashed)` (precedence
+3 > 1 > 4 > 0) — imported by `cli.py`, `fix_loop.py` and `tools/scan.py`.
+`cli.main` wraps everything: argparse errors (a `_Parser` subclass raising
+instead of exiting) and in-command usage errors → 2; an escaped
+`AetherError` → 4 for lex/parse, 3 for emit/internal, else 1; unreadable
+input → 4; any other exception → 3 with a JSON error document under
+`--json` (traceback on stderr in text mode or with the new `--debug`).
+`check`: a load failure (parse error, E0705/E0706) → 4; findings and E0901
+→ 1; `--prove` without z3 → 2. `run`: a runtime contract violation or an
+exception raised by the program itself → 1. `fix_loop.main`: a crash in the
+loop → 3, unreadable input → 2. `tools/scan.py`: per-file crash wall →
+3, unreadable/unparsed → 4 (unless `--allow-parse-errors`), a missing
+path → 2. `action.yml` reads the table: 3 always fails, 2 fails, an
+incomplete scan (counted from the SARIF's warning notifications, so it is
+seen even when findings make the exit 1) fails unless the new
+`allow-incomplete: true`; findings stay with the fail-on-findings step.
+`aether test` keeps its fixture table (0/1/2) on purpose — `run_all.py` and
+`bench/harness.py` grade on it.
+
+### BUG-078  five JSON shapes: `--json check` wrote JSONL to stderr, `check-py --json` said `ok: true` with nothing analysed, `patch_target` existed only in the LSP  [OPEN]
+test: tests/test_exit_codes.py (`::test_check_json_is_one_document_on_stdout`,
+`::test_check_py_json_complete_and_ok`, `::test_check_py_no_unprovable`,
+`::test_sdk_and_lsp_speak_to_dict`, `::test_sarif_rules_carry_descriptions`)
+
+Found by the audit (D6, P1; D10 partial; survey TC-08). Repro on `a4cd812`:
+`aether --json check broken.aeth` → nothing on stdout, three
+`{"ok": false, "diagnostic": {...}}` lines on **stderr**; `--collect-errors`
+→ the same diagnostics on stdout AND stderr; `check-py --json` on a file
+that does not parse → `{"ok": true, ...}`, exit 0; LSP `aether/check` →
+`position.col`, no severity/category/confidence; `tools/scan.py` findings
+→ their own dict (`line`, `column` top-level), `parse_error` a third shape;
+`patch_target` only in the LSP; SARIF rules → `shortDescription` = the bare
+code, no description, no help.
+
+Fix (`69e1b3b`): `Diagnostic` gains `stage` (set by every surface
+that runs `analyze()`: CLI, `sdk.check`, `check-py`'s `_scan_one`,
+`tools/scan.py`; `smt` for E0901/E0902) and `to_dict(ast=None)` always
+emits `stage` and `patch_target` (computed by `passes/patch_target.py`,
+called, not edited, when an AST is given). Every surface serializes with
+it: `check --json`, `--collect-errors`, `check-py --json`,
+`sdk.CheckResult.to_dict()` (new, with `complete`), LSP `aether/check` and
+`publishDiagnostics` `data`, SARIF, `tools/scan.py` (`to_dict()` + `risk`;
+`parse_error` = the parse diagnostic's `to_dict()`). Every `--json` run
+prints exactly one document on stdout — usage errors and crashes included
+(`{"ok": false, "complete": false, "diagnostics": [], "error": {kind,
+message}}`); stderr carries only human text; `aether --json fix-loop`
+prints `{ok, complete, status, final, fixed_source, transcript}`.
+`check-py --json`: `ok` is exactly "exit 0", new `complete`; new
+`--no-unprovable` empties the `unprovable` rows (default unchanged). SARIF:
+rules gain `fullDescription`/`help` (the first finding's message and
+suggestion) and `helpUri` (`grammar/diagnostics.md`); results gain
+`properties.stage`; an analyzer crash is an error notification and
+`executionSuccessful: false`. LSP severity now maps warning → 2 (E0902
+published as Error before). The Action runs `check-py` once (it ran twice)
+and prints the human report from the SARIF. `diagnostics.py` documents the
+category enum actually emitted (lex, parse, type, effect, capability,
+module, contract, refinement, runtime, timeout, emit, internal); nothing
+renamed.
+
+**LSP choice (recorded as asked):** `aether/check` returns the unified
+`to_dict()` rows and, for the 0.5.x series only, keeps the old
+`position.col` and `data: {suggestion, extra, patch_target}` as aliases;
+remove both in 0.6. `tools/alsp_surface.py` and `tools/py_surface.py` build
+their own dicts (with `col`) and were not changed (not owned, not
+`aether/check`).
+
+### BUG-079  `check-py` exited 0 with `ok: true` when the files could not be parsed — valid 3.12 source scanned on 3.10/3.11 included  [OPEN]
+test: tests/test_exit_codes.py (`::test_newer_python_syntax_is_incomplete_with_hint`,
+`::test_check_py_exit_table`); tests/test_py_frontend_sinks.py
+(`::test_unreadable_and_skipped_are_visible_in_every_mode`)
+
+Found by the audit (B6, P1). Repro on `a4cd812` under Python 3.11:
+`import os\ndef f(d):\n    os.system(f"echo {d["k"]}")` (PEP 701) →
+stderr note `could not parse ... f-string: unmatched '['`, stdout
+`{"ok": true, "files": [], ...}`, exit 0 — an E0714 missed with a green
+result. Same for a PEP 695 `type X = ...` line.
+
+Root cause: the documented policy "unparseable input never fails the run".
+
+Fix (`69e1b3b`): an unreadable/unparsed file makes the run incomplete:
+exit 4 when nothing was found, 1 when something was (`complete: false`
+either way), in text, `--json` and `--sarif`. On 3.10/3.11 a SyntaxError
+whose message starts `f-string` or whose line has a PEP 695 shape
+(`type X =`, `def f[T]`, `class C[T]`) gets "— valid on a newer Python?
+scan with 3.12+ (this is Python 3.x)" appended to its detail (stderr,
+JSON, SARIF). A heuristic on the error text, hence the question mark: a
+genuinely malformed f-string on 3.11 gets the hint too; py2 `print 'x'`
+does not. Verified on 3.13: the PEP 701 repro parses and exits 1 (E0714).

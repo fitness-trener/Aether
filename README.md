@@ -36,8 +36,10 @@ elided text.
 `sqlBind` is Aether's name for a parameterized query; see the limits below
 for how to read Aether names in findings on Python.
 
-Exit `0` clean, `2` on findings or on an error (a missing path, an
-analyzer crash). Every command on this page that names a path in this
+Exit `0` clean, `1` findings, `2` usage error (a missing path), `3`
+analyzer crash, `4` incomplete (a file could not be parsed and nothing
+was found), the same table for `check`, `check-py`, `fix-loop` and
+`tools/scan.py` ([`docs/SCANNING.md`](https://github.com/fitness-trener/Aether/blob/main/docs/SCANNING.md)). Every command on this page that names a path in this
 repo runs from a fresh clone after `pip install .` (see Install); the two
 bandit comparisons and `run_recall.py` also need
 `pip install bandit==1.9.4` (without it `run_recall.py` still runs, with
@@ -304,9 +306,9 @@ jobs:
           strict: 'false'        # adds E0711 + the E0701 inventory
 ```
 
-Inputs: `path`, `strict`, `fail-on-findings`, `upload-sarif`, `sarif-file`,
+Inputs: `path`, `strict`, `fail-on-findings`, `allow-incomplete`, `upload-sarif`, `sarif-file`,
 `category`, `setup-python`, `python-version`. Outputs: `findings`,
-`sarif-file`, `exit-code`. Full contract in [`action.yml`](https://github.com/fitness-trener/Aether/blob/main/action.yml).
+`sarif-file`, `exit-code`, `unparsed`. Full contract in [`action.yml`](https://github.com/fitness-trener/Aether/blob/main/action.yml).
 
 Or drive the CLI yourself:
 
@@ -354,7 +356,9 @@ Working with the language directly:
     aether fix-loop demos/payment_workflow/broken.aeth --live # LLM repair: source checkout + ANTHROPIC_API_KEY
 
 `aether --json <command> ...` (the flag goes before the command) emits
-structured output for an agent to consume; the Python SDK is
+structured output for an agent to consume: exactly one JSON document on
+stdout, every diagnostic as `Diagnostic.to_dict()` (`stage`,
+`patch_target` and `confidence` included); the Python SDK is
 `from aether import sdk` once installed (`pip install aether-lang`, or
 `pip install .` from a checkout).
 

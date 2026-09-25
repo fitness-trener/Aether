@@ -57,8 +57,10 @@ class Diagnostic:
     # The categories emitted today (not renamed, only documented):
     #   lex, parse                      the source did not parse (E01xx/E0201)
     #   type, effect, capability,       static analysis (the STAGES registry;
-    #   module                          `capability` includes the E07xx
-    #                                   security rows)
+    #   module, security                `capability` includes the E07xx
+    #                                   security rows on Aether source;
+    #                                   `security` is the same rows on a
+    #                                   Python finding (check-py))
     #   contract, refinement, runtime,  runtime checks and SMT (E03xx, E09xx),
     #   timeout                         and the runner's E0601 / E9003
     #   emit, internal                  Aether could not emit or run the
