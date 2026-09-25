@@ -2195,7 +2195,7 @@ JSON, SARIF). A heuristic on the error text, hence the question mark: a
 genuinely malformed f-string on 3.11 gets the hint too; py2 `print 'x'`
 does not. Verified on 3.13: the PEP 701 repro parses and exits 1 (E0714).
 
-### BUG-080  Every detector re-walked every function; on Python half the analysis time went to eight marker rows that cannot fire there  [OPEN]
+### BUG-080  Every detector re-walked every function; on Python half the analysis time went to eight marker rows that cannot fire there  [FIXED 95abe86]
 test: tests/test_perf_index.py (`::test_walk_budget_per_function`,
 `::test_marker_skip_is_output_identical`, `::test_shared_index_is_output_identical`)
 
@@ -2240,7 +2240,7 @@ Measurement: walks per function on a 40-function Python module 97 → 14.
 The three slowest files, analysis only: 7.36 s → 0.48 s. Output
 byte-identical (see Measurements).
 
-### BUG-081  The Python frontend re-walked each function six times for its bindings  [OPEN]
+### BUG-081  The Python frontend re-walked each function six times for its bindings  [FIXED cd97b8a]
 test: tests/test_perf_index.py (the framework-corpus byte-identity is the
 check; the timing is in Measurements — no walk-count test pins it)
 
@@ -2258,7 +2258,7 @@ scope phase then strips `def`s out of class and module nodes in place
 cached there. Callers get a fresh list each time. Frontend on the three
 slowest files 2.8 s → 1.7 s; framework-corpus JSON byte-identical.
 
-### BUG-082  E0801 pointed at the function declaration, not the offending call; Aether `Call` and `ExprStmt` had no position  [OPEN]
+### BUG-082  E0801 pointed at the function declaration, not the offending call; Aether `Call` and `ExprStmt` had no position  [FIXED 0084ef1]
 test: tests/test_call_positions.py (all five)
 
 Found 2026-09-24 by the tool auditor (D10, P2); deferred by Wave 5a
@@ -2305,7 +2305,7 @@ identical in all 418 (list below). Python (`check-py`, framework corpus
 and in-repo trees, default and `--strict`) byte-identical — the frontend
 already positioned its calls.
 
-### BUG-083  `effects pure, log` passed `check` and failed `--effect-strict`  [OPEN]
+### BUG-083  `effects pure, log` passed `check` and failed `--effect-strict`  [FIXED 0084ef1]
 test: tests/test_module_validation.py (`::test_A11_pure_alongside_other_effects_is_a_parse_error`)
 
 Found 2026-09-24 by the language auditor (A11, P2; repro
@@ -2321,7 +2321,7 @@ E0201 at the `pure` token ("'pure' declares no effects and cannot be
 combined with other effects"), in either order. The corpus never writes
 it (0 of 418 files). E0201 row text updated.
 
-### BUG-084  An effect naming an unknown capability was accepted silently  [OPEN]
+### BUG-084  An effect naming an unknown capability was accepted silently  [FIXED 0084ef1]
 test: tests/test_module_validation.py (`::test_A11_effect_with_unknown_capability_is_E0704`)
 
 Found 2026-09-24 by the language auditor (A11). Repro: `effects log,
