@@ -14,6 +14,9 @@ so change no output (audit 2026-09-24 F5, Wave 7).
   3. The shared index changes nothing either: every corpus `.aeth` gives
      the same diagnostics with the index as with each detector run on its
      own (the uncached path a direct `check_x(ast)` call takes).
+  4. The Python frontend walks each scope once (6.8 walked nodes per AST
+     node before the gaps round's G7, under 3 after); its output is
+     checked byte-identical on the framework corpus, not here.
 
 Run: python -B tests/test_perf_index.py   (exit 0 = pass)
 """
@@ -105,9 +108,35 @@ def test_shared_index_is_output_identical():
     assert n > 300, n
 
 
+def test_frontend_walks_each_scope_once():
+    """The frontend reads each scope's Python AST in ONE walk (`_DefIndex`,
+    gaps round G7): its binding tables, calls, statements and walrus scan
+    used to walk every file ~7 times (imports, module bindings, attribute
+    assignments, then per def: bindings, calls, statements, walrus)."""
+    import ast as pyast
+    from aether import py_frontend
+    nodes = sum(1 for _ in pyast.walk(pyast.parse(PY_SRC)))
+    seen = [0]
+    real_walk, real_fast = pyast.walk, py_frontend._walk
+
+    def counting(real):
+        def w(node):
+            for n in real(node):
+                seen[0] += 1
+                yield n
+        return w
+    pyast.walk, py_frontend._walk = counting(real_walk), counting(real_fast)
+    try:
+        py_to_ir(PY_SRC)
+    finally:
+        pyast.walk, py_frontend._walk = real_walk, real_fast
+    ratio = seen[0] / nodes
+    assert ratio < 3, f"{ratio:.1f} walked nodes per AST node (budget 3)"
+
+
 def main() -> int:
     tests = [test_walk_budget_per_function, test_marker_skip_is_output_identical,
-             test_shared_index_is_output_identical]
+             test_shared_index_is_output_identical, test_frontend_walks_each_scope_once]
     failures = 0
     for t in tests:
         try:

@@ -110,6 +110,13 @@ SANITIZERS = {
                    "def f(x):\n    return {san}(x)\n"),
 }
 
+# Argument injection (gaps round G6): program -> does a literal `--` before
+# the input clear it? (ssh runs the words after the host remotely; find
+# reads every word as its expression.) Plus the exec-form runners.
+ARGV_PROGRAMS = {"git": True, "tar": True, "rsync": True, "zip": True,
+                 "ssh": False, "find": False}
+ARGV_POSITIONAL_RUNNERS = ("asyncio.create_subprocess_exec",)
+
 # Rows a snippet cannot exercise: none today. An entry needs a reason.
 UNEXERCISABLE: dict = {}
 
@@ -210,8 +217,31 @@ def test_every_sanitizer_maps_and_its_fix_is_clean():
     print(f"rows: {n} sanitizer rows map to their wrapper; every documented fix is clean")
 
 
+def test_every_argv_program_flags_and_clears():
+    """Each code-option program: a non-literal argv word is E0714, all
+    literal words are clean, and a literal `--` before the word clears it
+    exactly where the pin says `--` ends the danger."""
+    bad = _check_pins("_ARGV_CODE_OPTIONS", pf._ARGV_CODE_OPTIONS,
+                      {p: 0 for p in ARGV_PROGRAMS})
+    if {p for p, clears in ARGV_PROGRAMS.items() if not clears} != set(pf._ARGV_NO_TERMINATOR):
+        bad.append(f"_ARGV_NO_TERMINATOR {sorted(pf._ARGV_NO_TERMINATOR)} != pins")
+    if set(ARGV_POSITIONAL_RUNNERS) != set(pf._ARGV_POSITIONAL_RUNNERS):
+        bad.append(f"_ARGV_POSITIONAL_RUNNERS {sorted(pf._ARGV_POSITIONAL_RUNNERS)} != pins")
+    head = "import asyncio, subprocess\ndef f(x):\n    return "
+    for prog, clears in ARGV_PROGRAMS.items():
+        cases = [(f"subprocess.run(['{prog}', 'a', x])", ["E0714"]),
+                 (f"subprocess.run(['{prog}', 'a', 'b'])", []),
+                 (f"subprocess.run(['{prog}', '--', x])", [] if clears else ["E0714"])]
+        cases += [(f"{r}('{prog}', x)", ["E0714"]) for r in ARGV_POSITIONAL_RUNNERS]
+        bad += [f"{src}: want {want}, got {got}" for src, want in cases
+                if (got := _codes(head + src + "\n")) != want]
+    assert not bad, "argv program rows:\n  " + "\n  ".join(bad)
+    print(f"rows: {len(ARGV_PROGRAMS)} argv code-option programs flag, clear and honour `--` as pinned")
+
+
 if __name__ == "__main__":
     test_every_row_is_pinned()
+    test_every_argv_program_flags_and_clears()
     test_every_sink_row_fires_its_code()
     test_every_guard_flags_and_clears()
     test_every_sanitizer_maps_and_its_fix_is_clean()
