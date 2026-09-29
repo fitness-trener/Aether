@@ -132,6 +132,14 @@ Aether reported nothing on**, `marshal.load`, `pickle.Unpickler(...).load()`,
 Reproduce both: `python -B bench/pypi_scan/run_scan.py` and
 `python -B bench/pypi_scan/run_recall.py`.
 
+The same holds for the 15 AI-agent frameworks the other corpus pins
+(4,946 files): all 51 findings at `--min-confidence 0.9` were read at
+source on 2026-09-29, and **none is exploitable** in a default or common
+configuration. 22 are gated, documented dangerous features, 18 take
+developer-controlled input, and 11 are false positives. The rules' own
+claim, "a dangerous sink reached by a dynamic argument", held on 40 of 51
+([`bench/framework_scan/REPORT.md`](https://github.com/fitness-trener/Aether/blob/main/bench/framework_scan/REPORT.md) §12).
+
 ## What it checks on Python, and what it does not
 
 Default-on, no annotations required:
@@ -268,7 +276,7 @@ rates 0.95 confidence, a method matched only by its name on a receiver of
 unknown type 0.6, and so does a finding whose argument already contains a
 sanitizer or an own-origin URL builder. `--min-confidence 0.9` hides the
 0.6 findings — 632 of 684 on the 15-framework corpus (re-scanned
-2026-09-29 on the 0.5.0 branch,
+2026-09-29 at 0.5.0,
 [`bench/framework_scan/REPORT.md`](https://github.com/fitness-trener/Aether/blob/main/bench/framework_scan/REPORT.md);
 framework versions pinned in `bench/framework_scan/frameworks.lock.txt`). It is a filter, not a verdict on what it
 hides (those are what the rules flag, measured over-flags included), and
@@ -298,7 +306,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: fitness-trener/Aether@v0.4.1
+      - uses: fitness-trener/Aether@v0.5.0
         with:
           path: 'src tests'      # default: .
           strict: 'false'        # adds E0711 + the E0701 inventory
