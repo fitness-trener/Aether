@@ -433,6 +433,34 @@ _ARGV_SHELLS = frozenset({
 })
 _ARGV_SHELL_FLAGS = frozenset({"-c", "/c"})
 
+# Argument injection (CWE-88, gaps round G6): programs with an option
+# that runs a command, or code, the caller names. Handed an argv whose
+# non-literal word may itself be that option — a clone URL of
+# `--upload-pack=touch /tmp/x` (GitPython CVE-2022-24439), an ssh host of
+# `-oProxyCommand=...` (git CVE-2017-1000117) — the input picks the code
+# with no shell involved, and quoting the word changes nothing. Each value
+# lists the program's code-running options, for the record,
+# `mapping_table()` and the pins; the rule does not read them, because a
+# non-literal word can BE any of them: every non-literal word before a
+# literal `--` is judged (E0714). git has the one corpus site (agno's
+# `git *args` wrapper); the others are documented command-running options
+# (GTFOBins) with 0 corpus sites.
+_ARGV_CODE_OPTIONS: Dict[str, Tuple[str, ...]] = {
+    "git": ("-c", "--config", "--config-env", "--upload-pack", "-u",
+            "--receive-pack", "--exec"),
+    "ssh": ("-o", "-F", "<host>", "<command>"),
+    "tar": ("--to-command", "--checkpoint-action", "--use-compress-program",
+            "-I", "--info-script", "-F", "--new-volume-script", "--rsh-command"),
+    "find": ("-exec", "-execdir", "-ok", "-okdir"),
+    "rsync": ("-e", "--rsh", "--rsync-path"),
+    "zip": ("-T", "-TT", "--unzip-command"),
+}
+# `--` does not end the danger here: ssh runs the words after the host as
+# a remote shell command, and find reads every word as its expression.
+_ARGV_NO_TERMINATOR = frozenset({"ssh", "find"})
+# Exec-form runners whose positional arguments ARE the argv.
+_ARGV_POSITIONAL_RUNNERS = frozenset({"asyncio.create_subprocess_exec"})
+
 # Python's sanctioned exits, mapped onto Aether's wrapper names so a fixed
 # call site reads as clean instead of as an unknown call.
 SANITIZER_BY_QUALIFIED: Dict[str, str] = {
@@ -1618,6 +1646,72 @@ def _argv_shell_payload(call: _pyast.Call) -> Optional[Any]:
     return None
 
 
+def _argv_display(node: Any, resolver: Any, hops: int = 0) -> Optional[List[Any]]:
+    """The words of an argv value: a list/tuple display, a name bound once
+    to one, or a `+` of those whose other operands are opaque words
+    (`["git"] + args`). None when it cannot be read."""
+    if isinstance(node, _pyast.Name) and hops < _MAX_ALIAS_HOPS:
+        v = getattr(resolver, "value_of", lambda _n: None)(node.id)
+        return _argv_display(v, resolver, hops + 1) if v is not None else None
+    if isinstance(node, (_pyast.List, _pyast.Tuple)):
+        return list(node.elts)
+    if isinstance(node, _pyast.BinOp) and isinstance(node.op, _pyast.Add):
+        left = _argv_display(node.left, resolver, hops)
+        if left is None:
+            return None
+        return left + (_argv_display(node.right, resolver, hops) or [node.right])
+    return None
+
+
+def _argv_word(node: Any, resolver: Any) -> Optional[str]:
+    """The literal text of one argv word, or None when it is not literal.
+    A constant of any type is literal (`-n 5` cannot be an option); so is
+    a name bound only to str literals, here or once at module level."""
+    if isinstance(node, _pyast.Constant):
+        return str(node.value)
+    if not isinstance(node, _pyast.Name):
+        return None
+    if node.id in getattr(resolver, "local_names", ()):
+        v = _const_str(getattr(resolver, "value_of", lambda _n: None)(node.id))
+        if v is not None:
+            return v
+        return "" if node.id in getattr(resolver, "lit_names", ()) else None
+    lits = getattr(resolver, "module_lits", None) or {}
+    return lits[node.id][0] if node.id in lits else None
+
+
+def _argv_option_payload(call: _pyast.Call, dotted: Optional[str],
+                         resolver: Any) -> Optional[Any]:
+    """The first non-literal argv word a code-option program receives
+    before a literal `--` (`_ARGV_CODE_OPTIONS`) — the argument E0714
+    judges — or None. The argv is a subprocess runner's first argument
+    (or `args=`) or an exec-form runner's positional arguments."""
+    if dotted in _ARGV_POSITIONAL_RUNNERS:
+        words: Optional[List[Any]] = list(call.args)
+    else:
+        guard = SINK_GUARDS.get(dotted or "")
+        if guard is None or guard.sink_name != "shellExec":
+            return None
+        a0 = call.args[0] if call.args else next(
+            (k.value for k in call.keywords or [] if k.arg == "args"), None)
+        words = _argv_display(a0, resolver) if a0 is not None else None
+    if not words:
+        return None
+    prog = _argv_word(words[0], resolver)
+    prog = re.split(r"[/\\]", prog)[-1] if prog else ""
+    if prog.lower().endswith(".exe"):
+        prog = prog[:-4]
+    if prog not in _ARGV_CODE_OPTIONS:
+        return None
+    for w in words[1:]:
+        text = _argv_word(w, resolver)
+        if text == "--" and prog not in _ARGV_NO_TERMINATOR:
+            return None
+        if text is None:
+            return w.value if isinstance(w, _pyast.Starred) else w
+    return None
+
+
 def _sink_name(call: _pyast.Call, imp: "_Imports",
                safe_xml: Optional[Set[str]] = None,
                resolver: Optional[Any] = None) -> Optional[str]:
@@ -1654,7 +1748,15 @@ def _sink_match(call: _pyast.Call, imp: "_Imports",
         # `_call_expr` puts the third element in the judged slot.
         if guard.sink_name == "shellExec" and _argv_shell_payload(call) is not None:
             return guard.sink_name, "argv"
+        # `subprocess.run(["git", "clone", url])`: no shell, but a word the
+        # input supplies can be an option that runs code (gaps round G6).
+        if guard.sink_name == "shellExec" \
+                and _argv_option_payload(call, dotted, resolver) is not None:
+            return guard.sink_name, "argv"
         return None
+    if dotted in _ARGV_POSITIONAL_RUNNERS:
+        return (("shellExec", "argv")
+                if _argv_option_payload(call, dotted, resolver) is not None else None)
     sink = SINK_BY_QUALIFIED.get(dotted)
     if sink == "parseXml":
         safe = safe_xml or set()
@@ -1882,6 +1984,9 @@ def _call_expr(node: _pyast.Call, imp: "_Imports",
     kws = list(node.keywords or [])
     if name == "shellExec":
         payload = _argv_shell_payload(node)
+        if payload is None and sink is not None and sink[1] == "argv":
+            # A code-option program's non-literal word (G6) is judged.
+            payload = _argv_option_payload(node, dotted, resolver)
         if payload is not None:
             # `["bash", "-c", cmd]`: the shell parses `cmd`, so `cmd` is
             # the judged argument (BUG-021). The literal program name and
@@ -3127,6 +3232,11 @@ def mapping_table() -> Dict[str, Any]:
         "argv_shell_form": {"programs": sorted(_ARGV_SHELLS),
                             "flags": sorted(_ARGV_SHELL_FLAGS),
                             "judged_element": 2},
+        "argv_option_programs": {
+            "options": {k: list(v) for k, v in sorted(_ARGV_CODE_OPTIONS.items())},
+            "no_terminator": sorted(_ARGV_NO_TERMINATOR),
+            "positional_runners": sorted(_ARGV_POSITIONAL_RUNNERS),
+            "judged_element": "first non-literal word before a literal --"},
         "sql_expression_builders": {
             "roots": sorted(_SQL_EXPR_ROOTS),
             "builders": sorted(_SQL_EXPR_BUILDERS),
