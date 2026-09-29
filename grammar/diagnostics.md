@@ -40,13 +40,14 @@ what's in `extra`, and what an agent fix-loop is supposed to do.
 
 | Code | Description | `extra` keys |
 |------|-------------|--------------|
-| **E0201** | parse error (unified code for every "expected X, got Y"). Also raised for input nested too deeply to analyze: a top-level declaration whose AST is deeper than 200 levels (`MAX_AST_DEPTH` in `parser.py`) or that exhausts the parser's recursion — the hint says to split the expression into named `let` bindings. Also raised for `pure` written alongside another effect (`effects pure, log`): `pure` is the empty set, and the static checker read that clause as `{log}` while `--effect-strict` read it as `pure` (audit A11) | — |
+| **E0201** | parse error (unified code for every "expected X, got Y"). Also raised for input nested too deeply to analyze: a top-level declaration whose AST is deeper than 200 levels (`MAX_AST_DEPTH` in `parser.py`) or that exhausts the parser's recursion — the hint says to split the expression into named `let` bindings. Also raised for `pure` written alongside another effect (`effects pure, log`): `pure` is the empty set, and the static checker read that clause as `{log}` while `--effect-strict` read it as `pure` (audit A11). Also raised for a second `effects` clause on one function (the grammar has exactly one; the last one used to win silently, so `effects log` then `effects pure` checked as `pure`); repeated `requires` / `ensures` clauses stay legal | — |
 | **E0202** | a `match` on a union omits a case and has no wildcard catch-all — non-exhaustive match / unhandled variant (static, was runtime-only) | `function`, `union`, `missing` |
 | **E0203** | a `match` arm can never be reached — it follows a wildcard catch-all, or duplicates an earlier case (dead code, CWE-561) | `function`, `reason` |
 | **E0204** | a statement follows an unconditional `return`/`break`/`continue` in the same block — unreachable dead code (CWE-561) | `function`, `after` |
 | **E0205** | a `let` binding (not `_`-prefixed) is never read — a dead store, usually a mistaken variable (CWE-563) | `function`, `binding` |
 | **E0206** | a bare statement discards the `Result<...>` of a call — an unchecked error (e.g. a failed write silently ignored, CWE-252) | `function`, `callee` |
 | **E0207** | a refinement type's predicate is unsatisfiable (e.g. `Int where self >= 10 and self <= 5`) — an uninhabitable / impossible type | `type`, `lo`, `hi` |
+| **E0208** | a reference to an undeclared name: a call to, or a read of, an identifier that is not a parameter, a local bound earlier in the same or an enclosing block, a top-level function / `const` / record / union case (imports included), or a stdlib function — it would be a `NameError` at `run`. Name resolution only, not type checking | `function`, `name`, `kind` (`call` \| `value`), `suggestion` (closest known name, or null) |
 
 E0201 is emitted by `Parser.err`. The lenient `parse_collect` (C.6)
 accumulates all E0201 diagnostics it can recover past; strict `parse`
@@ -94,6 +95,23 @@ predicate's conjunction and refuses a type whose bounds admit no value
 construction — unanalyzable clauses widen to unbounded, so it never
 false-positives, at the cost of missing non-interval contradictions. Same
 default-on step / opt-out.
+
+E0208 is name resolution (same default-on step / opt-out,
+`transpiler/aether/passes/names.py`). The emitter mangles every
+identifier and runs it against the runtime's exports plus the program's
+own definitions, so a name nothing binds was a `NameError` at `run`
+after `check` exited 0 — and a misspelt sink (`sqlQeury("SELECT " + u)`)
+was a call no taint pass could name, so it also produced no E0713. The
+stdlib set is derived from the runtime (`runtime.unmangle` over its
+exports), never listed by hand. Bindings are block-scoped: a `let` inside
+an `if` branch is not visible after the `if`. What is NOT resolved,
+because it is never evaluated: the right side of `is`, the qualifier of
+`Union.Case(...)`, patterns, type annotations and `effects` arguments.
+The pass is silent on a program it cannot see whole — a partial AST from
+the lenient parser, or an `import` that was not resolved
+(`--no-import-resolution`). It proves a name refers to SOME binding; it
+does not check that binding's type, arity or kind (`types.md`). It
+does not run on Python (`check-py` skips the semantic stage).
 
 ## Contract / refinement (E03xx)
 

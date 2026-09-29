@@ -39,6 +39,7 @@ from .effects import (
     check_unsatisfiable_refinement,
 )
 from .modules import check_modules
+from .names import check_name_resolution
 
 STAGES = [
     # B.1/B.2 — call-site effects must be a subset of declared effects.
@@ -55,11 +56,11 @@ STAGES = [
         check_marker_boundary, check_return_laundering,
         check_code_injection,
     ]),
-    # E0202-E0207 — static semantic checks.
+    # E0202-E0208 — static semantic checks (E0208: name resolution).
     ("semantic", [
         check_exhaustiveness, check_unreachable_arms, check_dead_code,
         check_unused_binding, check_ignored_result,
-        check_unsatisfiable_refinement,
+        check_unsatisfiable_refinement, check_name_resolution,
     ]),
     # B.3 — transitive capability composition.
     ("capability", [check_capabilities]),
