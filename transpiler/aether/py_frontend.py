@@ -35,7 +35,7 @@ Output of `py_to_ir(source)`:
 from __future__ import annotations
 import ast as _pyast
 import re
-from contextvars import ContextVar
+from collections import deque
 import shlex
 from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 
@@ -544,7 +544,7 @@ class _FnScope:
     bound only to a string literal (`text(sql_query)`).
 
     `local_names` is every name the function binds by ANY form
-    (`_bindings_of`); a bare name not in it may be resolved through the
+    (`_DefIndex.bindings`); a bare name not in it may be resolved through the
     module's imports, one in it may not — a local rebinding wins over
     an import, and an unresolvable local rebinding wins over both.
     `module_lits` maps a module-level name bound exactly once, to a str
@@ -648,74 +648,112 @@ def _param_names(a: Any) -> List[str]:
     return out
 
 
-# `_bindings_of` per node, while `py_to_ir` translates the `def`s: six
-# callers asked for the same function's bindings, each re-walking it —
-# 60% of frontend time on the slowest framework files (audit F5). Only
-# live during the `def` phase: the scope phase then strips `def`s out of
-# class and module nodes IN PLACE, which would make a cached entry stale.
-_BINDINGS_MEMO: ContextVar[Optional[Dict[int, Tuple[Any, List[Any]]]]] = \
-    ContextVar("aether_py_bindings", default=None)
+def _walk(node: Any) -> Iterator[Any]:
+    """`ast.walk`, same breadth-first order, without its two generator
+    layers per node (`iter_child_nodes` / `iter_fields`): the frontend's
+    one walk per scope is its largest single cost."""
+    AST = _pyast.AST
+    todo = deque([node])
+    pop, push = todo.popleft, todo.append
+    while todo:
+        n = pop()
+        for f in n._fields:
+            v = getattr(n, f, None)
+            if isinstance(v, AST):
+                push(v)
+            elif isinstance(v, list):
+                for x in v:
+                    if isinstance(x, AST):
+                        push(x)
+        yield n
 
 
-def _bindings_of(node: Any) -> List[Tuple[str, Any, int]]:
-    """Every (name, value-or-None, line) binding inside `node`: its own
-    parameters when it is a function, then every binding form in its
-    body — nested functions and lambdas included, because their bodies
-    are translated into the enclosing function and their names are its
-    names. Over a Module it is every binding in the file, at any depth."""
-    memo = _BINDINGS_MEMO.get()
-    if memo is None:
-        return _bindings_walk(node)
-    hit = memo.get(id(node))
-    if hit is None or hit[0] is not node:
-        hit = memo[id(node)] = (node, _bindings_walk(node))
-    return list(hit[1])
+# Every node kind `_binding_rows` reads; any other node binds nothing.
+_BINDING_NODES = (_pyast.Assign, _pyast.AnnAssign, _pyast.AugAssign, _pyast.NamedExpr,
+                  _pyast.For, _pyast.AsyncFor, _pyast.comprehension, _pyast.withitem,
+                  _pyast.ExceptHandler, _pyast.Global, _pyast.Nonlocal,
+                  _pyast.FunctionDef, _pyast.AsyncFunctionDef, _pyast.Lambda,
+                  _pyast.ClassDef) + ((_PATTERN_BASE,) if _PATTERN_BASE else ())
 
 
-def _bindings_walk(node: Any) -> List[Tuple[str, Any, int]]:
-    out: List[Tuple[str, Any, int]] = []
-    if isinstance(node, (_pyast.FunctionDef, _pyast.AsyncFunctionDef, _pyast.Lambda)):
-        out += [(n, None, getattr(node, "lineno", 0)) for n in _param_names(node.args)]
-    for s in _pyast.walk(node):
-        if s is node:
-            continue
-        ln = getattr(s, "lineno", 0)
-        if isinstance(s, _pyast.Assign):
-            for t in s.targets:
-                if isinstance(t, _pyast.Name):
-                    out.append((t.id, s.value, ln))
-                else:
-                    out += [(n, None, ln) for n in _target_names(t)]
-        elif isinstance(s, _pyast.AnnAssign):
-            if s.value is not None and isinstance(s.target, _pyast.Name):
-                out.append((s.target.id, s.value, ln))
-        elif isinstance(s, _pyast.AugAssign):
-            out += [(n, None, ln) for n in _target_names(s.target)]
-        elif isinstance(s, _pyast.NamedExpr):
-            out.append((s.target.id, s.value, ln))
-        elif isinstance(s, (_pyast.For, _pyast.AsyncFor, _pyast.comprehension)):
-            out += [(n, None, ln) for n in _target_names(s.target)]
-        elif isinstance(s, _pyast.withitem):
-            if isinstance(s.optional_vars, _pyast.Name):
-                out.append((s.optional_vars.id, s.context_expr, ln))
+def _binding_rows(s: Any, out: List[Tuple[str, Any, int]]) -> None:
+    """Append the (name, value-or-None, line) bindings node `s` itself
+    makes (not its children's) to `out`."""
+    if not isinstance(s, _BINDING_NODES):
+        return
+    ln = getattr(s, "lineno", 0)
+    if isinstance(s, _pyast.Assign):
+        for t in s.targets:
+            if isinstance(t, _pyast.Name):
+                out.append((t.id, s.value, ln))
             else:
-                out += [(n, None, ln) for n in _target_names(s.optional_vars)]
-        elif isinstance(s, _pyast.ExceptHandler) and s.name:
-            out.append((s.name, None, ln))
-        elif isinstance(s, (_pyast.Global, _pyast.Nonlocal)):
-            out += [(n, None, ln) for n in s.names]
-        elif isinstance(s, (_pyast.FunctionDef, _pyast.AsyncFunctionDef)):
-            out.append((s.name, None, ln))
-            out += [(n, None, ln) for n in _param_names(s.args)]
-        elif isinstance(s, _pyast.Lambda):
-            out += [(n, None, ln) for n in _param_names(s.args)]
-        elif isinstance(s, _pyast.ClassDef):
-            out.append((s.name, None, ln))
-        elif _PATTERN_BASE and isinstance(s, _PATTERN_BASE):
-            for attr in ("name", "rest"):
-                if getattr(s, attr, None):
-                    out.append((getattr(s, attr), None, ln))
-    return out
+                out += [(n, None, ln) for n in _target_names(t)]
+    elif isinstance(s, _pyast.AnnAssign):
+        if s.value is not None and isinstance(s.target, _pyast.Name):
+            out.append((s.target.id, s.value, ln))
+    elif isinstance(s, _pyast.AugAssign):
+        out += [(n, None, ln) for n in _target_names(s.target)]
+    elif isinstance(s, _pyast.NamedExpr):
+        out.append((s.target.id, s.value, ln))
+    elif isinstance(s, (_pyast.For, _pyast.AsyncFor, _pyast.comprehension)):
+        out += [(n, None, ln) for n in _target_names(s.target)]
+    elif isinstance(s, _pyast.withitem):
+        if isinstance(s.optional_vars, _pyast.Name):
+            out.append((s.optional_vars.id, s.context_expr, ln))
+        else:
+            out += [(n, None, ln) for n in _target_names(s.optional_vars)]
+    elif isinstance(s, _pyast.ExceptHandler) and s.name:
+        out.append((s.name, None, ln))
+    elif isinstance(s, (_pyast.Global, _pyast.Nonlocal)):
+        out += [(n, None, ln) for n in s.names]
+    elif isinstance(s, (_pyast.FunctionDef, _pyast.AsyncFunctionDef)):
+        out.append((s.name, None, ln))
+        out += [(n, None, ln) for n in _param_names(s.args)]
+    elif isinstance(s, _pyast.Lambda):
+        out += [(n, None, ln) for n in _param_names(s.args)]
+    elif isinstance(s, _pyast.ClassDef):
+        out.append((s.name, None, ln))
+    elif _PATTERN_BASE and isinstance(s, _PATTERN_BASE):
+        for attr in ("name", "rest"):
+            if getattr(s, attr, None):
+                out.append((getattr(s, attr), None, ln))
+
+
+class _DefIndex:
+    """Everything the per-def consumers read off one scope's Python AST,
+    built by ONE walk (audit F5, gaps round G7). The consumers used to
+    re-walk the same node each: the binding tables, the call pass, the
+    statement pass and the walrus scan — ~7 walks of every file.
+
+    * `bindings`: every (name, value-or-None, line) binding inside the
+      node — its own parameters when it is a function, then every
+      binding form in its body, nested functions and lambdas included
+      (their bodies are translated into the enclosing function, so their
+      names are its names). Over a Module: every binding in the file.
+    * `calls` / `stmts`: every Call / statement node, the node itself
+      included, in `ast.walk` (breadth-first) order — the order the two
+      passes always visited them in, so the output order is unchanged.
+    * `has_walrus`: any `:=` at all; without one, the per-expression
+      walrus scan can find nothing and is skipped."""
+    __slots__ = ("bindings", "calls", "stmts", "has_walrus")
+
+    def __init__(self, node: Any):
+        out: List[Tuple[str, Any, int]] = []
+        if isinstance(node, (_pyast.FunctionDef, _pyast.AsyncFunctionDef, _pyast.Lambda)):
+            out += [(n, None, getattr(node, "lineno", 0)) for n in _param_names(node.args)]
+        calls: List[Any] = []
+        stmts: List[Any] = []
+        walrus = False
+        for s in _walk(node):
+            if isinstance(s, _pyast.Call):
+                calls.append(s)
+            elif isinstance(s, _pyast.stmt):
+                stmts.append(s)
+            elif isinstance(s, _pyast.NamedExpr):
+                walrus = True
+            if s is not node:
+                _binding_rows(s, out)
+        self.bindings, self.calls, self.stmts, self.has_walrus = out, calls, stmts, walrus
 
 
 def _exprs_in(x: Any) -> Iterator[Any]:
@@ -963,13 +1001,13 @@ def _raw_sql_entry(call: _pyast.Call, imp: "_Imports",
     return judged, kind
 
 
-def _assign_bindings(fn_node: Any) -> Dict[str, List[Any]]:
+def _assign_bindings(binds: List[Tuple[str, Any, int]]) -> Dict[str, List[Any]]:
     """name -> every value bound to it, by ANY binding form; None stands
     for a form whose value the translator cannot see (a parameter, an
     augmented assignment, a for-target ...) and disqualifies the name in
     every consumer."""
     out: Dict[str, List[Any]] = {}
-    for name, value, _ln in _bindings_of(fn_node):
+    for name, value, _ln in binds:
         out.setdefault(name, []).append(value)
     return out
 
@@ -978,7 +1016,7 @@ def _is_none_const(v: Any) -> bool:
     return isinstance(v, _pyast.Constant) and v.value is None
 
 
-def _sql_expression_names(fn_node: Any, imp: "_Imports",
+def _sql_expression_names(binds: List[Tuple[str, Any, int]], imp: "_Imports",
                           module_lits: Optional[Dict[str, Tuple[str, int]]] = None
                           ) -> Tuple[Set[str], Set[str]]:
     """(names holding a SQL expression, names bound only to a str literal).
@@ -994,10 +1032,10 @@ def _sql_expression_names(fn_node: Any, imp: "_Imports",
 
     A `stmt = None` sentinel before the real binding is ignored: executing
     None is a TypeError, not a query. Every other non-call binding —
-    including the unresolved forms `_bindings_of` reports as None —
+    including the unresolved forms `_DefIndex.bindings` reports as None —
     still disqualifies. A module-level literal constant the function
     never rebinds counts as a literal-bound name."""
-    binds = _assign_bindings(fn_node)
+    binds = _assign_bindings(binds)
     lit = {n for n, vs in binds.items()
            if vs and all(_const_str(v) is not None for v in vs)}
     lit |= {n for n in (module_lits or {}) if n not in binds}
@@ -1228,28 +1266,35 @@ def _demote_raw_entries(node: Any):
             c.pop("match", None)
 
 
-def _dedupe_bound_raw_entries(stmts: List[Dict[str, Any]]):
-    """`stmt = text(f"..."); session.execute(stmt)`: the executor judges
+def _fix_bound_flows(stmts: List[Dict[str, Any]]):
+    """Two one-finding-per-flow fixes over a scope's translated statements,
+    from ONE walk of them (the second set never names a call the first
+    fix renames: a raw entry is never spelled `exec`/`eval`).
+
+    `stmt = text(f"..."); session.execute(stmt)`: the executor judges
     `stmt` and fires (a name bound to a raw entry is never a safe name),
     so the entry in the binding is the same flow — one finding, at the
-    executor, as before the entry became a sink itself."""
-    executed = {c["args"][0]["name"] for c in _translated_calls(stmts)
-                if c["func"]["name"] in ("sqlQuery", "sqlExec")
-                and not c.get("raw_entry") and c.get("args")
-                and c["args"][0].get("kind") == "Ident"}
-    for s in stmts:
-        if s.get("kind") == "Let" and s.get("name") in executed:
-            _demote_raw_entries(s.get("value"))
+    executor, as before the entry became a sink itself.
 
-
-def _rerate_bound_compiles(stmts: List[Dict[str, Any]]):
-    """`code = compile(src, ...)` then `exec(code)`: `_sink_match` drops the
+    `code = compile(src, ...)` then `exec(code)`: `_sink_match` drops the
     exec (`_bound_compile`), so the compile() is the one finding — and its
     result IS executed, so it rates `builtin`, as `exec(compile(...))`
     does (BUG-030), not the floor of a compile() nobody runs."""
-    ran = {c["args"][0]["name"] for c in _translated_calls(stmts)
-           if c["func"]["name"] in ("py:exec", "py:eval") and c.get("args")
-           and c["args"][0].get("kind") == "Ident"}
+    executed: Set[str] = set()
+    ran: Set[str] = set()
+    for c in _translated_calls(stmts):
+        fn = c["func"]["name"]
+        if fn in ("sqlQuery", "sqlExec", "py:exec", "py:eval") and c.get("args") \
+                and c["args"][0].get("kind") == "Ident":
+            if fn in ("py:exec", "py:eval"):
+                ran.add(c["args"][0]["name"])
+            elif not c.get("raw_entry"):
+                executed.add(c["args"][0]["name"])
+    if not executed and not ran:
+        return
+    for s in stmts:
+        if s.get("kind") == "Let" and s.get("name") in executed:
+            _demote_raw_entries(s.get("value"))
     for s in stmts:
         if s.get("kind") == "Let" and s.get("name") in ran:
             v = s.get("value") or {}
@@ -1450,7 +1495,7 @@ def _dotted_of(node: Any, imp: "_Imports",
     return None
 
 
-def _local_constants(fn_node: Any, imp: "_Imports") -> Dict[str, str]:
+def _local_constants(binds: List[Tuple[str, Any, int]], imp: "_Imports") -> Dict[str, str]:
     """local name -> the single dotted value bound to it in this function.
 
     A name bound more than once to DIFFERENT values is omitted, and so is
@@ -1462,11 +1507,10 @@ def _local_constants(fn_node: Any, imp: "_Imports") -> Dict[str, str]:
     Straight-line: no control flow is modeled, so a name assigned in one
     branch and read in another counts as one binding. That direction is
     safe here precisely because disagreement, not agreement, is what
-    disqualifies a name. Every binding form counts (`_bindings_of`): a
+    disqualifies a name. Every binding form counts (`_DefIndex.bindings`): a
     parameter, a for-target or a `+=` is a binding to an unknown value,
     so `if loader is None: loader = yaml.SafeLoader` no longer proves a
     caller-supplied loader safe (BUG-012)."""
-    binds = _bindings_of(fn_node)
     names = _NameScope(n for n, _v, _l in binds)
     seen: Dict[str, Set[str]] = {}
     for name, value, _ln in binds:
@@ -1521,7 +1565,7 @@ _XML_PARSER_SAFE_KWS = {"resolve_entities": False, "no_network": True,
                         "load_dtd": False, "dtd_validation": False}
 
 
-def _safe_xml_parser_names(fn_node: Any, imp: "_Imports") -> Set[str]:
+def _safe_xml_parser_names(binds: List[Tuple[str, Any, int]], imp: "_Imports") -> Set[str]:
     """Names bound to an XML parser constructed with entity resolution
     OFF. Passing one of these disarms the XXE sink.
 
@@ -1544,7 +1588,7 @@ def _safe_xml_parser_names(fn_node: Any, imp: "_Imports") -> Set[str]:
     value itself; merging them would change what each one accepts, and a
     tidier guard that accepts more is a worse guard."""
     bound: Dict[str, List[bool]] = {}
-    for name, value, _ln in _bindings_of(fn_node):
+    for name, value, _ln in binds:
         # EVERY binding of the name is recorded — a rebinding to anything
         # but a hardened constructor is False and disqualifies it. The
         # old loop skipped non-constructor bindings, so `parser = make()`
@@ -1672,7 +1716,7 @@ def _sink_match(call: _pyast.Call, imp: "_Imports",
             return None
         # `code = compile(src, ...)` then `exec(code)`: the same flow bound
         # through a local name — reported once, at the compile(), which
-        # `_rerate_bound_compiles` rates as executed (audit C7).
+        # `_fix_bound_flows` rates as executed (audit C7).
         if builtin in ("exec", "eval") and call.args \
                 and _bound_compile(call.args[0], imp, safe_xml, resolver) is not None:
             return None
@@ -2330,8 +2374,8 @@ _REDIRECT_CHECKS = frozenset({"django.utils.http.url_has_allowed_host_and_scheme
                               "django.utils.http.is_safe_url"})
 
 
-def _redirect_guards(fn_node: Any, imp: "_Imports",
-                     resolver: Any) -> List[Tuple[str, int, int]]:
+def _redirect_guards(fn_node: Any, bindings: List[Tuple[str, Any, int]],
+                     imp: "_Imports", resolver: Any) -> List[Tuple[str, int, int]]:
     """`(name, first line, last line)`: a redirect to `name` within those
     lines is dominated by Django's allow-list check on `name`. Two shapes,
     both at the function's own statement level:
@@ -2345,7 +2389,7 @@ def _redirect_guards(fn_node: Any, imp: "_Imports",
     Either way `x` may not be rebound where it is guarded; a check that
     only an `elif`, a loop or a nested block reaches guards nothing."""
     body = getattr(fn_node, "body", None) or []
-    binds = [(n, ln) for n, _v, ln in _bindings_of(fn_node)]
+    binds = [(n, ln) for n, _v, ln in bindings]
     end = getattr(fn_node, "end_lineno", None) or 10 ** 9
     out: List[Tuple[str, int, int]] = []
 
@@ -2508,6 +2552,8 @@ class _FnVisitor:
         self.unprovable: List[Dict[str, Any]] = []
         self._eff_seen: Set[Tuple[str, str, Optional[str]]] = set()
         self._unp_seen: Set[str] = set()
+        # False when the scope holds no `:=` anywhere (`_DefIndex`).
+        self.has_walrus = True
 
     def _add_effect(self, cap: str, verb: str, arg: Optional[str]):
         key = (cap, verb, arg)
@@ -2534,7 +2580,7 @@ class _FnVisitor:
     def _e(self, node: Any) -> Dict[str, Any]:
         return _expr(node, self.imp, self.safe_xml, self.scope)
 
-    def seed_bindings(self, fn_node: Any):
+    def seed_bindings(self, bindings: List[Tuple[str, Any, int]]):
         """One unresolved binding per name bound by a form whose value the
         translator cannot see — a parameter, `x += ...`, a for-target, a
         tuple unpack, an except-as, a `global` — emitted as an `Assign`
@@ -2542,7 +2588,7 @@ class _FnVisitor:
         is an opaque `PyExpr`. A name with such a binding can never prove
         literal-only, whatever else it is bound to (BUG-012)."""
         seen: Set[str] = set()
-        for name, value, line in _bindings_of(fn_node):
+        for name, value, line in bindings:
             if value is None and name not in seen:
                 seen.add(name)
                 self.stmts.append({"kind": "Assign", "name": name,
@@ -2553,6 +2599,8 @@ class _FnVisitor:
         """`(q := build())` binds a name inside an expression; the binding
         is a `Let` carrying the value ONCE — `_expr` translates the
         NamedExpr itself to an opaque leaf."""
+        if not self.has_walrus:
+            return
         for sub in _pyast.walk(expr):
             if isinstance(sub, _pyast.NamedExpr):
                 self.stmts.append({"kind": "Let", "name": sub.target.id,
@@ -2788,11 +2836,29 @@ def py_to_ir(source: str) -> Tuple[Dict[str, Any], Dict[str, List[Dict[str, Any]
     # unresolved qualified sink is SILENT, not over-flagged. Found by
     # bench/framework_scan (BUGS.md BUG-011); the same gap kept every
     # try-guarded `select` from resolving to a builder (BUG-010).
-    for n in _pyast.walk(tree):
+    # The same one walk collects every binding in the file (`mod_binds`
+    # below) and every attribute name anything assigns (`attr_assigned`).
+    mod_rows: List[Tuple[str, Any, int]] = []
+    # Attribute names anything in the file assigns (`self.Q = ...`,
+    # `obj.Q += 1`, `setattr(x, "Q", v)`): a class attribute of that name
+    # is not a constant.
+    attr_assigned: Set[str] = set()
+    for n in _walk(tree):
         if isinstance(n, _pyast.Import):
             imports.add_import(n)
         elif isinstance(n, _pyast.ImportFrom):
             imports.add_importfrom(n)
+        if n is not tree:
+            _binding_rows(n, mod_rows)
+        tgts = (n.targets if isinstance(n, _pyast.Assign)
+                else [n.target] if isinstance(n, (_pyast.AugAssign, _pyast.AnnAssign))
+                else [])
+        for t in tgts:
+            attr_assigned |= {a.attr for a in _pyast.walk(t)
+                              if isinstance(a, _pyast.Attribute)}
+        if isinstance(n, _pyast.Call) and isinstance(n.func, _pyast.Name) \
+                and n.func.id in ("setattr", "delattr"):
+            attr_assigned.add((_const_str(n.args[1]) if len(n.args) > 1 else None) or "*")
 
     # Every `def` at any STATEMENT depth outside a function body: under
     # `try:` (the optional-dependency fallback every framework writes),
@@ -2838,7 +2904,7 @@ def py_to_ir(source: str) -> Tuple[Dict[str, Any], Dict[str, List[Dict[str, Any]
     # the same name is a second binding and disqualifies it). Such a
     # name IS its literal at every read (`conn.execute(_CREATE_TABLE)`).
     mod_binds: Dict[str, int] = {}
-    for n, _v, _l in _bindings_of(tree):
+    for n, _v, _l in mod_rows:
         mod_binds[n] = mod_binds.get(n, 0) + 1
     module_lits: Dict[str, Tuple[str, int]] = {}
     for s in scope_stmts(tree.body):
@@ -2848,20 +2914,6 @@ def py_to_ir(source: str) -> Tuple[Dict[str, Any], Dict[str, List[Dict[str, Any]
                 and mod_binds.get(s.targets[0].id) == 1:
             module_lits[s.targets[0].id] = (_scalar_text(s.value),
                                             getattr(s, "lineno", 0))
-    # Attribute names anything in the file assigns (`self.Q = ...`,
-    # `obj.Q += 1`, `setattr(x, "Q", v)`): a class attribute of that name
-    # is not a constant.
-    attr_assigned: Set[str] = set()
-    for n in _pyast.walk(tree):
-        tgts = (n.targets if isinstance(n, _pyast.Assign)
-                else [n.target] if isinstance(n, (_pyast.AugAssign, _pyast.AnnAssign))
-                else [])
-        for t in tgts:
-            attr_assigned |= {a.attr for a in _pyast.walk(t)
-                              if isinstance(a, _pyast.Attribute)}
-        if isinstance(n, _pyast.Call) and isinstance(n.func, _pyast.Name) \
-                and n.func.id in ("setattr", "delattr"):
-            attr_assigned.add((_const_str(n.args[1]) if len(n.args) > 1 else None) or "*")
     # Class-level literal constants (audit C3), per class: an UPPER_CASE
     # name (PEP 8's constant spelling) the class body binds exactly once,
     # to a literal, that no other class in the file binds (a subclass here
@@ -2922,47 +2974,47 @@ def py_to_ir(source: str) -> Tuple[Dict[str, Any], Dict[str, List[Dict[str, Any]
     def translate(qual: str, node: Any, line: int):
         v = _FnVisitor(imports, simple_names, qual, line, module_lits=module_lits)
         try:
-            sql_names, lit_names = _sql_expression_names(node, imports, module_lits)
-            binds = _bindings_of(node)
+            ix = _DefIndex(node)
+            binds = ix.bindings
+            sql_names, lit_names = _sql_expression_names(binds, imports, module_lits)
             counts: Dict[str, int] = {}
             for n, _v, _l in binds:
                 counts[n] = counts.get(n, 0) + 1
             v = _FnVisitor(imports, simple_names, qual, line,
-                           _safe_xml_parser_names(node, imports),
-                           _local_constants(node, imports),
+                           _safe_xml_parser_names(binds, imports),
+                           _local_constants(binds, imports),
                            sql_names, lit_names,
                            set(counts),
                            module_lits,
                            {n: val for n, val, _l in binds
                             if counts[n] == 1 and val is not None},
                            module)
+            v.has_walrus = ix.has_walrus
             v.scope.class_lits = class_lits.get(qual.rpartition(".")[0], {})
             fargs = getattr(node, "args", None)
             v.scope.request_params = frozenset(
                 n for n in (_param_names(fargs) if isinstance(fargs, _pyast.arguments) else [])
                 if counts.get(n) == 1
                 and _annotation_of(fargs, n, imports) in _REQUEST_TYPES)
-            v.scope.redirect_guards = _redirect_guards(node, imports, v.scope)
-            # Two separate walks, deliberately. `visit_call` drives the
-            # untouched capability/UNPROVABLE analysis over EVERY call
-            # anywhere in the function (including inside comprehensions
-            # and nested calls); `visit_stmt` builds the expression shapes
-            # the detectors judge. Merging them would change what the
-            # capability pass sees.
-            for sub in _pyast.walk(node):
-                if isinstance(sub, _pyast.Call):
-                    v.visit_call(sub)
-            v.seed_bindings(node)
+            v.scope.redirect_guards = _redirect_guards(node, binds, imports, v.scope)
+            # Two separate passes, deliberately (one walk collected both
+            # lists). `visit_call` drives the untouched capability/
+            # UNPROVABLE analysis over EVERY call anywhere in the function
+            # (including inside comprehensions and nested calls);
+            # `visit_stmt` builds the expression shapes the detectors
+            # judge. Merging them would change what the capability pass
+            # sees.
+            for sub in ix.calls:
+                v.visit_call(sub)
+            v.seed_bindings(binds)
             # Statements only. A handler's exception type and a case's
             # guard are expression children of their Try / Match
             # statement and are translated there; visiting the handler
             # and the case as well reported a sink in either one twice
             # (BUGS.md BUG-028).
-            for sub in _pyast.walk(node):
-                if isinstance(sub, _pyast.stmt):
-                    v.visit_stmt(sub)
-            _dedupe_bound_raw_entries(v.stmts)
-            _rerate_bound_compiles(v.stmts)
+            for sub in ix.stmts:
+                v.visit_stmt(sub)
+            _fix_bound_flows(v.stmts)
             if v.scope.too_deep:
                 v._add_unprovable("too_deep", qual,
                                   f"an expression in this scope is nested deeper "
@@ -2996,12 +3048,8 @@ def py_to_ir(source: str) -> Tuple[Dict[str, Any], Dict[str, List[Dict[str, Any]
         if v.unprovable:
             unprovable_map[qual] = v.unprovable
 
-    memo_token = _BINDINGS_MEMO.set({})
-    try:
-        for qual, node in func_nodes:
-            translate(qual, node, getattr(node, "lineno", 0))
-    finally:
-        _BINDINGS_MEMO.reset(memo_token)
+    for qual, node in func_nodes:
+        translate(qual, node, getattr(node, "lineno", 0))
 
     # Code that runs when the module is imported — `os.system(sys.argv[1])`
     # at the top level, an `if __name__ == "__main__":` block, a class
