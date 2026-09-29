@@ -2436,7 +2436,7 @@ update sequence element #0 to a sequence`.
 
 Measurement: runtime-only rename; framework corpus output byte-identical.
 
-### BUG-085  A second `effects` clause silently replaced the first  [OPEN]
+### BUG-085  A second `effects` clause silently replaced the first  [FIXED abb964c]
 test: tests/test_static_effects.py (`::test_repeated_effects_clause_is_a_parse_error`)
 
 Found 2026-09-24 while probing audit A11 (Wave 7 record, q1 row
@@ -2460,7 +2460,7 @@ parser always accepted that): `{ contract_clause } effects_clause
 Measurement: 0 of 418 tracked `.aeth` files repeat the clause; the
 `check --json` output of all 418 is unchanged.
 
-### BUG-086  A reference to an undeclared name passed `check`; a misspelt sink hid the injection  [OPEN]
+### BUG-086  A reference to an undeclared name passed `check`; a misspelt sink hid the injection  [FIXED abb964c]
 test: tests/test_name_resolution.py (`::test_misspelt_sink_is_E0208`, `::test_undeclared_call_and_value`, `::test_block_scoping_and_shadowing`, `::test_const_sees_only_earlier_decls`)
 
 Found 2026-09-24 by the language auditor (A8); recorded in Wave 6 as a
