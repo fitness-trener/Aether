@@ -2435,3 +2435,70 @@ pre-BUG-050 Map-only `_ae_remove` monkeypatched in) fails with
 update sequence element #0 to a sequence`.
 
 Measurement: runtime-only rename; framework corpus output byte-identical.
+
+### BUG-085  A second `effects` clause silently replaced the first  [OPEN]
+test: tests/test_static_effects.py (`::test_repeated_effects_clause_is_a_parse_error`)
+
+Found 2026-09-24 while probing audit A11 (Wave 7 record, q1 row
+"effect names are validated by capability head only"); fixed in the
+2026-09-29 known-gaps round (G2). Repro: `function f(x: Int) returns Int
+effects log ... effects pure do ... end`. `check` read it as `pure`: the
+declared `log` was gone, with no diagnostic.
+
+Root cause: `Parser.parse_function_decl` loops over interleaved
+`requires` / `ensures` / `effects` clauses and assigned
+`effects = self.parse_effect_list()` on every `effects`, so the last one
+won. `grammar.ebnf` has exactly one `effects_clause`.
+
+Fix (`abb964c`): a second `effects` keyword in one declaration is E0201 at
+that keyword ("function 'f' has more than one 'effects' clause", hint:
+merge them into one list). Repeated `requires` / `ensures` stay legal —
+`{ contract_clause }` in the grammar, each checked at runtime. The EBNF
+now spells out that contract clauses may follow the effects clause (the
+parser always accepted that): `{ contract_clause } effects_clause
+{ contract_clause }`. E0201 row text extended; no new code.
+Measurement: 0 of 418 tracked `.aeth` files repeat the clause; the
+`check --json` output of all 418 is unchanged.
+
+### BUG-086  A reference to an undeclared name passed `check`; a misspelt sink hid the injection  [OPEN]
+test: tests/test_name_resolution.py (`::test_misspelt_sink_is_E0208`, `::test_undeclared_call_and_value`, `::test_block_scoping_and_shadowing`, `::test_const_sees_only_earlier_decls`)
+
+Found 2026-09-24 by the language auditor (A8); recorded in Wave 6 as a
+scope fact (q1, iter-57). Known-gaps round G3. Repro:
+`sqlQeury("SELECT * FROM users WHERE name = '" + u + "'")` → `check`
+exit 0, no E0713; `run` → Python `NameError`. `frobnicate(1)`, never
+declared: `check` exit 0. Also found while building the fix:
+`const A: Int = B` above `const B: Int = 1` → `check` exit 0, `run`
+`NameError: name '_ae_B' is not defined` at module load.
+
+Root cause: no pass resolved names. The emitter mangles every
+identifier and runs the program against the runtime's `_ae_*` exports
+plus the program's own definitions, so an unbound name only surfaced
+when Python reached it; the taint passes match sinks by name, so a sink
+they cannot name is invisible to them.
+
+Fix (`abb964c`, `710e79c`): new static-semantic code **E0208** "reference
+to an undeclared name", `transpiler/aether/passes/names.py`
+(`check_name_resolution`), registered in the `semantic` stage. A name
+resolves if it is a parameter (`self` in a refinement predicate, `result`
+in `ensures`), a local bound earlier in the same or an enclosing block
+(`let` / `var` / assignment / `for` variable / `match` pattern
+bindings — the binder kinds of `ast_walk.binders()`), a top-level
+function / `const` / record / union case (imports fused in by
+`load_program`; inside a `const` initializer, only one declared above
+it), or a runtime export (`runtime.unmangle` over `vars(runtime)`: 119
+names, derived, not listed). Not resolved because not evaluated: the
+right side of `is`, the qualifier of `Union.Case(...)`, patterns, type
+annotations, `effects` arguments. `extra` = `function`, `name`, `kind`
+(`call` | `value`), `suggestion` (closest known name by
+`difflib.get_close_matches`, or null). Positioned at the nearest
+positioned ancestor (the call, or the statement) — `Ident` nodes carry no
+position and the AST shape was not changed. Silent on a program it
+cannot see whole: `parse_collect` marks a partial AST `partial`, and
+`resolve_imports` marks its combined program `imports_resolved`; a
+program with an `ImportDecl` but no mark (`--no-import-resolution`, or a
+caller that parsed without `load_program`) gets no E0208.
+This is name resolution, not type checking (`grammar/types.md` says so).
+
+Measurement: see Measurements — 0 new diagnostics on the in-repo `.aeth`
+corpus, `check-py` byte-identical.

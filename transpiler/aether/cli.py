@@ -215,7 +215,7 @@ def cmd_fmt(args) -> int:
 _STAGE_OPT_OUT = {
     "effects":    "no_static_effects",      # B.1/B.2
     "security":   "no_scope_check",         # E0710-E0730
-    "semantic":   "no_exhaustiveness_check",  # E0202-E0207
+    "semantic":   "no_exhaustiveness_check",  # E0202-E0208
     "capability": "no_capability_check",    # B.3
     "modules":    "no_module_check",        # D.3
 }
@@ -273,7 +273,7 @@ def _run_smt_check(ast, timeout_ms):
 # Stages that do not apply to Python source.
 #   effects  — E0801 compares a call site against a DECLARED effects
 #              clause; Python has none, so there is nothing to compare.
-#   semantic — E0202-E0207 check Aether language constructs (match
+#   semantic — E0202-E0208 check Aether language constructs (match
 #              exhaustiveness, dead `let` stores, ignored Results). On
 #              translated Python they describe the translation rather
 #              than the program.
@@ -603,7 +603,7 @@ def cmd_check_py(args) -> int:
           "types): E0801 effect composition; the net.fetch scope rows "
           "(E0710/E0721/E0722), except on a network call named fetch; the "
           "marker rows (E0712/E0715/E0717/E0724/E0725/E0726/E0728/"
-          "E0729/E0730); and the semantic family (E0202-E0207). E0716 "
+          "E0729/E0730); and the semantic family (E0202-E0208). E0716 "
           "fires on every .executescript method call; no Python spelling tried "
           "clears it.")
     if not strict:

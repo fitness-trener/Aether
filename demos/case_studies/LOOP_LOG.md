@@ -2684,6 +2684,37 @@ State carried forward: the full gate suite must stay green
 
 ---
 
+## Iteration 63 — known-gaps round, language side: name resolution (E0208) and one effects clause
+
+- **Target:** not a backlog row. The two language gaps the audit and
+  Wave 6/7 left open: A8 (no name resolution; q1 iter-57 scope fact) and
+  the repeated-effects residual (q1 iter-62).
+- **Probe-confirmed first (on `a2f13db`):** `sqlQeury("SELECT " + u)` →
+  `check` exit 0, no E0713; `frobnicate(1)` → exit 0, `run` NameError;
+  `effects log` then `effects pure` → checks as `pure`.
+- **Fixes:** a second `effects` clause is E0201 (parser). New E0208 pass
+  `passes/names.py` in the `semantic` stage: block-scoped locals,
+  parameters, top-level decls, imports, runtime exports derived from
+  `runtime.unmangle`; const initializers see only earlier decls.
+- **Measured:** 418 tracked `.aeth` through `--json check --no-prove`,
+  before/after: 0 files change (407 load and are resolved: 5,602
+  identifiers, 2,878 calls, 0 E0208; 11 do not parse, by design). Python
+  `check-py` byte-identical: framework corpus 4,946 files / 683 findings,
+  and `bench tests tools playground demos`.
+- **Ratchet:** 55 → 56 codes, 31 → 32 detectors, corpus claims 117 → 118
+  (`playground/examples/34_misspelt_sink.aeth`, `// expect: E0208`).
+- **Residuals (pushed to q1):** see q1 rows below.
+- **TYPE gap surfaced for next iter:** E0208 proves a name reaches SOME
+  binding; calling a `const Int` (`N(1)`) or a function with the wrong
+  number of arguments still passes `check` and is a Python `TypeError` at
+  `run`. Arity of direct calls to top-level functions / records / union
+  cases needs no type information and reuses this resolver — see the q8
+  draft below (option B).
+- **Suite:** exit 0, 50 PASS (`smt` SKIP, z3 not installed locally); one
+  new suite (`name_resolution`).
+
+---
+
 ---
 
 ## Next-iteration checklist (for the loop)

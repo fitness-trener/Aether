@@ -516,7 +516,7 @@ toolchain/sandbox/etc. issues.
 |------|-------------|
 | **E9001** | emit error (Python `compile()` rejected the emitted source). Also raised when the emitter cannot translate a construct (e.g. `old()` outside a function) |
 | **E9002** | internal error (parser/emitter raised something other than `AetherError`) |
-| **E9003** | Python runtime error inside the candidate (e.g. divide-by-zero with no precondition) |
+| **E9003** | Python runtime error inside the candidate (e.g. divide-by-zero with no precondition); also reported by `aether --json run` for an exception the program raised, with the traceback in the document's `stderr` |
 
 ## SMT contract proving — E09xx (default-on when z3 is installed)
 

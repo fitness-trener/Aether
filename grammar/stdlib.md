@@ -474,9 +474,8 @@ There is no `Set` literal; a `Set` value comes from `setUnion` /
 
 `now()` is the only time function the runtime implements. Instant
 arithmetic (`plus(Instant, Duration)`, `minus(Instant, Instant)`) was
-specified here and never implemented: a call passes `check` (there is no
-name resolution, see `types.md`) and `run` fails with a Python
-`NameError`. Work on `epochMillis` directly.
+specified here and never implemented: a call to either is refused by
+`check` as `E0208` (an undeclared name). Work on `epochMillis` directly.
 
 ## Hash
 
