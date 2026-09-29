@@ -2502,3 +2502,87 @@ This is name resolution, not type checking (`grammar/types.md` says so).
 
 Measurement: see Measurements — 0 new diagnostics on the in-repo `.aeth`
 corpus, `check-py` byte-identical.
+
+### BUG-095  The Python frontend walked every file about seven times  [OPEN]
+test: tests/test_perf_index.py (`::test_frontend_walks_each_scope_once`);
+the byte-identity of `--json check-py` over the framework corpus and the
+in-repo trees is the output check (Measurements)
+
+Found 2026-09-25 by Wave 7 (LOOP_LOG iteration 62, "TYPE gap surfaced": the
+frontend was ~75% of `check-py` time). Measured on `a2f13db`: on the three
+slowest framework files (`agno/workflow/workflow.py`,
+`browser_use/beta/service.py`, `agno/db/postgres/postgres.py`; 151,204 AST
+nodes together) the frontend's `ast.walk` calls yielded 1,068,633 nodes, 7.1
+per AST node: the imports, the module's bindings and its attribute
+assignments were three module-level walks, then each `def` was walked for
+its bindings, its calls, its statements and, per statement, for walrus
+targets. On the 40-function module in `tests/test_perf_index.py`: 6.8 walked
+nodes per AST node.
+
+Root cause: each per-def consumer (`_bindings_of`, the `visit_call` loop, the
+`visit_stmt` loop, `_walrus_lets`) and each module-level fact walked the
+node itself; Wave 7's `_bindings_of` memo removed only the repeated binding
+walks.
+
+Fix (`5ae433f`): `_DefIndex(node)` builds a scope's bindings, its Call nodes
+and its statement nodes (both in `ast.walk`'s breadth-first order, which is
+the order the two passes visited them in) and a has-walrus flag in one walk;
+the consumers take the bindings list; `_walrus_lets` returns at once when the
+scope has no `:=`. The module-level imports, bindings and attribute
+assignments share one walk. The two one-finding-per-flow fixes over the
+translated IR (`_dedupe_bound_raw_entries`, `_rerate_bound_compiles`) became
+`_fix_bound_flows`, one walk of the IR (the second never names a call the
+first renames). `_walk` is `ast.walk` without its two generator layers per
+node, same order (checked on 800 corpus files). The `_bindings_of` memo and
+its `ContextVar` are gone.
+
+Measurement: walked nodes on the three files 1,068,633 → 342,117; on the
+test module 6.8 → under 3 per AST node. Frontend on the three files,
+min of 5 interleaved runs: 1.78 s → 1.09 s. Frontend over the whole corpus,
+in-process: 76.1 s → 46.2 s. `--json check-py` byte-identical (below).
+
+### BUG-096  Argument injection through an argv list was silent: `subprocess.run(["git", "clone", url])`, `["git", "-c", x]`, `["ssh", host, cmd]`, `["tar", "--to-command", x]`, `asyncio.create_subprocess_exec("git", *args)`  [OPEN]
+test: tests/test_py_frontend_sinks.py
+(`::test_argv_option_injection_is_a_command_injection`);
+tests/test_sink_rows.py (`::test_every_argv_program_flags_and_clears`)
+
+Found 2026-09-24 by Wave 5a (LOOP_LOG iteration 60, "TYPE gap surfaced"; q1
+row "a quoted shell piece is accepted by a program LIST"). Repro on
+`5ae433f`: a module with `subprocess.run(['git', '-c', x, 'log'])`,
+`subprocess.run(['git', 'clone', url, 'dest'])`,
+`subprocess.run(['ssh', host, 'uptime'])`,
+`subprocess.run(['tar', '--to-command', x, '-xf', 'a.tar'])` and
+`await asyncio.create_subprocess_exec('git', *args)` → `check-py` exit 0,
+0 findings. All 16 flagged shapes in the new test were silent.
+
+Root cause: the argv form is the `shell=` guard's sanctioned exit, and only
+`["bash", "-c", cmd]` (BUG-021) was recognised as still running code. A
+program that runs code through an OPTION takes that option from any word
+the input supplies: a clone URL `--upload-pack=touch /tmp/x` (GitPython
+CVE-2022-24439), an ssh host `-oProxyCommand=...` (git CVE-2017-1000117).
+No shell is involved, so quoting the word does not help.
+
+Fix (`9c8014d`): `_ARGV_CODE_OPTIONS` names six programs and their
+code-running options — git (`-c`, `--config`, `--config-env`,
+`--upload-pack`, `-u`, `--receive-pack`, `--exec`), ssh (options, host,
+remote command), tar (`--to-command`, `--checkpoint-action`,
+`--use-compress-program`, `-I`, `--info-script`, `-F`, `--new-volume-script`,
+`--rsh-command`), find (`-exec`, `-execdir`, `-ok`, `-okdir`), rsync (`-e`,
+`--rsh`, `--rsync-path`), zip (`-T`, `-TT`, `--unzip-command`). An argv
+whose program word (literal, a name bound only to literals, basename,
+`.exe` dropped) is one of them, handed a non-literal word before a literal
+`--`, is `shellExec` (E0714, match `argv`, 0.9), and that word is the judged
+argument. The argv is a subprocess runner's first argument or `args=`, a
+list/tuple display, a name bound once to one, or `[...] + x`; or the
+positional arguments of `asyncio.create_subprocess_exec`. `--` does not
+clear ssh (the words after the host run in the remote shell) or find
+(every word is its expression). A constant of any type is literal (`-n 5`).
+`shlex.quote(x)` as the word stays a finding (the `py_whole` reason: it is
+not the exit here). `mapping_table()` publishes the table as
+`argv_option_programs`. The option lists are for the record, the pins and
+`mapping_table()`; the rule judges EVERY non-literal word before `--`,
+because such a word can be any of the options.
+
+Measurement: framework corpus 683 → 684, +1 / −0 (agno `git *args`
+wrapper, true by rule); `--min-confidence 0.9` 51 → 52. In-repo trees
+107 → 113, +6 / −0 (list and triage below). No kept finding changed.

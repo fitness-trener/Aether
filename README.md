@@ -267,8 +267,8 @@ rating, most-certain first: a callee resolved through the file's imports
 rates 0.95 confidence, a method matched only by its name on a receiver of
 unknown type 0.6, and so does a finding whose argument already contains a
 sanitizer or an own-origin URL builder. `--min-confidence 0.9` hides the
-0.6 findings — 632 of 683 on the 15-framework corpus (re-scanned
-2026-09-25 on the 0.5.0 branch,
+0.6 findings — 632 of 684 on the 15-framework corpus (re-scanned
+2026-09-29 on the 0.5.0 branch,
 [`bench/framework_scan/REPORT.md`](https://github.com/fitness-trener/Aether/blob/main/bench/framework_scan/REPORT.md);
 framework versions pinned in `bench/framework_scan/frameworks.lock.txt`). It is a filter, not a verdict on what it
 hides (those are what the rules flag, measured over-flags included), and
@@ -387,7 +387,7 @@ modeled surface", never as "sound".
     tests/          Integration tests and the monotonic ratchet
     scripts/        run_all.py — the full gate
 
-Full gate: `python -B scripts/run_all.py` (exit 0 = green; 49 PASS suites, and `smt` reports SKIP
+Full gate: `python -B scripts/run_all.py` (exit 0 = green; 50 PASS suites, and `smt` reports SKIP
 when z3 is not installed).
 
 ## Documentation

@@ -1894,6 +1894,23 @@ def test_argv_option_injection_is_a_command_injection():
     print(f"G6: {len(flagged)} argv option-injection shapes flag, {len(clean)} stay clean")
 
 
+def test_quoted_option_word_for_option_running_programs():
+    """Known-gaps round (iteration 65, coordinator): shlex.quote leaves a
+    word that starts with '-' unquoted, so `"git clone " + shlex.quote(url)`
+    lets `url = "--upload-pack=..."` run a command. git, tar, rsync and zip
+    join the code-taking programs; the argv form with a literal "--" and a
+    plain program such as ls stay clean."""
+    head = "import subprocess, shlex\n"
+    for prog in ("git clone", "tar -xf", "rsync -a", "zip -r out.zip"):
+        src = head + f"def f(u):\n    subprocess.run(\"{prog} \" + shlex.quote(u), shell=True)\n"
+        assert [c for c in _codes(src) if c != "E0701"] == ["E0714"], (prog, _codes(src))
+    for body in ('subprocess.run("ls -l " + shlex.quote(u), shell=True)',
+                 'subprocess.run(["git", "clone", "--", u, "dest"])'):
+        src = head + f"def f(u):\n    {body}\n"
+        assert [c for c in _codes(src) if c != "E0701"] == [], (body, _codes(src))
+    print("E0714: a quoted option word for git/tar/rsync/zip is not the shell exit")
+
+
 if __name__ == "__main__":
     test_body_is_no_longer_discarded()
     test_assign_becomes_let()
@@ -1996,4 +2013,5 @@ if __name__ == "__main__":
     test_credential_in_fstring_and_bytes_is_positioned()
     test_stripe_restricted_key_is_a_credential()
     test_argv_option_injection_is_a_command_injection()
+    test_quoted_option_word_for_option_running_programs()
     print("PY FRONTEND: ALL TESTS PASS")

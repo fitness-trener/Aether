@@ -691,6 +691,12 @@ _CODE_TAKING_PROGRAMS = frozenset({
     "cmd.exe", "powershell", "pwsh", "eval", "exec", "source", "env",
     "xargs", "sudo", "su", "doas", "ssh", "nohup", "timeout", "nice",
     "python", "python3", "perl", "ruby", "node", "php", "awk", "find",
+    # Options that run a command (`git --upload-pack=`, `-c core.pager=`,
+    # `tar --to-command=`, `rsync -e`, `zip -TT`): `shlex.quote` leaves a
+    # word that starts with '-' unquoted, so a quoted piece can still be an
+    # option. The argv form of the same programs is `_ARGV_CODE_OPTIONS`
+    # in py_frontend.py (known-gaps round, iteration 65).
+    "git", "tar", "rsync", "zip",
 })
 _SHELL_WORD = re.compile(r"[^\s;&|()<>`'\"\\$]+")
 
@@ -1109,7 +1115,11 @@ _PY_TEXT: Dict[str, Tuple[str, str]] = {
         "pass an argv list and no shell: subprocess.run([\"ls\", \"-l\", path]); "
         "if a shell is unavoidable, keep the program a fixed literal and quote "
         "each untrusted argument: \"ls -l \" + shlex.quote(path) (or "
-        "shlex.join(args) for a list of arguments)"),
+        "shlex.join(args) for a list of arguments). For git, ssh, tar, find, "
+        "rsync or zip, quoting does not stop a value that starts with '-' from "
+        "becoming an option that runs a command: use an argv list with a "
+        "literal \"--\" before the untrusted words (subprocess.run([\"git\", "
+        "\"clone\", \"--\", url, dest])), or reject a value that starts with '-'"),
     "E0718": (
         "function {fn!r} redirects to an untrusted target via {callee} "
         "({reason}); an open redirect sends users to an attacker-controlled "

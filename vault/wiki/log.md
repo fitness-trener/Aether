@@ -1,5 +1,8 @@
 # Operation Log (append-only — newest on top)
 
+## [2026-09-29] Q1 rows | iteration 65: one frontend walk per scope; argv option injection
+- **2 q1 row(s)** from `audits/gaps/C_record.md`; BUGS entries and the LOOP_LOG block folded from the same record.
+
 ## [2026-09-29] Q1 rows | iteration 63: E0208 name resolution, one effects clause
 - **4 q1 row(s)** from `audits/gaps/A_record.md`; BUGS entries and the LOOP_LOG block folded from the same record.
 

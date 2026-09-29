@@ -2715,6 +2715,44 @@ State carried forward: the full gate suite must stay green
 
 ---
 
+## Iteration 65 — gaps round, Agent C: one walk per scope, argument injection is E0714 (no new detector)
+
+- **Target:** the two TYPE gaps surfaced by iterations 62 and 60 — the
+  frontend's repeated AST walks, and argument injection through an argv
+  list — plus iteration 59's receiver-type gap, measured and not built.
+- **Probe-confirmed first (on `a2f13db`):** 7.1 walked nodes per AST node on
+  the three slowest corpus files (1,068,633 for 151,204); five argv shapes
+  (`git -c x`, `git clone url`, `ssh host cmd`, `tar --to-command x`,
+  `create_subprocess_exec("git", *args)`) exit 0 with 0 findings.
+- **Fixes (each once, where every caller routes through):** `_DefIndex`, one
+  walk per scope, feeding every per-def consumer; one module-level walk; one
+  IR walk for the bound-flow fixes; a generator-free `_walk`. For G6 one
+  `_argv_option_payload` read by `_sink_match` and `_call_expr`, over a
+  six-program table.
+- **G5 measured, not built:** of 11,886 `self.X.m(...)` calls on the corpus,
+  2,398 have every binding of `X` in the file be `self.X = <one
+  constructor>(...)`. Of the 90 whose method is a by-method sink row, 25
+  resolve, and none of the 25 would change: no `Ctor.m` is a table row, none
+  is a same-file class's own method, and the 4 haystack `from_string` sites
+  are on `HaystackSandboxedEnvironment`, a `SandboxedEnvironment` subclass
+  not in `_SANDBOXED_ENVS`. 0 findings and 0 confidence ratings would move
+  (q3: prevalence × reuse gives nothing for the machinery).
+- **Measured (8 logical cores, shared machine):** frontend over the corpus
+  76.1 s → 46.2 s in-process; serial `check-py` CPU 98.6–135.7 s → 66.6–68.6 s;
+  default jobs 34.3–34.9 s → 20.3–23.8 s (one after-run at 35.5 s).
+  G7 output byte-identical. G6: framework 683 → 684, in-repo 107 → 113,
+  every addition true by rule.
+- **Residuals (pushed to q1):** see q1 rows below.
+- **TYPE gap surfaced for next iter:** the E0714 text is still the shell
+  text on an argv finding ("use shellArg", "pass an argv list"). The argv
+  finding's fix is a literal `--` before the input, or a check that the
+  word does not start with `-`. The text lives in
+  `passes/detector_specs.py`; a `CalleeText` for argv-option findings is
+  the next step (proposed wording under Coordinator decisions).
+- **Suite:** exit 0 (`smt` SKIP, z3 not installed locally).
+
+---
+
 ---
 
 ## Next-iteration checklist (for the loop)
