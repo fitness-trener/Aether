@@ -23,12 +23,12 @@ import os
 import re
 import sys
 import traceback
-from contextlib import redirect_stdout
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from typing import Any, Dict
 
 from .diagnostics import (AetherError, Diagnostic, EXIT_CLEAN, EXIT_CRASH,
                           EXIT_FINDINGS, EXIT_INCOMPLETE, EXIT_USAGE,
-                          error_doc, exit_code)
+                          Position, error_doc, exit_code)
 from .lexer import tokenize
 from .parser import parse
 from .emitter import emit
@@ -68,6 +68,9 @@ def _report(args, diags, rc: int, *, ast=None, complete: bool = True,
     under `--json` one document {ok, complete, diagnostics, ...extra}.
     Returns `rc` so a caller can `return _report(...)`."""
     if args.json:
+        # `run` sets `run_output` so every one of its documents carries the
+        # program's captured stdout/stderr (empty if it never started).
+        extra = dict(getattr(args, "run_output", {}), **extra)
         _print_doc(dict({"ok": rc == EXIT_CLEAN, "complete": complete,
                          "diagnostics": [d.to_dict(ast) for d in diags]},
                         **extra))
@@ -212,7 +215,7 @@ def cmd_fmt(args) -> int:
 _STAGE_OPT_OUT = {
     "effects":    "no_static_effects",      # B.1/B.2
     "security":   "no_scope_check",         # E0710-E0730
-    "semantic":   "no_exhaustiveness_check",  # E0202-E0207
+    "semantic":   "no_exhaustiveness_check",  # E0202-E0208
     "capability": "no_capability_check",    # B.3
     "modules":    "no_module_check",        # D.3
 }
@@ -270,7 +273,7 @@ def _run_smt_check(ast, timeout_ms):
 # Stages that do not apply to Python source.
 #   effects  — E0801 compares a call site against a DECLARED effects
 #              clause; Python has none, so there is nothing to compare.
-#   semantic — E0202-E0207 check Aether language constructs (match
+#   semantic — E0202-E0208 check Aether language constructs (match
 #              exhaustiveness, dead `let` stores, ignored Results). On
 #              translated Python they describe the translation rather
 #              than the program.
@@ -600,7 +603,7 @@ def cmd_check_py(args) -> int:
           "types): E0801 effect composition; the net.fetch scope rows "
           "(E0710/E0721/E0722), except on a network call named fetch; the "
           "marker rows (E0712/E0715/E0717/E0724/E0725/E0726/E0728/"
-          "E0729/E0730); and the semantic family (E0202-E0207). E0716 "
+          "E0729/E0730); and the semantic family (E0202-E0208). E0716 "
           "fires on every .executescript method call; no Python spelling tried "
           "clears it.")
     if not strict:
@@ -667,6 +670,13 @@ def cmd_run(args) -> int:
     if getattr(args, "deterministic", False) or os.environ.get("AETHER_DETERMINISTIC"):
         seed = int(os.environ.get("AETHER_SEED", "0"))
         set_deterministic(seed)
+    # `--json`: the program's own output is captured into the one stdout
+    # document (`stdout`, `stderr` — the field names of `sdk.RunResult`)
+    # instead of preceding it on stdout, where a printed line that looks
+    # like JSON was indistinguishable from the document (gaps round G1).
+    out = {"stdout": "", "stderr": ""}
+    if args.json:
+        args.run_output = out
     src = _read(args.file)
     # H.E.3 multi-file resolution (default-on when ImportDecls present).
     ast, rc = _load(src, args.file, args)
@@ -682,17 +692,30 @@ def cmd_run(args) -> int:
     g = build_namespace()
     g["__name__"] = "__main__"
     g["__file__"] = args.file + ".py"
+    diags = []
+    buf_out, buf_err = io.StringIO(), io.StringIO()
     try:
-        exec(code, g)
-    except AetherError:
-        raise           # a contract/refinement violation: main reports it
-    except Exception:
-        # The PROGRAM raised, not Aether: print it as Python would and
-        # exit 1, as Python does. Only an exception outside the user's
-        # program is an analyzer crash (exit 3).
-        traceback.print_exc()
-        return EXIT_FINDINGS
-    return 0
+        with ExitStack() as stack:
+            if args.json:
+                stack.enter_context(redirect_stdout(buf_out))
+                stack.enter_context(redirect_stderr(buf_err))
+            try:
+                exec(code, g)
+            except AetherError:
+                raise   # a contract/refinement violation: main reports it
+            except Exception as e:
+                # The PROGRAM raised, not Aether: print it as Python would
+                # and exit 1, as Python does. Only an exception outside
+                # the user's program is an analyzer crash (exit 3).
+                traceback.print_exc()
+                rc = EXIT_FINDINGS
+                diags = [Diagnostic("E9003", "runtime", "error",
+                                    f"{type(e).__name__}: {e}", Position(0, 0))]
+    finally:
+        out["stdout"], out["stderr"] = buf_out.getvalue(), buf_err.getvalue()
+    if args.json:
+        _report(args, diags, rc, ast=ast)
+    return rc
 
 
 def cmd_test(args) -> int:

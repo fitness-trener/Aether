@@ -2654,6 +2654,105 @@ State carried forward: the full gate suite must stay green
 
 ---
 
+## Iteration 64 — known-gaps round, Agent B: `run --json` is one document; stdlib signatures tested (no new detector)
+
+- **Target:** not a backlog row. Two TYPE gaps surfaced by earlier
+  iterations: iter-61 (`run --json` interleaves the program's stdout with
+  the document) and iter-57 (the spec test covers names, not signatures).
+- **Probe-confirmed first (on `a2f13db`):** `--json run` of a clean
+  program prints no document; with a contract violation, the program's
+  output and the document are two JSON-looking lines on stdout; with a
+  program exception, no document. Six stdlib helpers name their
+  parameters differently from `grammar/stdlib.md`. BUG-090, BUG-091.
+- **Fix:** `cmd_run` captures the program's stdout/stderr under `--json`
+  into `{ok, complete, diagnostics, stdout, stderr}` (a program exception
+  is `E9003`); `sdk.RunResult.to_dict()` has the same keys. The spec test
+  checks arity for all 120 documented signatures, name order for the 110
+  names documented once, and runs each of the 10 documented overloads.
+  Six runtime parameters renamed to the spec's names.
+- **Measured non-breaking:** framework corpus (4,946 files) `--json
+  check-py` at `a2f13db` and after: byte-identical, sha256 `87EA1A28...`,
+  683 findings, 0 unreadable, 0 errors.
+- **TYPE gap surfaced for next iter:** the spec test checks arity and
+  order, not TYPES: a documented parameter type the runtime rejects is
+  caught only where the doc documents an overload (probed). A
+  single-signature function documented for `List<T>` that crashes on a
+  `List<String>` (e.g. `sort` on mixed values) is not probed; and return
+  types are not compared at all.
+- **Suite:** exit 0, 49 PASS suites (`exit_codes` 14 cases, `spec_docs`
+  7 tests); `smt` SKIP (z3 absent locally).
+
+---
+
+## Iteration 63 — known-gaps round, language side: name resolution (E0208) and one effects clause
+
+- **Target:** not a backlog row. The two language gaps the audit and
+  Wave 6/7 left open: A8 (no name resolution; q1 iter-57 scope fact) and
+  the repeated-effects residual (q1 iter-62).
+- **Probe-confirmed first (on `a2f13db`):** `sqlQeury("SELECT " + u)` →
+  `check` exit 0, no E0713; `frobnicate(1)` → exit 0, `run` NameError;
+  `effects log` then `effects pure` → checks as `pure`.
+- **Fixes:** a second `effects` clause is E0201 (parser). New E0208 pass
+  `passes/names.py` in the `semantic` stage: block-scoped locals,
+  parameters, top-level decls, imports, runtime exports derived from
+  `runtime.unmangle`; const initializers see only earlier decls.
+- **Measured:** 418 tracked `.aeth` through `--json check --no-prove`,
+  before/after: 0 files change (407 load and are resolved: 5,602
+  identifiers, 2,878 calls, 0 E0208; 11 do not parse, by design). Python
+  `check-py` byte-identical: framework corpus 4,946 files / 683 findings,
+  and `bench tests tools playground demos`.
+- **Ratchet:** 55 → 56 codes, 31 → 32 detectors, corpus claims 117 → 118
+  (`playground/examples/34_misspelt_sink.aeth`, `// expect: E0208`).
+- **Residuals (pushed to q1):** see q1 rows below.
+- **TYPE gap surfaced for next iter:** E0208 proves a name reaches SOME
+  binding; calling a `const Int` (`N(1)`) or a function with the wrong
+  number of arguments still passes `check` and is a Python `TypeError` at
+  `run`. Arity of direct calls to top-level functions / records / union
+  cases needs no type information and reuses this resolver — see the q8
+  draft below (option B).
+- **Suite:** exit 0, 50 PASS (`smt` SKIP, z3 not installed locally); one
+  new suite (`name_resolution`).
+
+---
+
+## Iteration 65 — gaps round, Agent C: one walk per scope, argument injection is E0714 (no new detector)
+
+- **Target:** the two TYPE gaps surfaced by iterations 62 and 60 — the
+  frontend's repeated AST walks, and argument injection through an argv
+  list — plus iteration 59's receiver-type gap, measured and not built.
+- **Probe-confirmed first (on `a2f13db`):** 7.1 walked nodes per AST node on
+  the three slowest corpus files (1,068,633 for 151,204); five argv shapes
+  (`git -c x`, `git clone url`, `ssh host cmd`, `tar --to-command x`,
+  `create_subprocess_exec("git", *args)`) exit 0 with 0 findings.
+- **Fixes (each once, where every caller routes through):** `_DefIndex`, one
+  walk per scope, feeding every per-def consumer; one module-level walk; one
+  IR walk for the bound-flow fixes; a generator-free `_walk`. For G6 one
+  `_argv_option_payload` read by `_sink_match` and `_call_expr`, over a
+  six-program table.
+- **G5 measured, not built:** of 11,886 `self.X.m(...)` calls on the corpus,
+  2,398 have every binding of `X` in the file be `self.X = <one
+  constructor>(...)`. Of the 90 whose method is a by-method sink row, 25
+  resolve, and none of the 25 would change: no `Ctor.m` is a table row, none
+  is a same-file class's own method, and the 4 haystack `from_string` sites
+  are on `HaystackSandboxedEnvironment`, a `SandboxedEnvironment` subclass
+  not in `_SANDBOXED_ENVS`. 0 findings and 0 confidence ratings would move
+  (q3: prevalence × reuse gives nothing for the machinery).
+- **Measured (8 logical cores, shared machine):** frontend over the corpus
+  76.1 s → 46.2 s in-process; serial `check-py` CPU 98.6–135.7 s → 66.6–68.6 s;
+  default jobs 34.3–34.9 s → 20.3–23.8 s (one after-run at 35.5 s).
+  G7 output byte-identical. G6: framework 683 → 684, in-repo 107 → 113,
+  every addition true by rule.
+- **Residuals (pushed to q1):** see q1 rows below.
+- **TYPE gap surfaced for next iter:** the E0714 text is still the shell
+  text on an argv finding ("use shellArg", "pass an argv list"). The argv
+  finding's fix is a literal `--` before the input, or a check that the
+  word does not start with `-`. The text lives in
+  `passes/detector_specs.py`; a `CalleeText` for argv-option findings is
+  the next step (proposed wording under Coordinator decisions).
+- **Suite:** exit 0 (`smt` SKIP, z3 not installed locally).
+
+---
+
 ---
 
 ## Next-iteration checklist (for the loop)

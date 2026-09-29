@@ -74,6 +74,94 @@ def test_stdlib_doc_matches_runtime():
     print(f"stdlib.md <-> runtime: {len(documented)} documented names, all present, none undocumented")
 
 
+def _stdlib_signatures():
+    """(name, [parameter names]) for every `function` in stdlib.md, one
+    entry per documented overload (`remove` on Map AND on Set)."""
+    out = []
+    for m in re.finditer(r"^\s*function\s+([A-Za-z_][A-Za-z0-9_]*[?!]?)"
+                         r"(?:<[^>]*>)?\((.*)\)\s+returns\s", _read("grammar/stdlib.md"), re.M):
+        params, depth, cur = [], 0, ""
+        for ch in m.group(2):          # split on top-level commas only
+            depth += (ch in "<(") - (ch in ">)")
+            if ch == "," and depth == 0:
+                params.append(cur)
+                cur = ""
+            else:
+                cur += ch
+        if cur.strip():
+            params.append(cur)
+        out.append((m.group(1), [p.split(":")[0].strip() for p in params]))
+    return out
+
+
+# A documented parameter name Python cannot spell (a keyword) and the
+# runtime's name for it.
+PY_KEYWORD_PARAMS = {("replace", "from"): "frm"}
+
+# One tiny program per documented overload: (name, first parameter's
+# type) -> (an Aether String expression, what `print` of it must show).
+# BUG-050 was `remove` on a Set: documented, and a Python TypeError at run.
+OVERLOAD_PROBES = {
+    ("length", "List"): ('intToString(length([1, 2, 3]))', "3"),
+    ("length", "String"): ('intToString(length("abcd"))', "4"),
+    ("get", "List"): ('intToString(unwrapOrElse(get([10, 20], 1), 0))', "20"),
+    ("get", "Map"): ('intToString(unwrapOrElse(get({"a": 5}, "a"), 0))', "5"),
+    ("size", "Map"): ('intToString(size({"a": 1, "b": 2}))', "2"),
+    ("size", "Set"): ('intToString(size(add(setUnion([1], [2]), 3)))', "3"),
+    ("remove", "Map"): ('intToString(size(remove({"a": 1, "b": 2}, "a")))', "1"),
+    ("remove", "Set"): ('intToString(size(remove(setUnion([1], [2]), 1)))', "1"),
+    ("contains?", "Set"): ('if contains?(setUnion([1], [2]), 2) then "yes" else "no" end', "yes"),
+    ("contains?", "String"): ('if contains?("hello", "ell") then "yes" else "no" end', "yes"),
+}
+
+
+def test_stdlib_doc_signatures_match_runtime():
+    """Gaps round G4 (BUG-091): the doc <-> runtime test compared names,
+    not signatures. Every documented function must have the runtime's
+    arity; a function documented once must also name its parameters in
+    the runtime's order (Aether has no named arguments, so the ORDER is
+    the contract and equal names are how a test can see it); a function
+    documented for several types must run on each of them."""
+    import inspect
+    from transpiler.aether import sdk
+    ns = build_namespace()
+    sigs = _stdlib_signatures()
+    assert len(sigs) == len(_stdlib_blocks()), "a stdlib.md signature did not parse"
+    seen = {}
+    for name, params in sigs:
+        seen.setdefault(name, []).append(params)
+    drift = []
+    for name, overloads in seen.items():
+        rt = list(inspect.signature(ns[mangle(name)]).parameters)
+        for params in overloads:
+            if len(params) != len(rt):
+                drift.append(f"{name}: doc arity {len(params)} {params}, runtime {len(rt)} {rt}")
+            elif len(overloads) == 1:
+                want = [PY_KEYWORD_PARAMS.get((name, p), p) for p in params]
+                if want != rt:
+                    drift.append(f"{name}: doc parameters {params}, runtime {rt}")
+    assert not drift, "stdlib.md signature != runtime:\n  " + "\n  ".join(drift)
+
+    text = _read("grammar/stdlib.md")
+    documented = set()
+    for m in re.finditer(r"^\s*function\s+([A-Za-z_][A-Za-z0-9_]*[?!]?)"
+                         r"(?:<[^>]*>)?\(\s*[A-Za-z_]\w*\s*:\s*([A-Za-z]+)", text, re.M):
+        if len(seen[m.group(1)]) > 1:
+            documented.add((m.group(1), m.group(2)))
+    assert documented == set(OVERLOAD_PROBES), (
+        f"overloads documented {sorted(documented)} != probed {sorted(OVERLOAD_PROBES)}")
+    bad = []
+    for (name, typ), (expr, want) in sorted(OVERLOAD_PROBES.items()):
+        src = ("function main() returns Unit\n  effects log\ndo\n"
+               f"  print({expr})\nend\n")
+        r = sdk.run(src)
+        if not r.ok or r.stdout != want + "\n":
+            bad.append(f"{name} on {typ}: {expr} -> ok={r.ok} stdout={r.stdout!r} {r.stderr.strip()}")
+    assert not bad, "documented overload fails at run:\n  " + "\n  ".join(bad)
+    print(f"stdlib.md signatures match the runtime ({len(sigs)} signatures, "
+          f"{len(OVERLOAD_PROBES)} overloads run)")
+
+
 def test_stdlib_doc_effects_match_checker():
     wrong = []
     for name, eff in _stdlib_blocks():
@@ -147,6 +235,7 @@ def test_spec_retracts_static_type_checking():
 
 if __name__ == "__main__":
     test_stdlib_doc_matches_runtime()
+    test_stdlib_doc_signatures_match_runtime()
     test_stdlib_doc_effects_match_checker()
     test_effects_table_matches_code()
     test_known_capabilities_match_code()

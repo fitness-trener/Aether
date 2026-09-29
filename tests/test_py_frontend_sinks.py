@@ -1848,6 +1848,69 @@ def test_stripe_restricted_key_is_a_credential():
     print("E0723: a Stripe live restricted key is a hardcoded credential")
 
 
+def test_argv_option_injection_is_a_command_injection():
+    """Gaps round G6 (iteration 65): a program with an option that runs
+    code (`git -c`/`--upload-pack`, `ssh` host and command, `tar
+    --to-command`, `find -exec`, `rsync -e`, `zip -TT`) handed a
+    non-literal argv word before a literal `--` is E0714 — the word can BE
+    that option, and quoting it does not change that. A `--` before the
+    input, literal words, and programs without such an option stay clean.
+    Every one of the flagged shapes was silent before (exit 0)."""
+    head = "import asyncio, shlex, subprocess\n\ndef f(x):\n    "
+    flagged = [
+        "subprocess.run(['git', '-c', x, 'log'])",
+        "subprocess.run(['git', 'clone', x, 'dest'])",
+        "subprocess.run(['/usr/bin/git', 'fetch', x], check=True)",
+        "subprocess.check_output(args=['git', 'ls-remote', x])",
+        "subprocess.run(('git', 'clone', f'--depth={x}', 'u'))",
+        "subprocess.run(['git'] + x)",
+        "subprocess.run(['git', *x])",
+        "subprocess.run(['git', 'clone', shlex.quote(x)])",
+        "cmd = ['git', 'clone', x]\n    subprocess.run(cmd)",
+        "subprocess.run(['ssh', x, 'uptime'])",
+        "subprocess.run(['ssh', 'host', '--', x])",
+        "subprocess.run(['tar', '--to-command', x, '-xf', 'a.tar'])",
+        "subprocess.run(['find', '.', '-exec', x, ';'])",
+        "subprocess.run(['rsync', '-e', x, 'a', 'b'])",
+        "subprocess.run(['zip', '-T', '-TT', x, 'a.zip', 'f'])",
+        "asyncio.create_subprocess_exec('git', *x)",
+    ]
+    clean = [
+        "subprocess.run(['git', 'clone', '--', x, 'dest'])",
+        "subprocess.run(['git', 'log', '-n', 5])",
+        "u = 'https://example.org/r.git'\n    subprocess.run(['git', 'clone', u])",
+        "subprocess.run(['git', 'status'])",
+        "subprocess.run(['ls', '-l', x])",
+        "asyncio.create_subprocess_exec('ls', x)",
+    ]
+    def codes(s):        # E0701 is the --strict capability inventory
+        return [c for c in _codes(head + s + "\n") if c != "E0701"]
+    bad = [f"flagged {s!r}: {got}" for s in flagged if (got := codes(s)) != ["E0714"]]
+    bad += [f"clean {s!r}: {got}" for s in clean if (got := codes(s))]
+    assert not bad, "\n  ".join(["argv option injection:"] + bad)
+    ir, _u, _m = py_to_ir(head + flagged[0] + "\n")
+    calls = [c for c in walk(ir, "Call") if c.get("func", {}).get("name") == "shellExec"]
+    assert calls and calls[0].get("match") == "argv" and confidence_of("argv") == 0.9
+    print(f"G6: {len(flagged)} argv option-injection shapes flag, {len(clean)} stay clean")
+
+
+def test_quoted_option_word_for_option_running_programs():
+    """Known-gaps round (iteration 65, coordinator): shlex.quote leaves a
+    word that starts with '-' unquoted, so `"git clone " + shlex.quote(url)`
+    lets `url = "--upload-pack=..."` run a command. git, tar, rsync and zip
+    join the code-taking programs; the argv form with a literal "--" and a
+    plain program such as ls stay clean."""
+    head = "import subprocess, shlex\n"
+    for prog in ("git clone", "tar -xf", "rsync -a", "zip -r out.zip"):
+        src = head + f"def f(u):\n    subprocess.run(\"{prog} \" + shlex.quote(u), shell=True)\n"
+        assert [c for c in _codes(src) if c != "E0701"] == ["E0714"], (prog, _codes(src))
+    for body in ('subprocess.run("ls -l " + shlex.quote(u), shell=True)',
+                 'subprocess.run(["git", "clone", "--", u, "dest"])'):
+        src = head + f"def f(u):\n    {body}\n"
+        assert [c for c in _codes(src) if c != "E0701"] == [], (body, _codes(src))
+    print("E0714: a quoted option word for git/tar/rsync/zip is not the shell exit")
+
+
 if __name__ == "__main__":
     test_body_is_no_longer_discarded()
     test_assign_becomes_let()
@@ -1949,4 +2012,6 @@ if __name__ == "__main__":
     test_wave4_sink_rows_fire_and_safe_forms_clear()
     test_credential_in_fstring_and_bytes_is_positioned()
     test_stripe_restricted_key_is_a_credential()
+    test_argv_option_injection_is_a_command_injection()
+    test_quoted_option_word_for_option_running_programs()
     print("PY FRONTEND: ALL TESTS PASS")

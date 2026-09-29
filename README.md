@@ -186,7 +186,7 @@ letting you assume otherwise:
 - The marker rows `E0712`, `E0715`, `E0717`, `E0724`, `E0725`, `E0726`,
   `E0728`, `E0729` and `E0730`, which need a
   `Secret`/`PII`/`Untrusted`/`Authorized` type.
-- The static-semantic family `E0202`–`E0207`: it checks Aether language
+- The static-semantic family `E0202`–`E0208`: it checks Aether language
   constructs, and on translated Python it would describe the translation,
   not the program.
 
@@ -267,8 +267,8 @@ rating, most-certain first: a callee resolved through the file's imports
 rates 0.95 confidence, a method matched only by its name on a receiver of
 unknown type 0.6, and so does a finding whose argument already contains a
 sanitizer or an own-origin URL builder. `--min-confidence 0.9` hides the
-0.6 findings — 632 of 683 on the 15-framework corpus (re-scanned
-2026-09-25 on the 0.5.0 branch,
+0.6 findings — 632 of 684 on the 15-framework corpus (re-scanned
+2026-09-29 on the 0.5.0 branch,
 [`bench/framework_scan/REPORT.md`](https://github.com/fitness-trener/Aether/blob/main/bench/framework_scan/REPORT.md);
 framework versions pinned in `bench/framework_scan/frameworks.lock.txt`). It is a filter, not a verdict on what it
 hides (those are what the rules flag, measured over-flags included), and
@@ -338,11 +338,12 @@ for:
 - **`E0717` cross-tenant access / IDOR** (CWE-639) — an authorization proof
   that is not bound to the *same resource id* the sink mutates.
 
-Current surface: **55 diagnostic codes across 31 gated detectors**, held by
+Current surface: **56 diagnostic codes across 32 gated detectors**, held by
 a monotonic ratchet (`tests/ratchet_baseline.json`) that turns the build red
 if a detector is ever removed or weakened. Security family `E0710`–`E0731`;
-static-semantic family `E0202`–`E0207` (non-exhaustive match, unreachable
-arm, dead code, dead store, ignored `Result`, unsatisfiable refinement).
+static-semantic family `E0202`–`E0208` (non-exhaustive match, unreachable
+arm, dead code, dead store, ignored `Result`, unsatisfiable refinement,
+undeclared name).
 
 Working with the language directly:
 
@@ -386,7 +387,7 @@ modeled surface", never as "sound".
     tests/          Integration tests and the monotonic ratchet
     scripts/        run_all.py — the full gate
 
-Full gate: `python -B scripts/run_all.py` (exit 0 = green; 49 PASS suites, and `smt` reports SKIP
+Full gate: `python -B scripts/run_all.py` (exit 0 = green; 50 PASS suites, and `smt` reports SKIP
 when z3 is not installed).
 
 ## Documentation

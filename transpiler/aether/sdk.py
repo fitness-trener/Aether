@@ -101,6 +101,16 @@ class RunResult:
     #: and "no timer exists here" are distinguishable.
     timeout_enforced: bool = False
 
+    def to_dict(self) -> Dict[str, Any]:
+        """The keys `aether --json run` prints: {ok, complete, diagnostics,
+        stdout, stderr}. `exit_code` stays an attribute: it is the
+        runner's table (2 = AetherError), not the CLI's."""
+        diag = [self.diagnostic] if self.diagnostic else []
+        return {"ok": self.ok,
+                "complete": not any(d.category in ("lex", "parse") for d in diag),
+                "diagnostics": [d.to_dict() for d in diag],
+                "stdout": self.stdout, "stderr": self.stderr}
+
 
 @dataclass
 class GradeResult:

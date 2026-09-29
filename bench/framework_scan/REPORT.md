@@ -379,3 +379,21 @@ Four stdlib ElementTree calls without a parser argument move from 0.95 to
 652 of 707). Iterations 61-62 (the exit-code table, then the performance
 wave) do not change this finding set: 683 at `c721635`, re-measured by
 the coordinator.
+
+## 11. Re-measured 2026-09-29, after iteration 65 (gaps round, Agent C): 683 → 684
+
+Same 4,946 files, same interpreter. The frontend change of this round
+(one walk per scope) left the finding set byte-identical. Measured on a
+machine shared with two other agents: frontend 76.1 s → 46.2 s in-process,
+serial `check-py` about 67 s of CPU, default jobs 20–24 s wall. The
+argument-injection rows (E0714 on an argv list whose program is git, ssh,
+tar, find, rsync or zip, handed a non-literal word before a literal `--`)
+add one finding, +1 / −0: agno's `git <args>` runner
+(`context/wiki/git_ops.py:119`, `asyncio.create_subprocess_exec("git",
+*args)`), where `-c core.pager=...` or `--upload-pack=...` in `args` runs a
+command. It is true by rule and rated 0.9 (`argv`). `--min-confidence 0.9`
+keeps 52. Only one corpus argv call with a non-literal word names one of
+the six programs, so the rows are sized for the shape, not for this corpus
+(`audits/gaps/C_record.md`). A per-class attribute summary for receivers
+(`self.x = Ctor(...)`) was measured and not built: 25 by-method sink calls
+would resolve, and none would change its finding or rating.

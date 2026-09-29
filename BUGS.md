@@ -2344,3 +2344,245 @@ their effects are inferred by the frontend, which emits `env` and
 `process` heads outside the vocabulary (0 new Python findings, measured).
 Corpus: 0 new findings (every declared head in the 407 parseable files is
 `db`, `exec`, `fs`, `log`, `net`, `time` or `pure`).
+
+### BUG-090  `aether --json run` breaks the one-document contract: the program's stdout precedes (or replaces) the JSON  [FIXED 6ece638]
+test: tests/test_exit_codes.py::test_run_json_captures_the_program_output
+
+Repro on `a2f13db` (the program prints a line that looks like JSON):
+
+    function main() returns Unit
+      effects log
+    do
+      print("{\"ok\": true, \"fake\": 1}")
+      print("hello")
+    end
+
+`aether --json run p.aeth` → stdout is the program's two lines and
+**nothing else**, exit 0: a clean run printed no document at all, and the
+first line parses as `{"ok": true}`. With a `requires` violation after a
+`print`, stdout was the program's line followed by the diagnostic document
+(two JSON-looking lines; `json.loads` → "Extra data"). With an exception
+the program raised (`10 / 0`), stdout was the program's output, the
+traceback went to stderr, exit 1, and no document was printed.
+
+Root cause: `cli.cmd_run` executed the program with stdout attached to
+the process, reported only through `main`'s `AetherError` handler, and
+returned `0`/`1` on the other paths without calling `_report`.
+
+Fix (`transpiler/aether/cli.py`): under `--json`, `cmd_run` redirects the
+program's stdout and stderr into buffers and every `run` document gets
+`stdout` and `stderr` fields. `_report` merges `args.run_output`, which
+`cmd_run` sets, so the parse/import-failure document, the static-finding
+document and the runtime-violation document raised through `main` all
+carry the two keys (`""` when the program never started). A clean run now
+prints `{ok: true, complete: true, diagnostics: [], stdout, stderr}`. An
+exception the program raised is reported as the documented `E9003`
+(category `runtime`, the code the in-process runner already used), with
+the traceback in `stderr`. `sdk.RunResult.to_dict()` (new) returns the
+same keys; the test asserts the CLI document equals it for a clean
+program. Exit codes are unchanged: 0 ran clean, 1 static finding /
+E03xx / program exception. Text mode is unchanged (asserted).
+
+Red before the fix: the new test fails with `JSONDecodeError: Extra data:
+line 2 column 1` (cli.py and sdk.py reverted, test kept: 13/14).
+
+Measurement: no detector or frontend change; framework corpus `--json
+check-py` output byte-identical (below).
+
+### BUG-091  stdlib.md parameter lists drifted from the runtime in six functions; no test compared signatures  [FIXED 5809adb]
+test: tests/test_spec_docs.py::test_stdlib_doc_signatures_match_runtime
+
+`tests/test_spec_docs.py` checked that every documented stdlib name
+exists in the runtime, but not its signature, so a documented parameter
+list could drift and a documented overload could crash (BUG-050: `remove`
+on a Set). The new test reads every `function` signature in
+`grammar/stdlib.md` (120 signatures, 115 names) and checks
+`inspect.signature(build_namespace()[mangle(name)])`:
+
+- **arity**, for every signature, overloads included: **0 drifts**.
+- **parameter names in order**, for each of the 110 names documented
+  once. Aether has no named arguments, so ORDER is the contract and equal
+  names are how a test can see a swap. One documented name Python cannot
+  spell (`replace`'s `from` → runtime `frm`) is allow-listed. **6
+  drifts found**:
+
+  | function | stdlib.md | runtime before |
+  |---|---|---|
+  | `startsWith?` | `(s, prefix)` | `(s, p)` |
+  | `endsWith?` | `(s, suffix)` | `(s, p)` |
+  | `reveal` | `(s)` | `(x)` |
+  | `csvEscape` | `(x)` | `(v)` |
+  | `redirect` | `(target)` | `(url)` |
+  | `pow` | `(base, exp)` | `(a, b)` |
+
+  None is a positional-order drift: the runtime used different names in
+  the same positions. Fixed in the runtime (the spec is the reference):
+  parameters renamed, bodies unchanged. No behaviour change is possible:
+  Aether calls are positional, the emitter emits positional calls, and a
+  grep finds no caller of these helpers outside the emitted code.
+- **every overload documented for several types runs**: the test
+  derives the overload set from the doc (`length` on List/String, `get` on
+  List/Map, `size` on Map/Set, `remove` on Map/Set, `contains?` on
+  Set/String: 10) and requires a probe program for each; each is run
+  through `sdk.run` and its stdout compared. **0 failures** on `a2f13db`:
+  BUG-050's fix (8722ce6) holds. A new overload without a probe fails the
+  test.
+
+Red before the fix: on `a2f13db`'s runtime the test fails listing the six
+drifts above. The probe half on a deliberately broken copy (the
+pre-BUG-050 Map-only `_ae_remove` monkeypatched in) fails with
+`remove on Set: ... runtime error: TypeError: cannot convert dictionary
+update sequence element #0 to a sequence`.
+
+Measurement: runtime-only rename; framework corpus output byte-identical.
+
+### BUG-085  A second `effects` clause silently replaced the first  [FIXED abb964c]
+test: tests/test_static_effects.py (`::test_repeated_effects_clause_is_a_parse_error`)
+
+Found 2026-09-24 while probing audit A11 (Wave 7 record, q1 row
+"effect names are validated by capability head only"); fixed in the
+2026-09-29 known-gaps round (G2). Repro: `function f(x: Int) returns Int
+effects log ... effects pure do ... end`. `check` read it as `pure`: the
+declared `log` was gone, with no diagnostic.
+
+Root cause: `Parser.parse_function_decl` loops over interleaved
+`requires` / `ensures` / `effects` clauses and assigned
+`effects = self.parse_effect_list()` on every `effects`, so the last one
+won. `grammar.ebnf` has exactly one `effects_clause`.
+
+Fix (`abb964c`): a second `effects` keyword in one declaration is E0201 at
+that keyword ("function 'f' has more than one 'effects' clause", hint:
+merge them into one list). Repeated `requires` / `ensures` stay legal —
+`{ contract_clause }` in the grammar, each checked at runtime. The EBNF
+now spells out that contract clauses may follow the effects clause (the
+parser always accepted that): `{ contract_clause } effects_clause
+{ contract_clause }`. E0201 row text extended; no new code.
+Measurement: 0 of 418 tracked `.aeth` files repeat the clause; the
+`check --json` output of all 418 is unchanged.
+
+### BUG-086  A reference to an undeclared name passed `check`; a misspelt sink hid the injection  [FIXED abb964c]
+test: tests/test_name_resolution.py (`::test_misspelt_sink_is_E0208`, `::test_undeclared_call_and_value`, `::test_block_scoping_and_shadowing`, `::test_const_sees_only_earlier_decls`)
+
+Found 2026-09-24 by the language auditor (A8); recorded in Wave 6 as a
+scope fact (q1, iter-57). Known-gaps round G3. Repro:
+`sqlQeury("SELECT * FROM users WHERE name = '" + u + "'")` → `check`
+exit 0, no E0713; `run` → Python `NameError`. `frobnicate(1)`, never
+declared: `check` exit 0. Also found while building the fix:
+`const A: Int = B` above `const B: Int = 1` → `check` exit 0, `run`
+`NameError: name '_ae_B' is not defined` at module load.
+
+Root cause: no pass resolved names. The emitter mangles every
+identifier and runs the program against the runtime's `_ae_*` exports
+plus the program's own definitions, so an unbound name only surfaced
+when Python reached it; the taint passes match sinks by name, so a sink
+they cannot name is invisible to them.
+
+Fix (`abb964c`, `710e79c`): new static-semantic code **E0208** "reference
+to an undeclared name", `transpiler/aether/passes/names.py`
+(`check_name_resolution`), registered in the `semantic` stage. A name
+resolves if it is a parameter (`self` in a refinement predicate, `result`
+in `ensures`), a local bound earlier in the same or an enclosing block
+(`let` / `var` / assignment / `for` variable / `match` pattern
+bindings — the binder kinds of `ast_walk.binders()`), a top-level
+function / `const` / record / union case (imports fused in by
+`load_program`; inside a `const` initializer, only one declared above
+it), or a runtime export (`runtime.unmangle` over `vars(runtime)`: 119
+names, derived, not listed). Not resolved because not evaluated: the
+right side of `is`, the qualifier of `Union.Case(...)`, patterns, type
+annotations, `effects` arguments. `extra` = `function`, `name`, `kind`
+(`call` | `value`), `suggestion` (closest known name by
+`difflib.get_close_matches`, or null). Positioned at the nearest
+positioned ancestor (the call, or the statement) — `Ident` nodes carry no
+position and the AST shape was not changed. Silent on a program it
+cannot see whole: `parse_collect` marks a partial AST `partial`, and
+`resolve_imports` marks its combined program `imports_resolved`; a
+program with an `ImportDecl` but no mark (`--no-import-resolution`, or a
+caller that parsed without `load_program`) gets no E0208.
+This is name resolution, not type checking (`grammar/types.md` says so).
+
+Measurement: see Measurements — 0 new diagnostics on the in-repo `.aeth`
+corpus, `check-py` byte-identical.
+
+### BUG-095  The Python frontend walked every file about seven times  [FIXED 5ae433f]
+test: tests/test_perf_index.py (`::test_frontend_walks_each_scope_once`);
+the byte-identity of `--json check-py` over the framework corpus and the
+in-repo trees is the output check (Measurements)
+
+Found 2026-09-25 by Wave 7 (LOOP_LOG iteration 62, "TYPE gap surfaced": the
+frontend was ~75% of `check-py` time). Measured on `a2f13db`: on the three
+slowest framework files (`agno/workflow/workflow.py`,
+`browser_use/beta/service.py`, `agno/db/postgres/postgres.py`; 151,204 AST
+nodes together) the frontend's `ast.walk` calls yielded 1,068,633 nodes, 7.1
+per AST node: the imports, the module's bindings and its attribute
+assignments were three module-level walks, then each `def` was walked for
+its bindings, its calls, its statements and, per statement, for walrus
+targets. On the 40-function module in `tests/test_perf_index.py`: 6.8 walked
+nodes per AST node.
+
+Root cause: each per-def consumer (`_bindings_of`, the `visit_call` loop, the
+`visit_stmt` loop, `_walrus_lets`) and each module-level fact walked the
+node itself; Wave 7's `_bindings_of` memo removed only the repeated binding
+walks.
+
+Fix (`5ae433f`): `_DefIndex(node)` builds a scope's bindings, its Call nodes
+and its statement nodes (both in `ast.walk`'s breadth-first order, which is
+the order the two passes visited them in) and a has-walrus flag in one walk;
+the consumers take the bindings list; `_walrus_lets` returns at once when the
+scope has no `:=`. The module-level imports, bindings and attribute
+assignments share one walk. The two one-finding-per-flow fixes over the
+translated IR (`_dedupe_bound_raw_entries`, `_rerate_bound_compiles`) became
+`_fix_bound_flows`, one walk of the IR (the second never names a call the
+first renames). `_walk` is `ast.walk` without its two generator layers per
+node, same order (checked on 800 corpus files). The `_bindings_of` memo and
+its `ContextVar` are gone.
+
+Measurement: walked nodes on the three files 1,068,633 → 342,117; on the
+test module 6.8 → under 3 per AST node. Frontend on the three files,
+min of 5 interleaved runs: 1.78 s → 1.09 s. Frontend over the whole corpus,
+in-process: 76.1 s → 46.2 s. `--json check-py` byte-identical (below).
+
+### BUG-096  Argument injection through an argv list was silent: `subprocess.run(["git", "clone", url])`, `["git", "-c", x]`, `["ssh", host, cmd]`, `["tar", "--to-command", x]`, `asyncio.create_subprocess_exec("git", *args)`  [FIXED 9c8014d]
+test: tests/test_py_frontend_sinks.py
+(`::test_argv_option_injection_is_a_command_injection`);
+tests/test_sink_rows.py (`::test_every_argv_program_flags_and_clears`)
+
+Found 2026-09-24 by Wave 5a (LOOP_LOG iteration 60, "TYPE gap surfaced"; q1
+row "a quoted shell piece is accepted by a program LIST"). Repro on
+`5ae433f`: a module with `subprocess.run(['git', '-c', x, 'log'])`,
+`subprocess.run(['git', 'clone', url, 'dest'])`,
+`subprocess.run(['ssh', host, 'uptime'])`,
+`subprocess.run(['tar', '--to-command', x, '-xf', 'a.tar'])` and
+`await asyncio.create_subprocess_exec('git', *args)` → `check-py` exit 0,
+0 findings. All 16 flagged shapes in the new test were silent.
+
+Root cause: the argv form is the `shell=` guard's sanctioned exit, and only
+`["bash", "-c", cmd]` (BUG-021) was recognised as still running code. A
+program that runs code through an OPTION takes that option from any word
+the input supplies: a clone URL `--upload-pack=touch /tmp/x` (GitPython
+CVE-2022-24439), an ssh host `-oProxyCommand=...` (git CVE-2017-1000117).
+No shell is involved, so quoting the word does not help.
+
+Fix (`9c8014d`): `_ARGV_CODE_OPTIONS` names six programs and their
+code-running options — git (`-c`, `--config`, `--config-env`,
+`--upload-pack`, `-u`, `--receive-pack`, `--exec`), ssh (options, host,
+remote command), tar (`--to-command`, `--checkpoint-action`,
+`--use-compress-program`, `-I`, `--info-script`, `-F`, `--new-volume-script`,
+`--rsh-command`), find (`-exec`, `-execdir`, `-ok`, `-okdir`), rsync (`-e`,
+`--rsh`, `--rsync-path`), zip (`-T`, `-TT`, `--unzip-command`). An argv
+whose program word (literal, a name bound only to literals, basename,
+`.exe` dropped) is one of them, handed a non-literal word before a literal
+`--`, is `shellExec` (E0714, match `argv`, 0.9), and that word is the judged
+argument. The argv is a subprocess runner's first argument or `args=`, a
+list/tuple display, a name bound once to one, or `[...] + x`; or the
+positional arguments of `asyncio.create_subprocess_exec`. `--` does not
+clear ssh (the words after the host run in the remote shell) or find
+(every word is its expression). A constant of any type is literal (`-n 5`).
+`shlex.quote(x)` as the word stays a finding (the `py_whole` reason: it is
+not the exit here). `mapping_table()` publishes the table as
+`argv_option_programs`. The option lists are for the record, the pins and
+`mapping_table()`; the rule judges EVERY non-literal word before `--`,
+because such a word can be any of the options.
+
+Measurement: framework corpus 683 → 684, +1 / −0 (agno `git *args`
+wrapper, true by rule); `--min-confidence 0.9` 51 → 52. In-repo trees
+107 → 113, +6 / −0 (list and triage below). No kept finding changed.

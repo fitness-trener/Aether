@@ -51,10 +51,17 @@ def test_c1_quoted_pieces_compose():
         (_SH + "def f(p):\n    subprocess.run('ls -l ' + shlex.quote(p), shell=True)\n", []),
         (_SH + "def f(p):\n    subprocess.run(f'ls -l {shlex.quote(p)}', shell=True)\n", []),
         (_SH + "def f(p):\n    os.system('ls -l -- ' + shlex.quote(p) + ' | wc -l')\n", []),
-        (_SH + "def f(files):\n    cmd = 'tar czf out.tgz ' + ' '.join(shlex.quote(p) for p in files)\n"
+        (_SH + "def f(files):\n    cmd = 'wc -l ' + ' '.join(shlex.quote(p) for p in files)\n"
                "    subprocess.run(cmd, shell=True)\n", []),
-        (_SH + "def f(args):\n    os.system('git log ' + shlex.join(args))\n", []),
-        (_SH + "def f(args):\n    subprocess.run(shlex.join(['git', 'log', *args]), shell=True)\n", []),
+        (_SH + "def f(files):\n    cmd = 'tar czf out.tgz ' + ' '.join(shlex.quote(p) for p in files)\n"
+               "    subprocess.run(cmd, shell=True)\n", ["E0714"]),
+        (_SH + "def f(args):\n    os.system('du -sh ' + shlex.join(args))\n", []),
+        (_SH + "def f(args):\n    subprocess.run(shlex.join(['du', '-sh', *args]), shell=True)\n", []),
+        # git / tar / rsync / zip have options that run a command, and a
+        # quoted word that starts with '-' is still an option (known-gaps
+        # round, iteration 65): these were clean under iteration 60.
+        (_SH + "def f(args):\n    os.system('git log ' + shlex.join(args))\n", ["E0714"]),
+        (_SH + "def f(args):\n    subprocess.run(shlex.join(['git', 'log', *args]), shell=True)\n", ["E0714"]),
         (_SH + "import pipes\ndef f(p):\n    os.system('ls ' + pipes.quote(p))\n", []),
         # still an injection, or still the input choosing the program
         (_SH + "def f(p):\n    subprocess.run(shlex.quote(p), shell=True)\n", ["E0714"]),

@@ -2,11 +2,13 @@
 
 ## What is checked, and when — read this first
 
-**Aether has no type checker and no name-resolution pass.** Type
-annotations are parsed, kept in the AST, printed by `fmt`, and read by the
-specific passes listed below; they are never checked against the values
-that flow into them. Measured with `aether check` / `aether run` at
-`99f09cc` and again at `52f04aa` (every `check` below exits 0):
+**Aether has no type checker.** It does resolve names (E0208, below):
+every identifier must refer to some binding. Type annotations are parsed,
+kept in the AST, printed by `fmt`, and read by the specific passes listed
+below; they are never checked against the values that flow into them.
+Measured with `aether check` / `aether run` at `99f09cc` and again at
+`52f04aa`; the `frobnicate` row re-measured with name resolution in place
+(every other `check` below still exits 0):
 
 | Program fragment | `check` | `run` |
 |---|---|---|
@@ -14,7 +16,7 @@ that flow into them. Measured with `aether check` / `aether run` at
 | `let x: Int = "s"` then `return x` | exit 0 | exit 0 |
 | `f("str")` where `f(a: Int)` | exit 0 | exit 0 |
 | `f(1, 2, 3)` where `f` takes one parameter | exit 0 | Python `TypeError`, exit 1 |
-| `frobnicate(1)`, never declared anywhere | exit 0 | Python `NameError`, exit 1 |
+| `frobnicate(1)`, never declared anywhere | E0208, exit 1 | not run (`check` refuses it) |
 | `function empty?(n: Int) returns Int` (a `?` name not returning `Bool`) | exit 0 | exit 0 |
 
 What *is* checked, split by when it happens. `aether run` runs every
@@ -27,6 +29,12 @@ static pass before it executes, so a program `check` refuses does not run.
   an unreachable arm — `E0203`; dead code after `return`/`break`/`continue`
   — `E0204`; an unread `let` — `E0205`; a discarded `Result` — `E0206`; a
   refinement whose integer bounds are unsatisfiable — `E0207`.
+- Name resolution — `E0208`: a call to, or a read of, a name that is not
+  a parameter, a local bound earlier in the same or an enclosing block, a
+  top-level declaration (imports included) or a stdlib function. This
+  proves a name refers to SOME binding — not that the binding has the
+  right type, arity or kind; that is still unchecked (below). Silent on a
+  partially parsed program and on one whose imports were not resolved.
 - Effects: every call's effects must be declared by the caller — `E0801`
   (see `effects.md`).
 - Capabilities: when the file declares a module, every effect's capability
@@ -52,7 +60,8 @@ static pass before it executes, so a program `check` refuses does not run.
 - Declared effects, only under `--effect-strict` — `E0501` / `E0502`.
 
 **Not checked at all:** expression types, return types, argument types,
-arity, whether a called name exists, consistent use of generic parameters
+arity, whether a called name is a function (a `let` or `const` holding an
+`Int` passes E0208 when called), consistent use of generic parameters
 (SPEC_ISSUES S-007), and the `?`/`!` naming conventions (`keywords.md`).
 
 ## Primitive types

@@ -34,6 +34,7 @@ query — start here, follow links.
 - [[questions/q5-sink-matching-vs-purity-matching|Q5]] — why matching SINKS by method name is legitimate where matching PURITY by name was unsound (the direction of the error), and the measured cost
 - [[questions/q6-risk-vs-severity-two-axes|Q6]] — why Aether carries two severity-like axes (gate vs triage) instead of one, and the unused per-finding confidence residual
 - [[questions/q7-frontend-totality-over-syntax|Q7]] — why the Python frontend must be TOTAL over statement positions and binding forms: a position it does not emit is a silent miss, not an over-flag (BUG-012, 411 → 628 on the framework corpus)
+- [[questions/q8-static-type-checking-after-name-resolution|Q8]] — what static type checking Aether should have now that names resolve (E0208): options, measured prevalence, and why it ranks below security work
 
 ## Concepts (`wiki/concepts/`)
 - _none yet — decisions beyond sources go here_
