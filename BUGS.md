@@ -2345,7 +2345,7 @@ their effects are inferred by the frontend, which emits `env` and
 Corpus: 0 new findings (every declared head in the 407 parseable files is
 `db`, `exec`, `fs`, `log`, `net`, `time` or `pure`).
 
-### BUG-090  `aether --json run` breaks the one-document contract: the program's stdout precedes (or replaces) the JSON  [OPEN]
+### BUG-090  `aether --json run` breaks the one-document contract: the program's stdout precedes (or replaces) the JSON  [FIXED 6ece638]
 test: tests/test_exit_codes.py::test_run_json_captures_the_program_output
 
 Repro on `a2f13db` (the program prints a line that looks like JSON):
@@ -2389,7 +2389,7 @@ line 2 column 1` (cli.py and sdk.py reverted, test kept: 13/14).
 Measurement: no detector or frontend change; framework corpus `--json
 check-py` output byte-identical (below).
 
-### BUG-091  stdlib.md parameter lists drifted from the runtime in six functions; no test compared signatures  [OPEN]
+### BUG-091  stdlib.md parameter lists drifted from the runtime in six functions; no test compared signatures  [FIXED 5809adb]
 test: tests/test_spec_docs.py::test_stdlib_doc_signatures_match_runtime
 
 `tests/test_spec_docs.py` checked that every documented stdlib name
