@@ -2503,7 +2503,7 @@ This is name resolution, not type checking (`grammar/types.md` says so).
 Measurement: see Measurements — 0 new diagnostics on the in-repo `.aeth`
 corpus, `check-py` byte-identical.
 
-### BUG-095  The Python frontend walked every file about seven times  [OPEN]
+### BUG-095  The Python frontend walked every file about seven times  [FIXED 5ae433f]
 test: tests/test_perf_index.py (`::test_frontend_walks_each_scope_once`);
 the byte-identity of `--json check-py` over the framework corpus and the
 in-repo trees is the output check (Measurements)
@@ -2541,7 +2541,7 @@ test module 6.8 → under 3 per AST node. Frontend on the three files,
 min of 5 interleaved runs: 1.78 s → 1.09 s. Frontend over the whole corpus,
 in-process: 76.1 s → 46.2 s. `--json check-py` byte-identical (below).
 
-### BUG-096  Argument injection through an argv list was silent: `subprocess.run(["git", "clone", url])`, `["git", "-c", x]`, `["ssh", host, cmd]`, `["tar", "--to-command", x]`, `asyncio.create_subprocess_exec("git", *args)`  [OPEN]
+### BUG-096  Argument injection through an argv list was silent: `subprocess.run(["git", "clone", url])`, `["git", "-c", x]`, `["ssh", host, cmd]`, `["tar", "--to-command", x]`, `asyncio.create_subprocess_exec("git", *args)`  [FIXED 9c8014d]
 test: tests/test_py_frontend_sinks.py
 (`::test_argv_option_injection_is_a_command_injection`);
 tests/test_sink_rows.py (`::test_every_argv_program_flags_and_clears`)
