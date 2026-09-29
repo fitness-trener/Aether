@@ -116,7 +116,13 @@ def resolve_imports(
     combined_decls: List[Dict[str, Any]] = []
     _walk(ast, abs_source, visiting, resolved, combined_decls, diags,
           is_entry=True)
-    return ({"kind": "Program", "decls": combined_decls}, diags)
+    # `imports_resolved` tells E0208 (passes/names.py) the imported
+    # names are in `decls`; `partial` rides along from the lenient parser.
+    combined = {"kind": "Program", "decls": combined_decls,
+                "imports_resolved": True}
+    if ast.get("partial"):
+        combined["partial"] = True
+    return combined, diags
 
 
 def _walk(

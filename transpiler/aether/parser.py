@@ -44,6 +44,10 @@ def parse_collect(source: str, filename: str = "<input>"):
     tokens = tokenize(source, filename)
     p = Parser(tokens, collect_errors=True)
     ast = p.parse_program()
+    if p.diagnostics:
+        # Some declaration did not parse: a name it bound is missing, so
+        # E0208 (passes/names.py) must not call its uses undeclared.
+        ast["partial"] = True
     return ast, list(p.diagnostics)
 
 
@@ -342,6 +346,14 @@ class Parser:
                 self.advance()
                 ensures_clauses.append(self.parse_expr())
             elif self.at_kw("effects"):
+                if effects:
+                    # The grammar has ONE effects_clause; a second one used
+                    # to replace the first silently (gaps round G2).
+                    raise self.err(
+                        f"function {name!r} has more than one 'effects' "
+                        f"clause", self.peek().pos,
+                        suggestion="merge them into one list: "
+                                   "'effects a, b'")
                 self.advance()
                 effects = self.parse_effect_list()
         if not effects:
