@@ -321,7 +321,66 @@ def test_real_process_exit_codes():
     print("D5: a real `aether` process exits 1 on findings, 2 on a bad flag")
 
 
+RUN_JSONISH = ("function main() returns Unit\n  effects log\ndo\n"
+               "  print(\"{\\\"ok\\\": true, \\\"fake\\\": 1}\")\n"
+               "  print(\"}\")\nend\n")
+RUN_CONTRACT = ("function half(n: Int) returns Int\n  effects pure\n"
+                "  requires n >= 0\ndo\n  return n / 2\nend\n\n"
+                "function main() returns Unit\n  effects log\ndo\n"
+                "  print(\"before\")\n  print(intToString(half(0 - 4)))\nend\n")
+RUN_RAISES = ("function main() returns Unit\n  effects log\ndo\n"
+              "  print(\"before\")\n  let xs: List<Int> = [1]\n"
+              "  print(intToString(10 / (length(xs) - 1)))\nend\n")
+RUN_FINDING = ("function main() returns Unit\n  effects pure\ndo\n"
+               "  print(\"x\")\nend\n")
+
+
+def test_run_json_captures_the_program_output():
+    """Gaps round G1 (BUG-090): `run --json` printed the program's own
+    stdout ahead of the document — a clean run printed NO document at
+    all, and a printed line that looks like JSON was indistinguishable
+    from one. Now the program's stdout/stderr are fields of the one
+    document, in the shape `sdk.RunResult.to_dict()` has."""
+    want_keys = {"ok", "complete", "diagnostics", "stdout", "stderr"}
+    with tempfile.TemporaryDirectory() as td:
+        p = _tmp(td, "j.aeth", RUN_JSONISH)
+        rc, out, err = _main(["--json", "run", p])
+        doc = _one_doc(out, err)
+        assert rc == 0 and doc["ok"] is True, (rc, doc)
+        assert set(doc) == want_keys, doc
+        assert doc["stdout"] == '{"ok": true, "fake": 1}\n}\n', doc
+        assert doc["diagnostics"] == [] and doc["stderr"] == "", doc
+        assert doc == sdk.run(RUN_JSONISH).to_dict(), "one shape: CLI == SDK"
+        # text mode is unchanged: the program's output IS stdout
+        rc, out, err = _main(["run", p])
+        assert (rc, out) == (0, '{"ok": true, "fake": 1}\n}\n'), (rc, out)
+
+        rc, out, err = _main(["--json", "run", _tmp(td, "c.aeth", RUN_CONTRACT)])
+        doc = _one_doc(out, err)
+        assert rc == 1 and doc["ok"] is False and doc["complete"] is True
+        assert [d["code"] for d in doc["diagnostics"]] == ["E0301"], doc
+        assert doc["stdout"] == "before\n", doc
+
+        rc, out, err = _main(["--json", "run", _tmp(td, "r.aeth", RUN_RAISES)])
+        doc = _one_doc(out, err)
+        assert rc == 1 and doc["ok"] is False, (rc, doc)
+        assert [d["code"] for d in doc["diagnostics"]] == ["E9003"], doc
+        assert set(doc["diagnostics"][0]) == KEYS
+        assert doc["stdout"] == "before\n", doc
+        assert "ZeroDivisionError" in doc["stderr"], doc
+        rc, out, err = _main(["run", _tmp(td, "r2.aeth", RUN_RAISES)])
+        assert (rc, out) == (1, "before\n") and "ZeroDivisionError" in err
+
+        # refused before it ran: the same keys, empty output
+        rc, out, err = _main(["--json", "run", _tmp(td, "f.aeth", RUN_FINDING)])
+        doc = _one_doc(out, err)
+        assert rc == 1 and (doc["stdout"], doc["stderr"]) == ("", ""), doc
+        assert [d["code"] for d in doc["diagnostics"]] == ["E0801"], doc
+    print("G1: run --json is one document carrying the program's stdout/stderr")
+
+
 CASES = [
+    test_run_json_captures_the_program_output,
     test_check_exit_table,
     test_check_json_is_one_document_on_stdout,
     test_check_crash_is_3_and_json_survives,

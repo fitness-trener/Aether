@@ -195,9 +195,10 @@ AND an unparsed file exits `1`, and its JSON says `"complete": false`.
 `check-py --min-confidence` filters the exit code as well as the output.
 On `.aeth`: a lex/parse error, or an `import` that does not resolve
 (E0705/E0706), is `4` — the program was not analysed; an SMT refutation
-(E0901) is `1`; `--prove` without z3 is `2`. `aether run` exits `1` on a
-runtime contract violation and on an exception the program itself
-raised. `aether test` keeps its fixture table (0 match, 1 mismatch, 2
+(E0901) is `1`; `--prove` without z3 is `2`. `aether run` exits `0` when
+the program ran clean, and `1` on a static finding, a runtime contract or
+refinement violation (E03xx) and an exception the program itself raised
+(under `--json`, an `E9003` diagnostic with the traceback in `stderr`). `aether test` keeps its fixture table (0 match, 1 mismatch, 2
 error). Before 0.5.0, `check` exited `2` on findings, parse errors,
 import errors and usage errors alike; `check-py` exited `2` on findings
 and on a per-file analyzer crash and `0` on a tree it could not parse;
@@ -238,6 +239,7 @@ The documents:
 | `aether --json check FILE` | `{ok, complete, diagnostics, decls?, prove?}` |
 | `aether --json check-py PATH...` | `{ok, complete, lang: "python", files: [{path, diagnostics, unprovable, meta}], unreadable: [{path, reason, detail}], skipped_dirs, errors: [{path, error}]}` |
 | `aether --json fix-loop FILE` | `{ok, complete, diagnostics: [], status, final, fixed_source, transcript}` |
+| `aether --json run FILE` | `{ok, complete, diagnostics, stdout, stderr}` — the program's own output, captured (`""` if it never started); the keys `sdk.RunResult.to_dict()` returns |
 | `python -m tools.scan --json` | `{ok, complete, scanned, files_with_findings, parse_errors, results: [{path, findings: [to_dict + risk], declared?, parse_error?, unreadable?}], errors}` (+ `mode`, `missing` with `--expect`) |
 | any of them, when nothing was analysed (exit 2, 3, or unreadable input) | `{ok: false, complete: false, diagnostics: [], error: {kind: "usage" \| "crash" \| "input", message}}` |
 
