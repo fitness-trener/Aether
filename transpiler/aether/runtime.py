@@ -323,8 +323,8 @@ def _ae_trim(s):                       return s.strip()
 def _ae_toLower(s):                    return s.lower()
 def _ae_toUpper(s):                    return s.upper()
 def _ae_replace(s, frm, to):           return s.replace(frm, to)
-def _ae_startsWith__q(s, p):            return s.startswith(p)
-def _ae_endsWith__q(s, p):              return s.endswith(p)
+def _ae_startsWith__q(s, prefix):       return s.startswith(prefix)
+def _ae_endsWith__q(s, suffix):         return s.endswith(suffix)
 
 def _ae_parseInt(s):
     try:
@@ -495,11 +495,11 @@ def _ae_shellArg(template, value):
     quoted = "'" + str(value).replace("'", "'\\''") + "'"
     return template.replace("?", quoted, 1)
 
-def _ae_redirect(url):
+def _ae_redirect(target):
     # Models an HTTP redirect — carries the `net.redirect` effect. E0718
     # refuses a target steerable by untrusted input (open redirect).
     record_effect("net", "redirect")
-    return "REDIRECT(" + url + ")"
+    return "REDIRECT(" + target + ")"
 
 def _ae_safeRedirect(host, path):
     # Pure. Build a redirect target pinned to `host`: strip any scheme,
@@ -548,11 +548,11 @@ def _ae_csvCell(v):
     # Returns the value; the point is the static E0728 refusal.
     return str(v)
 
-def _ae_csvEscape(v):
+def _ae_csvEscape(x):
     # Pure. Neutralize a leading formula trigger (= + - @, tab, CR) by
     # prefixing a single quote so a spreadsheet treats the cell as text.
     # The sanctioned exit for E0728.
-    s = str(v)
+    s = str(x)
     return ("'" + s) if s[:1] in ("=", "+", "-", "@", "\t", "\r") else s
 
 def _ae_setHeader(name, value):
@@ -584,11 +584,11 @@ def _ae_classify(x):
     # auditable exit.
     return x
 
-def _ae_reveal(x):
+def _ae_reveal(s):
     # Pure. Unwrap a Secret<T> to its T. This is the ONLY sanctioned way
     # to expose a secret; E0712 treats a reveal(...) subtree as an
     # intentional, code-reviewed disclosure and does not flag it.
-    return x
+    return s
 
 def _ae_safeJoin(base, rel):
     # Pure. Join `rel` under `base`, discarding any component that would
@@ -727,7 +727,7 @@ def _ae_min(a, b):                     return min(a, b)
 def _ae_max(a, b):                     return max(a, b)
 def _ae_floor(x):                      import math; return math.floor(x)
 def _ae_ceil(x):                       import math; return math.ceil(x)
-def _ae_pow(a, b):                     return a ** b
+def _ae_pow(base, exp):                return base ** exp
 
 def _ae_sqrt(x):
     if x < 0:

@@ -59,3 +59,23 @@ What changes for a caller:
   `allow-incomplete: true` input is set; new `unparsed` output.
 - `tools/scan.py` given a path that does not exist is a usage error (2);
   it used to scan nothing and exit 0.
+- **`aether --json run`** prints one document, `{"ok", "complete",
+  "diagnostics", "stdout", "stderr"}`, with the program's own output
+  captured into `stdout`/`stderr` (the keys `sdk.RunResult.to_dict()`,
+  new, also returns). It used to print the program's output on stdout
+  ahead of the document, and a clean run printed no document at all.
+  Exit codes unchanged: `0` ran clean; `1` a static finding, a runtime
+  contract/refinement violation (E03xx) or an exception the program
+  raised (now reported as `E9003` in `diagnostics`, traceback in
+  `stderr`). Text mode is unchanged.
+
+### Fixed
+
+- `grammar/stdlib.md` is now checked against the runtime's signatures
+  (`tests/test_spec_docs.py`): arity for every documented function,
+  parameter order for every function documented once, and a run of every
+  overload documented for several types (`length`, `get`, `size`,
+  `remove`, `contains?`). Six runtime helpers named their parameters
+  differently from the spec (`startsWith?`, `endsWith?`, `reveal`,
+  `csvEscape`, `redirect`, `pow`); renamed to the spec's names. Aether
+  has no named arguments, so no program's behaviour changes.
