@@ -18,7 +18,9 @@ A name is visible where it is used if it is
     assignment, `for` variable, a `match` arm's pattern bindings — the
     binder kinds of `ast_walk.binders()`), block-scoped,
   - a top-level function, `const`, record constructor or union case of
-    the program (imports already fused in by `load_program`),
+    the program (imports already fused in by `load_program`) — inside a
+    `const` initializer, which runs at module load, only one declared
+    ABOVE it,
   - a runtime export: `runtime.unmangle()` over the runtime's globals,
     the set `build_namespace()` hands emitted code (so `Some`/`None`/
     `Ok`/`Err` too). Never a hand-kept list.
@@ -184,9 +186,21 @@ def check_name_resolution(ast: Dict[str, Any]) -> List[Diagnostic]:
     globals_ = cases | {d["name"] for d in decls
                         if d.get("kind") in ("FunctionDecl", "ConstDecl",
                                              "RecordDecl")}
+    # A `const` initializer runs at module load, in declaration order: it
+    # sees only what is defined above it (`const A = B` before `const B`
+    # was a NameError at load).
+    earlier: Set[str] = set()
     diags: List[Diagnostic] = []
     for d in decls:
         k = d.get("kind")
+        if k == "ConstDecl":
+            r = _Resolver(earlier, cases, f"<const {d.get('name')}>")
+            r.expr(d.get("value"), set(), d.get("pos"))
+            diags.extend(r.diags)
+        if k == "UnionDecl":
+            earlier |= {c["name"] for c in d.get("cases") or []}
+        elif k in ("FunctionDecl", "ConstDecl", "RecordDecl"):
+            earlier.add(d["name"])
         pos: Optional[Dict[str, int]] = d.get("pos")
         if k == "FunctionDecl":
             r = _Resolver(globals_, cases, d["name"])
@@ -194,9 +208,6 @@ def check_name_resolution(ast: Dict[str, Any]) -> List[Diagnostic]:
             r.expr(d.get("requires"), params, pos)
             r.expr(d.get("ensures"), params | {"result"}, pos)
             r.block(d.get("body"), params, pos)
-        elif k == "ConstDecl":
-            r = _Resolver(globals_, cases, f"<const {d.get('name')}>")
-            r.expr(d.get("value"), set(), pos)
         elif k == "TypeDecl" and d.get("refinement") is not None:
             r = _Resolver(globals_, cases, f"<type {d.get('name')} where>")
             r.expr(d["refinement"], {"self"}, pos)

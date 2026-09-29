@@ -168,6 +168,24 @@ def test_block_scoping_and_shadowing():
     print("E0208: block-scoped (if/for/match/use-before-let), shadowing ok")
 
 
+def test_const_sees_only_earlier_decls():
+    # A const initializer runs at module load in declaration order:
+    # `const A = B` above `const B` passed check and was a NameError at run.
+    src = """const A: Int = B
+const B: Int = 1
+const C: Int = B + 1
+
+function main() returns Int
+  effects pure
+do
+  return A + C
+end
+"""
+    got = [(d.extra["function"], d.extra["name"]) for d in _names(src)]
+    assert got == [("<const A>", "B")], got
+    print("E0208: a const initializer sees only declarations above it")
+
+
 def test_imports_resolved_and_unresolved():
     with tempfile.TemporaryDirectory() as tmp:
         with open(os.path.join(tmp, "lib.aeth"), "w", encoding="utf-8") as f:
@@ -227,6 +245,7 @@ if __name__ == "__main__":
     test_undeclared_call_and_value()
     test_legit_program_is_clean()
     test_block_scoping_and_shadowing()
+    test_const_sees_only_earlier_decls()
     test_imports_resolved_and_unresolved()
     test_partial_parse_is_silent()
     test_runtime_names_are_derived()

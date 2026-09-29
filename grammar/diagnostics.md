@@ -104,7 +104,8 @@ after `check` exited 0 — and a misspelt sink (`sqlQeury("SELECT " + u)`)
 was a call no taint pass could name, so it also produced no E0713. The
 stdlib set is derived from the runtime (`runtime.unmangle` over its
 exports), never listed by hand. Bindings are block-scoped: a `let` inside
-an `if` branch is not visible after the `if`. What is NOT resolved,
+an `if` branch is not visible after the `if`. A `const` initializer runs
+at module load, so it sees only declarations above it. What is NOT resolved,
 because it is never evaluated: the right side of `is`, the qualifier of
 `Union.Case(...)`, patterns, type annotations and `effects` arguments.
 The pass is silent on a program it cannot see whole — a partial AST from
