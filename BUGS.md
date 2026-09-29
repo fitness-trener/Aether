@@ -2344,3 +2344,94 @@ their effects are inferred by the frontend, which emits `env` and
 `process` heads outside the vocabulary (0 new Python findings, measured).
 Corpus: 0 new findings (every declared head in the 407 parseable files is
 `db`, `exec`, `fs`, `log`, `net`, `time` or `pure`).
+
+### BUG-090  `aether --json run` breaks the one-document contract: the program's stdout precedes (or replaces) the JSON  [OPEN]
+test: tests/test_exit_codes.py::test_run_json_captures_the_program_output
+
+Repro on `a2f13db` (the program prints a line that looks like JSON):
+
+    function main() returns Unit
+      effects log
+    do
+      print("{\"ok\": true, \"fake\": 1}")
+      print("hello")
+    end
+
+`aether --json run p.aeth` → stdout is the program's two lines and
+**nothing else**, exit 0: a clean run printed no document at all, and the
+first line parses as `{"ok": true}`. With a `requires` violation after a
+`print`, stdout was the program's line followed by the diagnostic document
+(two JSON-looking lines; `json.loads` → "Extra data"). With an exception
+the program raised (`10 / 0`), stdout was the program's output, the
+traceback went to stderr, exit 1, and no document was printed.
+
+Root cause: `cli.cmd_run` executed the program with stdout attached to
+the process, reported only through `main`'s `AetherError` handler, and
+returned `0`/`1` on the other paths without calling `_report`.
+
+Fix (`transpiler/aether/cli.py`): under `--json`, `cmd_run` redirects the
+program's stdout and stderr into buffers and every `run` document gets
+`stdout` and `stderr` fields. `_report` merges `args.run_output`, which
+`cmd_run` sets, so the parse/import-failure document, the static-finding
+document and the runtime-violation document raised through `main` all
+carry the two keys (`""` when the program never started). A clean run now
+prints `{ok: true, complete: true, diagnostics: [], stdout, stderr}`. An
+exception the program raised is reported as the documented `E9003`
+(category `runtime`, the code the in-process runner already used), with
+the traceback in `stderr`. `sdk.RunResult.to_dict()` (new) returns the
+same keys; the test asserts the CLI document equals it for a clean
+program. Exit codes are unchanged: 0 ran clean, 1 static finding /
+E03xx / program exception. Text mode is unchanged (asserted).
+
+Red before the fix: the new test fails with `JSONDecodeError: Extra data:
+line 2 column 1` (cli.py and sdk.py reverted, test kept: 13/14).
+
+Measurement: no detector or frontend change; framework corpus `--json
+check-py` output byte-identical (below).
+
+### BUG-091  stdlib.md parameter lists drifted from the runtime in six functions; no test compared signatures  [OPEN]
+test: tests/test_spec_docs.py::test_stdlib_doc_signatures_match_runtime
+
+`tests/test_spec_docs.py` checked that every documented stdlib name
+exists in the runtime, but not its signature, so a documented parameter
+list could drift and a documented overload could crash (BUG-050: `remove`
+on a Set). The new test reads every `function` signature in
+`grammar/stdlib.md` (120 signatures, 115 names) and checks
+`inspect.signature(build_namespace()[mangle(name)])`:
+
+- **arity**, for every signature, overloads included: **0 drifts**.
+- **parameter names in order**, for each of the 110 names documented
+  once. Aether has no named arguments, so ORDER is the contract and equal
+  names are how a test can see a swap. One documented name Python cannot
+  spell (`replace`'s `from` → runtime `frm`) is allow-listed. **6
+  drifts found**:
+
+  | function | stdlib.md | runtime before |
+  |---|---|---|
+  | `startsWith?` | `(s, prefix)` | `(s, p)` |
+  | `endsWith?` | `(s, suffix)` | `(s, p)` |
+  | `reveal` | `(s)` | `(x)` |
+  | `csvEscape` | `(x)` | `(v)` |
+  | `redirect` | `(target)` | `(url)` |
+  | `pow` | `(base, exp)` | `(a, b)` |
+
+  None is a positional-order drift: the runtime used different names in
+  the same positions. Fixed in the runtime (the spec is the reference):
+  parameters renamed, bodies unchanged. No behaviour change is possible:
+  Aether calls are positional, the emitter emits positional calls, and a
+  grep finds no caller of these helpers outside the emitted code.
+- **every overload documented for several types runs**: the test
+  derives the overload set from the doc (`length` on List/String, `get` on
+  List/Map, `size` on Map/Set, `remove` on Map/Set, `contains?` on
+  Set/String: 10) and requires a probe program for each; each is run
+  through `sdk.run` and its stdout compared. **0 failures** on `a2f13db`:
+  BUG-050's fix (8722ce6) holds. A new overload without a probe fails the
+  test.
+
+Red before the fix: on `a2f13db`'s runtime the test fails listing the six
+drifts above. The probe half on a deliberately broken copy (the
+pre-BUG-050 Map-only `_ae_remove` monkeypatched in) fails with
+`remove on Set: ... runtime error: TypeError: cannot convert dictionary
+update sequence element #0 to a sequence`.
+
+Measurement: runtime-only rename; framework corpus output byte-identical.

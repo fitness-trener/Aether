@@ -1,5 +1,8 @@
 # Operation Log (append-only — newest on top)
 
+## [2026-09-29] Q1 rows | iteration 64: run --json is one document; stdlib signatures tested
+- **2 q1 row(s)** from `audits/gaps/B_record.md`; BUGS entries and the LOOP_LOG block folded from the same record.
+
 ## [2026-09-25] Q1 rows | iteration 62: faster scans, findings at the call, validated effects clauses
 - **3 q1 row(s)** from Wave 7. A function with repeated `effects` clauses keeps the
   last one, with no diagnostic. The frontend is now about 75% of `check-py` time.

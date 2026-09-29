@@ -2654,6 +2654,36 @@ State carried forward: the full gate suite must stay green
 
 ---
 
+## Iteration 64 — known-gaps round, Agent B: `run --json` is one document; stdlib signatures tested (no new detector)
+
+- **Target:** not a backlog row. Two TYPE gaps surfaced by earlier
+  iterations: iter-61 (`run --json` interleaves the program's stdout with
+  the document) and iter-57 (the spec test covers names, not signatures).
+- **Probe-confirmed first (on `a2f13db`):** `--json run` of a clean
+  program prints no document; with a contract violation, the program's
+  output and the document are two JSON-looking lines on stdout; with a
+  program exception, no document. Six stdlib helpers name their
+  parameters differently from `grammar/stdlib.md`. BUG-090, BUG-091.
+- **Fix:** `cmd_run` captures the program's stdout/stderr under `--json`
+  into `{ok, complete, diagnostics, stdout, stderr}` (a program exception
+  is `E9003`); `sdk.RunResult.to_dict()` has the same keys. The spec test
+  checks arity for all 120 documented signatures, name order for the 110
+  names documented once, and runs each of the 10 documented overloads.
+  Six runtime parameters renamed to the spec's names.
+- **Measured non-breaking:** framework corpus (4,946 files) `--json
+  check-py` at `a2f13db` and after: byte-identical, sha256 `87EA1A28...`,
+  683 findings, 0 unreadable, 0 errors.
+- **TYPE gap surfaced for next iter:** the spec test checks arity and
+  order, not TYPES: a documented parameter type the runtime rejects is
+  caught only where the doc documents an overload (probed). A
+  single-signature function documented for `List<T>` that crashes on a
+  `List<String>` (e.g. `sort` on mixed values) is not probed; and return
+  types are not compared at all.
+- **Suite:** exit 0, 49 PASS suites (`exit_codes` 14 cases, `spec_docs`
+  7 tests); `smt` SKIP (z3 absent locally).
+
+---
+
 ---
 
 ## Next-iteration checklist (for the loop)
