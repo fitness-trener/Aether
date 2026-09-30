@@ -1,0 +1,338 @@
+// expect: clean
+//
+// Aether port of the English (lang="en") number naming of num2words 0.5.14
+// (savoirfairelinux/num2words): cardinal, ordinal, ordinal_num and year for
+// integers, plus cardinal for a plain decimal string ("1.5", "-0.25").
+//
+// Written from the CONVENTION, not the library's code. The library builds
+// words by a recursive split/merge; this port renders base-1000 groups.
+// The convention, as pinned from the library's README ("ten thousand and
+// one", "twenty-four thousand, one hundred and twenty point one") and its
+// outputs:
+//   - short scale: thousand, million, billion, ... centillion (10**303);
+//     names above nonillion follow the systematic Latin concatenation
+//     units + tens + "illion" (undecillion, septdecillion, ...);
+//     |n| >= 10**306 is refused
+//   - within a group: "<h> hundred and <rest>"; tens-units hyphenated
+//   - groups joined by ", "; the final group joins with " and " when it
+//     is 1..99 and something precedes it ("one million and five")
+//   - negatives: "minus <words>"; ordinals of negatives are refused
+//   - years: "nineteen oh-five", "nineteen hundred", cardinal for 00XX,
+//     X00X and >= 10000; negatives get " BC"
+//   - decimals: "<whole> point <digit> <digit> ..." read from the string
+
+function pow10(k: Int) returns Int
+  requires k >= 0
+  ensures result >= 1
+  effects pure
+do
+  var p = 1
+  for i in range(0, k) do
+    p = p * 10
+  end
+  return p
+end
+
+// Number of base-1000 groups above the units group: 0 for 0..999,
+// 1 for thousands, 2 for millions, ...
+function magnitudeClass(n: Int) returns Int
+  requires n >= 0
+  ensures result >= 0
+  effects pure
+do
+  var k = 0
+  var v = n
+  while v >= 1000 do
+    v = v / 1000
+    k = k + 1
+  end
+  return k
+end
+
+function underTwenty(n: Int) returns String
+  requires n >= 0 and n < 20
+  effects pure
+do
+  let words = ["zero", "one", "two", "three", "four", "five", "six",
+               "seven", "eight", "nine", "ten", "eleven", "twelve",
+               "thirteen", "fourteen", "fifteen", "sixteen", "seventeen",
+               "eighteen", "nineteen"]
+  return unwrapOrElse(get(words, n), "")
+end
+
+function tensWord(t: Int) returns String
+  requires t >= 2 and t <= 9
+  effects pure
+do
+  let words = ["twenty", "thirty", "forty", "fifty", "sixty", "seventy",
+               "eighty", "ninety"]
+  return unwrapOrElse(get(words, t - 2), "")
+end
+
+// 1..99
+function belowHundred(n: Int) returns String
+  requires n >= 1 and n < 100
+  ensures not contains?(result, "zero")
+  effects pure
+do
+  if n < 20 then
+    return underTwenty(n)
+  end
+  if n % 10 == 0 then
+    return tensWord(n / 10)
+  end
+  return join([tensWord(n / 10), underTwenty(n % 10)], "-")
+end
+
+// 1..999
+function groupWords(n: Int) returns String
+  requires n >= 1 and n < 1000
+  ensures not contains?(result, "zero")
+  effects pure
+do
+  let h = n / 100
+  let r = n % 100
+  if h == 0 then
+    return belowHundred(r)
+  end
+  let hundreds = join([underTwenty(h), " hundred"], "")
+  if r == 0 then
+    return hundreds
+  end
+  return join([hundreds, " and ", belowHundred(r)], "")
+end
+
+// Short-scale name of 1000**k: k=1 thousand, k=2 million, ... k=101 centillion.
+function scaleName(k: Int) returns String
+  requires k >= 1 and k <= 101
+  ensures endsWith?(result, "thousand") or endsWith?(result, "illion")
+  effects pure
+do
+  if k == 1 then
+    return "thousand"
+  end
+  let i = k - 1
+  if i == 100 then
+    return "centillion"
+  end
+  let small = ["m", "b", "tr", "quadr", "quint", "sext", "sept", "oct", "non"]
+  if i < 10 then
+    return join([unwrapOrElse(get(small, i - 1), ""), "illion"], "")
+  end
+  let units = ["", "un", "duo", "tre", "quattuor", "quin", "sex", "sept",
+               "octo", "novem"]
+  let tens = ["dec", "vigint", "trigint", "quadragint", "quinquagint",
+              "sexagint", "septuagint", "octogint", "nonagint"]
+  return join([unwrapOrElse(get(units, i % 10), ""),
+               unwrapOrElse(get(tens, i / 10 - 1), ""), "illion"], "")
+end
+
+// The magnitude-class invariant: the leading scale word is the one for
+// n's class, and the next class's word never appears.
+function scaleWordsConsistent(n: Int, s: String) returns Bool
+  requires n >= 0
+  effects pure
+do
+  let k = magnitudeClass(n)
+  if k >= 1 and not startsWith?(s, "minus") then
+    let lead = join([" ", scaleName(k)], "")
+    if not contains?(s, lead) then
+      return false
+    end
+  end
+  if k + 1 <= 101 then
+    let over = join([" ", scaleName(k + 1)], "")
+    if contains?(s, over) then
+      return false
+    end
+  end
+  return true
+end
+
+function cardinalNonneg(n: Int) returns String
+  requires n >= 0 and n < pow10(306)
+  ensures (n == 0) == (result == "zero")
+  ensures n > 0 implies not contains?(result, "zero")
+  ensures scaleWordsConsistent(n, result)
+  effects pure
+do
+  if n == 0 then
+    return "zero"
+  end
+  // base-1000 groups, least significant first
+  var groups = []
+  var v = n
+  while v > 0 do
+    groups = append(groups, v % 1000)
+    v = v / 1000
+  end
+  var parts = []
+  var k = length(groups) - 1
+  while k >= 1 do
+    let g = unwrapOrElse(get(groups, k), 0)
+    if g > 0 then
+      parts = append(parts, join([groupWords(g), " ", scaleName(k)], ""))
+    end
+    k = k - 1
+  end
+  let last = unwrapOrElse(get(groups, 0), 0)
+  let high = join(parts, ", ")
+  if last == 0 then
+    return high
+  end
+  if length(parts) == 0 then
+    return groupWords(last)
+  end
+  if last < 100 then
+    return join([high, " and ", belowHundred(last)], "")
+  end
+  return join([high, ", ", groupWords(last)], "")
+end
+
+function cardinal(n: Int) returns String
+  requires abs(n) < pow10(306)
+  ensures (n < 0) == startsWith?(result, "minus ")
+  ensures (n != 0) implies not contains?(result, "zero")
+  ensures not contains?(result, "  ")
+  effects pure
+do
+  if n < 0 then
+    return join(["minus ", cardinalNonneg(0 - n)], "")
+  end
+  return cardinalNonneg(n)
+end
+
+function ordinalWord(w: String) returns String
+  ensures endsWith?(result, "th") or endsWith?(result, "st") or endsWith?(result, "nd") or endsWith?(result, "rd")
+  effects pure
+do
+  let irregular = ["one", "two", "three", "five", "eight", "nine", "twelve"]
+  let forms = ["first", "second", "third", "fifth", "eighth", "ninth", "twelfth"]
+  var i = 0
+  while i < length(irregular) do
+    if unwrapOrElse(get(irregular, i), "") == w then
+      return unwrapOrElse(get(forms, i), "")
+    end
+    i = i + 1
+  end
+  if endsWith?(w, "y") then
+    return join([slice(w, 0, length(w) - 1), "ieth"], "")
+  end
+  return join([w, "th"], "")
+end
+
+// Replace the last word (the last hyphen-part of the last space-part).
+function ordinal(n: Int) returns String
+  requires n >= 0 and n < pow10(306)
+  ensures endsWith?(result, "th") or endsWith?(result, "st") or endsWith?(result, "nd") or endsWith?(result, "rd")
+  ensures n > 0 implies not contains?(result, "zero")
+  effects pure
+do
+  let words = split(cardinal(n), " ")
+  let lastWord = unwrapOrElse(get(words, length(words) - 1), "")
+  let hy = split(lastWord, "-")
+  let lastPart = unwrapOrElse(get(hy, length(hy) - 1), "")
+  let newLast = join(append(take(hy, length(hy) - 1), ordinalWord(lastPart)), "-")
+  return join(append(take(words, length(words) - 1), newLast), " ")
+end
+
+function ordinalSuffix(n: Int) returns String
+  requires n >= 0
+  effects pure
+do
+  let m100 = n % 100
+  if m100 == 11 or m100 == 12 or m100 == 13 then
+    return "th"
+  end
+  let m10 = n % 10
+  if m10 == 1 then
+    return "st"
+  elif m10 == 2 then
+    return "nd"
+  elif m10 == 3 then
+    return "rd"
+  end
+  return "th"
+end
+
+function ordinalNum(n: Int) returns String
+  requires n >= 0 and n < pow10(306)
+  ensures startsWith?(result, intToString(n)) and length(result) == length(intToString(n)) + 2
+  effects pure
+do
+  return join([intToString(n), ordinalSuffix(n)], "")
+end
+
+function yearNonneg(y: Int) returns String
+  requires y >= 0 and y < pow10(306)
+  effects pure
+do
+  let high = y / 100
+  let low = y % 100
+  if high == 0 or (high % 10 == 0 and low < 10) or high >= 100 then
+    return cardinal(y)
+  end
+  if low == 0 then
+    return join([cardinal(high), " hundred"], "")
+  end
+  if low < 10 then
+    return join([cardinal(high), " oh-", cardinal(low)], "")
+  end
+  return join([cardinal(high), " ", cardinal(low)], "")
+end
+
+function year(y: Int) returns String
+  requires abs(y) < pow10(306)
+  ensures (y < 0) == endsWith?(result, " BC")
+  ensures y != 0 implies not contains?(result, "zero")
+  ensures not startsWith?(result, "minus")
+  effects pure
+do
+  if y < 0 then
+    return join([yearNonneg(0 - y), " BC"], "")
+  end
+  return yearNonneg(y)
+end
+
+// Plain decimal string: optional "-", digits, optional "." digits.
+// Digits after the point are read one by one; an all-zero fraction reads
+// as the integer ("2.0" -> "two").
+function cardinalDecimal(s: String) returns String
+  requires length(s) >= 1
+  ensures startsWith?(s, "-") == startsWith?(result, "minus ")
+  effects pure
+do
+  var body = s
+  var negative = false
+  if startsWith?(s, "-") then
+    body = slice(s, 1, length(s))
+    negative = true
+  end
+  let pieces = split(body, ".")
+  let whole = unwrapOr(parseInt(unwrapOrElse(get(pieces, 0), "0")), 0)
+  let frac = unwrapOrElse(get(pieces, 1), "")
+  var words = [cardinalNonneg(whole)]
+  if length(replace(frac, "0", "")) > 0 then
+    words = append(words, "point")
+    for c in chars(frac) do
+      words = append(words, underTwenty(unwrapOr(parseInt(c), 0)))
+    end
+  end
+  let text = join(words, " ")
+  if negative then
+    return join(["minus ", text], "")
+  end
+  return text
+end
+
+function main() returns Unit
+  effects log
+do
+  print(cardinal(1000001))
+  print(cardinal(24120))
+  print(ordinal(42))
+  print(ordinalNum(112))
+  print(year(1905))
+  print(year(-44))
+  print(cardinalDecimal("-0.5"))
+end

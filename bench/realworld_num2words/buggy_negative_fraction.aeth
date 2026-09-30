@@ -1,0 +1,52 @@
+// expect: clean
+//
+// num2words 0.5.14 float path, sign handling only: it splits x into
+// pre = int(x) and the fraction digits, and takes the sign from
+// to_cardinal(pre). For -1 < x < 0, int(x) == 0, so the sign is lost:
+// num2words(-0.5) == "zero point five" (open upstream as #402 and #644).
+// This file reproduces that shape on a decimal string and declares the
+// sign contract the port in num2words_port.aeth carries. `aether run`
+// prints the first two lines, then stops at the third call with a runtime
+// E0304 (ensures) diagnostic, exit 1.
+
+function digitWord(c: String) returns String
+  effects pure
+do
+  let words = ["zero", "one", "two", "three", "four", "five", "six",
+               "seven", "eight", "nine"]
+  return unwrapOrElse(get(words, unwrapOr(parseInt(c), 0)), "")
+end
+
+// Whole parts 0..9 are enough for the demo.
+function wholeWords(n: Int) returns String
+  requires n > 0 - 10 and n < 10
+  effects pure
+do
+  if n < 0 then
+    return join(["minus ", digitWord(intToString(0 - n))], "")
+  end
+  return digitWord(intToString(n))
+end
+
+function cardinalDecimalLibraryShape(s: String) returns String
+  requires contains?(s, ".")
+  ensures startsWith?(s, "-") == startsWith?(result, "minus ")
+  effects pure
+do
+  let pieces = split(s, ".")
+  // the library's pre = int(x): the sign rides on the whole part only
+  let pre = unwrapOr(parseInt(unwrapOrElse(get(pieces, 0), "0")), 0)
+  var words = [wholeWords(pre), "point"]
+  for c in chars(unwrapOrElse(get(pieces, 1), "")) do
+    words = append(words, digitWord(c))
+  end
+  return join(words, " ")
+end
+
+function main() returns Unit
+  effects log
+do
+  print(cardinalDecimalLibraryShape("1.5"))
+  print(cardinalDecimalLibraryShape("-1.5"))
+  print(cardinalDecimalLibraryShape("-0.5"))
+end
