@@ -147,6 +147,31 @@ analyzer errors** in 277 s on 8 logical cores. 209 files did not parse,
 That run measured robustness only, not precision:
 [`bench/agent_apps_scan/REPORT.md`](https://github.com/fitness-trener/Aether/blob/main/bench/agent_apps_scan/REPORT.md).
 
+## A bug in a library with 44 million monthly downloads, confirmed by others
+
+The same machinery works outside security, too. On 2026-07-05 four
+functions of [humanize](https://pypi.org/project/humanize/) were ported to
+Aether with their contracts declared, and 247,294 inputs were run through
+both the port and the real library. The run found a correctness regression
+in the current release, 4.16.0: `intword(10**24 - 1)` returns
+`'1000.0 sextillion'` instead of `'1.0 septillion'`. It was bisected to
+4.15.0 (PR #273), with the root cause a float compared against an exact
+int above 2**53.
+
+It was not filed from here. It was confirmed independently:
+- a third-party contributor opened
+  [PR #346](https://github.com/python-humanize/humanize/pull/346) with the
+  same diagnosis the next day, and a maintainer merged it on 2026-09-16;
+- another user re-reported it as
+  [#400](https://github.com/python-humanize/humanize/issues/400).
+
+The fix is not yet in a release. This is a correctness bug, not a
+vulnerability, and nothing says the run caused the fix. The full record,
+with the bisect table and the method, is in
+[`docs/history/REALWORLD_HUMANIZE.md`](https://github.com/fitness-trener/Aether/blob/main/docs/history/REALWORLD_HUMANIZE.md).
+The 44 million figure is humanize's monthly download count as read on
+pypistats.org on 2026-07-05; that report cites 44.1M.
+
 ## What it checks on Python, and what it does not
 
 Default-on, no annotations required:

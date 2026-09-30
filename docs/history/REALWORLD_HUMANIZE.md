@@ -7,6 +7,30 @@
 
 ---
 
+## 0. Update 2026-09-30: the regression was independently confirmed and fixed upstream
+
+The carry regression in section 4 was found by this run on 2026-07-05. It
+was never filed from here: Appendix A stayed a draft. It has since been
+confirmed and fixed independently:
+
+- [PR #346](https://github.com/python-humanize/humanize/pull/346), "Fix
+  `intword()` rounding carry for very large numbers", was opened on
+  2026-07-06 by a third-party contributor. It gives the same diagnosis:
+  `rounded_value * power == powers[ordinal + 1]` fails once the product is
+  evaluated in floating point, so `intword(10**24 - 1)` returns
+  `'1000.0 sextillion'`. It was merged by a maintainer on 2026-09-16 as
+  `ca892b368a53`.
+- [Issue #400](https://github.com/python-humanize/humanize/issues/400),
+  "intword() drops the rounding carry for values >= 10^24", was filed
+  independently by another user on 2026-09-16. It was closed the same day
+  as a duplicate of #346.
+- As of 2026-09-30 the fix is on `main` (27 commits ahead of 4.16.0) and
+  in no release: the current PyPI release is still 4.16.0 (2026-06-30).
+
+This shows that the defect was real. It does not show that this run
+caused the fix. The dates are what they are: this run on 2026-07-05, the
+fix one day later, by someone else.
+
 ## 1. Target selection and legitimacy
 
 Requirement: a program with real users on the open-source internet, small enough to port honestly, algorithmic enough to sit inside Aether v0.3's expressible subset (pure functions over Int/Float/String/List; no regex, no i18n).
