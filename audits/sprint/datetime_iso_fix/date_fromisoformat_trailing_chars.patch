@@ -1,0 +1,57 @@
+--- a/Modules/_datetimemodule.c
++++ b/Modules/_datetimemodule.c
+@@ -991,6 +991,10 @@
+             iso_day = 1;
+         }
+ 
++        if ((size_t)(p - dtstr) != len) {
++            return -1;  // Text after the date
++        }
++
+         int rv = iso_to_ymd(*year, iso_week, iso_day, year, month, day);
+         if (rv) {
+             return -3 + rv;
+@@ -1011,6 +1015,9 @@
+     if (p == NULL) {
+         return -1;
+     }
++    if ((size_t)(p - dtstr) != len) {
++        return -1;  // Text after the date
++    }
+     return 0;
+ }
+ 
+--- a/Lib/_pydatetime.py
++++ b/Lib/_pydatetime.py
+@@ -389,6 +389,10 @@
+             pos += has_sep
+ 
+             dayno = _read_isoformat_component(dtstr[pos:pos + 1], 1)
++            pos += 1
++
++        if len(dtstr) != pos:
++            raise ValueError("Invalid isoformat string")
+ 
+         return list(_isoweek_to_gregorian(year, weekno, dayno))
+     else:
+@@ -399,6 +403,8 @@
+ 
+         pos += has_sep
+         day = _read_isoformat_component(dtstr[pos:pos + 2], 2)
++        if len(dtstr) != pos + 2:
++            raise ValueError("Invalid isoformat string")
+ 
+         return [year, month, day]
+ 
+--- a/Lib/test/datetimetester.py
++++ b/Lib/test/datetimetester.py
+@@ -2114,6 +2114,9 @@
+             '2020-W 5',         # space in the week number
+             '2020061',          # 7 chars: day slice reads a 1-character tail
+             '2020-W2',          # 1-digit week number
++            '2020010199',       # 10 chars: basic date and 2 more characters
++            '2020W011xx',       # 10 chars: basic week date and 2 more characters
++            '20200101\u00e9',   # 10 bytes of UTF-8: basic date and a 2-byte character
+             '٢025-03-09',       # Unicode characters
+             '2009\ud80002\ud80028',     # Separators are surrogate codepoints
+         ]
