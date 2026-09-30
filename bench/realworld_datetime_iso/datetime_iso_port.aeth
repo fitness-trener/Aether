@@ -1,0 +1,836 @@
+// expect: clean
+// ISO 8601 dates, times of day and UTC offsets, written from the standard
+// and from the CPython 3.11 documentation of what `fromisoformat` accepts,
+// not from CPython's code. Driven by
+// bench/realworld_datetime_iso/differential.py against CPython 3.11.15's
+// date/time/datetime.fromisoformat and isoformat.
+//
+// Clause numbers are recalled from ISO 8601-1:2019 (and ISO 8601:2004); the
+// standard is paywalled and was not re-read for this port, so they are best
+// effort:
+//   calendar date  YYYY-MM-DD | YYYYMMDD            (2019 §5.2.2.1)
+//   week date      YYYY-Www-D | YYYYWwwD            (2019 §5.2.4.1)
+//   time of day    hh[:mm[:ss]] | hh[mm[ss]], with a decimal fraction on
+//                  the lowest-order component, "," or "."  (2019 §5.3.1)
+//   24:00          end of the day (2004 §4.2.3; 2019/Amd 1:2022)
+//   UTC            Z; offset ±hh | ±hhmm | ±hh:mm   (2019 §5.3.3, §5.3.4)
+//   date and time  date "T" time, all components in the SAME format,
+//                  basic or extended                 (2019 §5.4.1, §5.4.2)
+//   week rule      week 01 is the week with the year's first Thursday;
+//                  weeks start on Monday             (2019 §3.1.1.23-§3.1.1.25)
+//   day of week    Monday = 1 ... Sunday = 7; the Gregorian reference point
+//                  20 May 1875 is a Thursday         (2004 §3.2.1, §3.2.2)
+//
+// The CPython 3.11 documentation narrows and widens that grammar; the
+// Profile record switches each difference on or off:
+//   not supported  reduced precision (YYYY-MM, YYYY), expanded years
+//                  (±YYYYYY), ordinal dates (YYYY-DDD), and fractional
+//                  hours or minutes            -> always refused here
+//   widened        (1) offsets may carry seconds and a fraction
+//                  (2) the "T" separator may be any single character
+//                  (3) time.fromisoformat does not need the leading "T"
+//                  (4) fractional seconds beyond 6 digits are truncated
+//                  (5) no leap seconds, years 0001..9999 only
+// The lax* flags are NOT part of either contract. Each names one observed
+// CPython behaviour; the differential turns one on at a time only to
+// attribute a divergence, never to decide agreement.
+
+record Profile do
+  anySeparator: Bool
+  offsetSeconds: Bool
+  timeWithoutT: Bool
+  midnight24: Bool
+  laxMixed: Bool
+  laxColonFraction: Bool
+  laxFracHourMinute: Bool
+  laxFracNoMark: Bool
+  laxEmptyFraction: Bool
+  laxOffsetRange: Bool
+  laxJunkBeforeTz: Bool
+end
+
+// ISO 8601-1:2019 as recalled, with 24:00 per Amd 1:2022.
+function isoProfile() returns Profile
+  effects pure
+do
+  return Profile(false, false, false, true, false, false, false, false, false, false, false)
+end
+
+// What the CPython 3.11 documentation promises.
+function documentedProfile() returns Profile
+  effects pure
+do
+  return Profile(true, true, true, true, false, false, false, false, false, false, false)
+end
+
+record Ymd do
+  year: Int
+  month: Int
+  day: Int
+end
+
+record IsoWeek do
+  year: Int
+  week: Int
+  day: Int
+end
+
+// A parsed value. year = month = day = 0 for a time of day alone; hour 24
+// survives only there (end of day). offsetMicros is signed.
+record Stamp do
+  year: Int
+  month: Int
+  day: Int
+  hour: Int
+  minute: Int
+  second: Int
+  micro: Int
+  hasOffset: Bool
+  offsetMicros: Int
+end
+
+record DatePart do
+  year: Int
+  month: Int
+  day: Int
+  next: Int
+  fmt: Int
+end
+
+// fmt: 0 = no format marker (hh alone), 1 = basic, 2 = extended.
+// parts: 1 = hh, 2 = hh mm, 3 = hh mm ss. fracDigits: -1 = no decimal sign.
+record ClockPart do
+  hour: Int
+  minute: Int
+  second: Int
+  micro: Int
+  next: Int
+  fmt: Int
+  parts: Int
+  fracDigits: Int
+end
+
+record OffsetPart do
+  micros: Int
+  next: Int
+  fmt: Int
+end
+
+// ---------------------------------------------------------------- calendar
+
+function isLeap(y: Int) returns Bool
+  effects pure
+do
+  return (y % 4 == 0 and y % 100 != 0) or y % 400 == 0
+end
+
+function daysInMonth(y: Int, m: Int) returns Int
+  effects pure
+  requires m >= 1 and m <= 12
+  ensures result >= 28 and result <= 31
+do
+  if m == 2 then
+    if isLeap(y) then
+      return 29
+    end
+    return 28
+  end
+  if m == 4 or m == 6 or m == 9 or m == 11 then
+    return 30
+  end
+  return 31
+end
+
+function daysBeforeMonth(y: Int, m: Int) returns Int
+  effects pure
+  requires m >= 1 and m <= 12
+do
+  let before = unwrapOrElse(get([0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334], m - 1), 0)
+  if m > 2 and isLeap(y) then
+    return before + 1
+  end
+  return before
+end
+
+// Proleptic Gregorian day number, 0001-01-01 = 1. Int `/` floors.
+function ymdToOrdinal(y: Int, m: Int, d: Int) returns Int
+  effects pure
+do
+  let z = y - 1
+  return z * 365 + z / 4 - z / 100 + z / 400 + daysBeforeMonth(y, m) + d
+end
+
+function ordinalToYmd(n: Int) returns Ymd
+  effects pure
+  ensures ymdToOrdinal(result.year, result.month, result.day) == n
+do
+  var y = (n * 400) / 146097 + 1
+  while ymdToOrdinal(y, 1, 1) > n do
+    y = y - 1
+  end
+  while ymdToOrdinal(y + 1, 1, 1) <= n do
+    y = y + 1
+  end
+  var m = 1
+  while m < 12 and ymdToOrdinal(y, m + 1, 1) <= n do
+    m = m + 1
+  end
+  return Ymd(y, m, n - ymdToOrdinal(y, m, 1) + 1)
+end
+
+// Monday = 0 ... Sunday = 6, anchored on the reference point 1875-05-20,
+// a Thursday (ISO 8601:2004 §3.2.1).
+function weekday0(n: Int) returns Int
+  effects pure
+  ensures result >= 0 and result <= 6
+do
+  return (n - ymdToOrdinal(1875, 5, 20) + 3) % 7
+end
+
+// The Monday of week 01: week 01 contains the year's first Thursday.
+function week1Monday(y: Int) returns Int
+  effects pure
+do
+  let jan1 = ymdToOrdinal(y, 1, 1)
+  let firstThursday = jan1 + (3 - weekday0(jan1)) % 7
+  return firstThursday - 3
+end
+
+function weeksInYear(y: Int) returns Int
+  effects pure
+  ensures result == 52 or result == 53
+do
+  return (week1Monday(y + 1) - week1Monday(y)) / 7
+end
+
+function isoWeekToOrdinal(y: Int, w: Int, d: Int) returns Int
+  effects pure
+do
+  return week1Monday(y) + (w - 1) * 7 + (d - 1)
+end
+
+// The other direction by a different rule: a day belongs to the ISO year
+// of its week's Thursday, and the week number counts Thursdays.
+function ordinalToIsoWeek(n: Int) returns IsoWeek
+  effects pure
+do
+  let wd = weekday0(n)
+  let thursday = n - wd + 3
+  let isoYear = ordinalToYmd(thursday).year
+  let week = (thursday - ymdToOrdinal(isoYear, 1, 1)) / 7 + 1
+  return IsoWeek(isoYear, week, wd + 1)
+end
+
+function sameWeek(a: IsoWeek, b: IsoWeek) returns Bool
+  effects pure
+do
+  return a.year == b.year and a.week == b.week and a.day == b.day
+end
+
+// Week date -> calendar date; the ensures clause is the bijection law read
+// back through the Thursday rule.
+function isoWeekToYmd(y: Int, w: Int, d: Int) returns Ymd
+  effects pure
+  requires w >= 1 and w <= weeksInYear(y) and d >= 1 and d <= 7
+  ensures sameWeek(ordinalToIsoWeek(ymdToOrdinal(result.year, result.month, result.day)), IsoWeek(y, w, d))
+do
+  return ordinalToYmd(isoWeekToOrdinal(y, w, d))
+end
+
+// Calendar date -> week date; the ensures clause is the bijection law read
+// back through the week-01 Monday.
+function ymdToIsoWeek(y: Int, m: Int, d: Int) returns IsoWeek
+  effects pure
+  requires m >= 1 and m <= 12 and d >= 1 and d <= daysInMonth(y, m)
+  ensures isoWeekToOrdinal(result.year, result.week, result.day) == ymdToOrdinal(y, m, d) and result.week <= weeksInYear(result.year)
+do
+  return ordinalToIsoWeek(ymdToOrdinal(y, m, d))
+end
+
+// ---------------------------------------------------------------- lexing
+
+function charAt(cs: List<String>, i: Int) returns String
+  effects pure
+do
+  return unwrapOrElse(get(cs, i), "")
+end
+
+// 0..9 for an ASCII digit, -1 otherwise (Unicode digits are not ISO digits).
+function digitValue(c: String) returns Int
+  effects pure
+  ensures result >= 0 - 1 and result <= 9
+do
+  if length(c) != 1 then
+    return 0 - 1
+  end
+  let o = ord(c)
+  if o >= 48 and o <= 57 then
+    return o - 48
+  end
+  return 0 - 1
+end
+
+function isDigit(c: String) returns Bool
+  effects pure
+do
+  return digitValue(c) >= 0
+end
+
+// The value of exactly k ASCII digits at i, or -1.
+function digitsAt(cs: List<String>, i: Int, k: Int) returns Int
+  effects pure
+do
+  var v = 0
+  var j = 0
+  while j < k do
+    let dv = digitValue(charAt(cs, i + j))
+    if dv < 0 then
+      return 0 - 1
+    end
+    v = v * 10 + dv
+    j = j + 1
+  end
+  return v
+end
+
+function isDesignator(c: String) returns Bool
+  effects pure
+do
+  return c == "Z" or c == "+" or c == "-"
+end
+
+// ---------------------------------------------------------------- dates
+
+// A complete calendar or week date at the start of cs.
+function parseDateAt(cs: List<String>) returns Result<DatePart, String>
+  effects pure
+do
+  let y = digitsAt(cs, 0, 4)
+  if y < 0 then
+    return Err("year must be 4 ASCII digits (expanded years are unsupported)")
+  end
+  var q = 4
+  var fmt = 1
+  if charAt(cs, 4) == "-" then
+    q = 5
+    fmt = 2
+  end
+  if charAt(cs, q) == "W" then
+    let w = digitsAt(cs, q + 1, 2)
+    if w < 0 then
+      return Err("week must be 2 ASCII digits")
+    end
+    var dpos = q + 3
+    if fmt == 2 then
+      if charAt(cs, q + 3) != "-" then
+        return Err("reduced-precision week date YYYY-Www is not a complete date")
+      end
+      dpos = q + 4
+    end
+    let d = digitsAt(cs, dpos, 1)
+    if d < 0 then
+      return Err("reduced-precision week date is not a complete date")
+    end
+    let next = dpos + 1
+    if y < 1 then
+      return Err("year 0000 is outside date's range 0001..9999")
+    end
+    if w < 1 or w > weeksInYear(y) then
+      return Err("no such week in that ISO year")
+    end
+    if d < 1 or d > 7 then
+      return Err("day of week must be 1..7")
+    end
+    let ymd = isoWeekToYmd(y, w, d)
+    if ymd.year < 1 or ymd.year > 9999 then
+      return Err("week date falls outside date's range 0001..9999")
+    end
+    return Ok(DatePart(ymd.year, ymd.month, ymd.day, next, fmt))
+  end
+  let m = digitsAt(cs, q, 2)
+  if m < 0 then
+    return Err("month must be 2 ASCII digits")
+  end
+  var dayPos = q + 2
+  if fmt == 2 then
+    if charAt(cs, q + 2) != "-" then
+      return Err("reduced-precision or ordinal date is not a complete calendar date")
+    end
+    dayPos = q + 3
+  end
+  let d = digitsAt(cs, dayPos, 2)
+  if d < 0 then
+    return Err("day must be 2 ASCII digits")
+  end
+  if y < 1 then
+    return Err("year 0000 is outside date's range 0001..9999")
+  end
+  if m < 1 or m > 12 then
+    return Err("month out of range")
+  end
+  if d < 1 or d > daysInMonth(y, m) then
+    return Err("day out of range for the month")
+  end
+  return Ok(DatePart(y, m, d, dayPos + 2, fmt))
+end
+
+// ---------------------------------------------------------------- times
+
+function scaleMicro(v: Int, digits: Int) returns Int
+  effects pure
+do
+  var r = v
+  var k = digits
+  while k < 6 do
+    r = r * 10
+    k = k + 1
+  end
+  return r
+end
+
+// hh[:mm[:ss]] or hh[mm[ss]] from i, then an optional decimal fraction.
+// Stops (without error) at the first character that does not continue the
+// grammar; the caller decides whether what follows is allowed.
+function parseClock(cs: List<String>, i0: Int, p: Profile) returns Result<ClockPart, String>
+  effects pure
+do
+  var i = i0
+  let h = digitsAt(cs, i, 2)
+  if h < 0 then
+    return Err("hour must be 2 ASCII digits")
+  end
+  i = i + 2
+  var mi = 0
+  var s = 0
+  var k = 1
+  var fmt = 0
+  if charAt(cs, i) == ":" and digitsAt(cs, i + 1, 2) >= 0 then
+    fmt = 2
+    mi = digitsAt(cs, i + 1, 2)
+    i = i + 3
+    k = 2
+    if charAt(cs, i) == ":" and digitsAt(cs, i + 1, 2) >= 0 then
+      s = digitsAt(cs, i + 1, 2)
+      i = i + 3
+      k = 3
+    end
+  elif digitsAt(cs, i, 2) >= 0 then
+    fmt = 1
+    mi = digitsAt(cs, i, 2)
+    i = i + 2
+    k = 2
+    if digitsAt(cs, i, 2) >= 0 then
+      s = digitsAt(cs, i, 2)
+      i = i + 2
+      k = 3
+    end
+  end
+  var micro = 0
+  var fd = 0 - 1
+  let c = charAt(cs, i)
+  // laxColonFraction: CPython 3.11 also took ":" after hh:mm:ss as a decimal sign
+  let markedFraction = c == "." or c == "," or (p.laxColonFraction and c == ":" and k == 3 and fmt == 2)
+  let unmarkedFraction = p.laxFracNoMark and k == 3 and fmt == 1 and digitsAt(cs, i, 2) >= 0
+  if markedFraction or unmarkedFraction then
+    if k < 3 and not p.laxFracHourMinute then
+      return Err("decimal fraction on the hour or minute (documented as unsupported)")
+    end
+    if markedFraction then
+      i = i + 1
+    end
+    fd = 0
+    while isDigit(charAt(cs, i)) do
+      // documented: digits beyond the sixth are truncated
+      if fd < 6 then
+        micro = micro * 10 + digitValue(charAt(cs, i))
+      end
+      fd = fd + 1
+      i = i + 1
+    end
+    if fd == 0 and not (p.laxEmptyFraction and isDesignator(charAt(cs, i))) then
+      return Err("decimal sign with no digits after it")
+    end
+    micro = scaleMicro(micro, min(fd, 6))
+  end
+  if h == 24 then
+    if not (p.midnight24 and mi == 0 and s == 0 and micro == 0) then
+      return Err("hour 24 is only 24:00[:00], the end of the day")
+    end
+  elif h > 23 then
+    return Err("hour out of range")
+  end
+  // laxOffsetRange: CPython 3.11 reads offset minutes and seconds 00..99;
+  // a time of day with such fields is still refused by CPython, so the
+  // relaxation can never explain one.
+  if not p.laxOffsetRange then
+    if mi > 59 then
+      return Err("minute out of range")
+    end
+    if s == 60 then
+      return Err("leap second: datetime has no leap seconds (documented)")
+    end
+    if s > 59 then
+      return Err("second out of range")
+    end
+  end
+  return Ok(ClockPart(h, mi, s, micro, i, fmt, k, fd))
+end
+
+// Z | ±hh | ±hhmm | ±hh:mm, and with offsetSeconds also ±hh:mm:ss[.f]
+// and ±hhmmss[.f]. Must end the string.
+function parseOffset(cs: List<String>, i: Int, p: Profile) returns Result<OffsetPart, String>
+  effects pure
+do
+  let n = length(cs)
+  let c = charAt(cs, i)
+  if c == "Z" then
+    if i + 1 != n then
+      return Err("text after Z")
+    end
+    return Ok(OffsetPart(0, i + 1, 0))
+  end
+  if c != "+" and c != "-" then
+    return Err("expected Z, + or -")
+  end
+  let clock = parseClock(cs, i + 1, p)
+  match clock do
+    case Err(e) do
+      return Err(join(["offset: ", e], ""))
+    end
+    case Ok(o) do
+      if o.next != n then
+        return Err("text after the UTC offset")
+      end
+      if (o.parts == 3 or o.fracDigits >= 0) and not p.offsetSeconds then
+        return Err("seconds or a fraction in a UTC offset are not ISO 8601")
+      end
+      let total = ((o.hour * 60 + o.minute) * 60 + o.second) * 1000000 + o.micro
+      if o.hour > 23 or (p.laxOffsetRange and total >= 86400000000) then
+        return Err("offset out of range")
+      end
+      var sign = 1
+      if c == "-" then
+        sign = 0 - 1
+      end
+      return Ok(OffsetPart(sign * total, n, o.fmt))
+    end
+  end
+end
+
+// Index of the first Z, + or - at or after i; -1 if none.
+function nextDesignator(cs: List<String>, i: Int) returns Int
+  effects pure
+do
+  var j = i
+  let n = length(cs)
+  while j < n do
+    if isDesignator(charAt(cs, j)) then
+      return j
+    end
+    j = j + 1
+  end
+  return 0 - 1
+end
+
+// Where the offset starts after a clock ending at `at`, or -1 if the text
+// there is not allowed. Strictly: the end of the string or a designator.
+// laxJunkBeforeTz models CPython 3.11 skipping text before a designator:
+// one ASCII character after hh, mm or ss, or anything after a fraction of
+// six or more digits.
+function offsetStart(cs: List<String>, clock: ClockPart, p: Profile) returns Int
+  effects pure
+do
+  let at = clock.next
+  let c = charAt(cs, at)
+  if at == length(cs) or isDesignator(c) then
+    return at
+  end
+  if not p.laxJunkBeforeTz then
+    return 0 - 1
+  end
+  let j = nextDesignator(cs, at)
+  if j < 0 then
+    return 0 - 1
+  end
+  if clock.fracDigits >= 6 then
+    return j
+  end
+  if clock.fracDigits < 0 and j == at + 1 and ord(c) < 128 and c != "." and c != "," then
+    return j
+  end
+  return 0 - 1
+end
+
+// Basic and extended must not be mixed (ISO 8601-1:2019 §5.4.2, recalled).
+function formatsAgree(a: Int, b: Int, c: Int) returns Bool
+  effects pure
+do
+  let basic = a == 1 or b == 1 or c == 1
+  let extended = a == 2 or b == 2 or c == 2
+  return not (basic and extended)
+end
+
+// time + optional offset starting at i; the date's format is dateFmt
+// (0 when there is no date).
+function parseTimeTail(cs: List<String>, i: Int, dateFmt: Int, p: Profile) returns Result<Stamp, String>
+  effects pure
+do
+  let clock = parseClock(cs, i, p)
+  match clock do
+    case Err(e) do
+      return Err(e)
+    end
+    case Ok(t) do
+      let at = offsetStart(cs, t, p)
+      if at < 0 then
+        return Err("unexpected text after the time of day")
+      end
+      var hasOffset = false
+      var off = 0
+      var offFmt = 0
+      if at < length(cs) then
+        let o = parseOffset(cs, at, p)
+        match o do
+          case Err(e) do
+            return Err(e)
+          end
+          case Ok(op) do
+            hasOffset = true
+            off = op.micros
+            offFmt = op.fmt
+          end
+        end
+      end
+      if not p.laxMixed and not formatsAgree(dateFmt, t.fmt, offFmt) then
+        return Err("basic and extended format mixed")
+      end
+      return Ok(Stamp(0, 0, 0, t.hour, t.minute, t.second, t.micro, hasOffset, off))
+    end
+  end
+end
+
+// ---------------------------------------------------------------- entry points
+
+function stampOfDate(d: DatePart) returns Stamp
+  effects pure
+do
+  return Stamp(d.year, d.month, d.day, 0, 0, 0, 0, false, 0)
+end
+
+// date.fromisoformat
+function parseDate(s: String, p: Profile) returns Result<Stamp, String>
+  effects pure
+do
+  let cs = chars(s)
+  let r = parseDateAt(cs)
+  match r do
+    case Err(e) do
+      return Err(e)
+    end
+    case Ok(d) do
+      if d.next != length(cs) then
+        return Err("text after the date")
+      end
+      return Ok(stampOfDate(d))
+    end
+  end
+end
+
+// time.fromisoformat
+function parseTime(s: String, p: Profile) returns Result<Stamp, String>
+  effects pure
+do
+  let cs = chars(s)
+  var i = 0
+  if charAt(cs, 0) == "T" then
+    i = 1
+  elif not p.timeWithoutT then
+    return Err("a time of day alone starts with the designator T")
+  end
+  return parseTimeTail(cs, i, 0, p)
+end
+
+// datetime.fromisoformat
+function parseDateTime(s: String, p: Profile) returns Result<Stamp, String>
+  effects pure
+do
+  let cs = chars(s)
+  let r = parseDateAt(cs)
+  match r do
+    case Err(e) do
+      return Err(e)
+    end
+    case Ok(d) do
+      let n = length(cs)
+      if d.next == n then
+        return Ok(stampOfDate(d))
+      end
+      if charAt(cs, d.next) != "T" and not p.anySeparator then
+        return Err("date and time are separated by T")
+      end
+      if d.next + 1 == n then
+        return Err("separator with no time after it")
+      end
+      let t = parseTimeTail(cs, d.next + 1, d.fmt, p)
+      match t do
+        case Err(e) do
+          return Err(e)
+        end
+        case Ok(tm) do
+          var y = d.year
+          var m = d.month
+          var dd = d.day
+          var h = tm.hour
+          if h == 24 then
+            // 24:00 on day D is 00:00 on day D+1
+            let next = ordinalToYmd(ymdToOrdinal(y, m, dd) + 1)
+            if next.year > 9999 then
+              return Err("24:00 on 9999-12-31 is outside datetime's range")
+            end
+            y = next.year
+            m = next.month
+            dd = next.day
+            h = 0
+          end
+          return Ok(Stamp(y, m, dd, h, tm.minute, tm.second, tm.micro, tm.hasOffset, tm.offsetMicros))
+        end
+      end
+    end
+  end
+end
+
+// ---------------------------------------------------------------- isoformat
+
+function pad2(n: Int) returns String
+  effects pure
+do
+  return padLeft(intToString(n), 2, "0")
+end
+
+// "+HH:MM[:SS[.ffffff]]" (the documented isoformat offset form)
+function formatOffset(micros: Int) returns String
+  effects pure
+do
+  var sign = "+"
+  var v = micros
+  if v < 0 then
+    sign = "-"
+    v = 0 - v
+  end
+  let us = v % 1000000
+  let secs = v / 1000000
+  var out = join([sign, pad2(secs / 3600), ":", pad2((secs % 3600) / 60)], "")
+  if secs % 60 != 0 or us != 0 then
+    out = join([out, ":", pad2(secs % 60)], "")
+    if us != 0 then
+      out = join([out, ".", padLeft(intToString(us), 6, "0")], "")
+    end
+  end
+  return out
+end
+
+// timespec: auto | hours | minutes | seconds | milliseconds | microseconds
+function formatClock(h: Int, mi: Int, s: Int, us: Int, timespec: String) returns String
+  effects pure
+do
+  if timespec == "hours" then
+    return pad2(h)
+  end
+  if timespec == "minutes" then
+    return join([pad2(h), ":", pad2(mi)], "")
+  end
+  let hms = join([pad2(h), ":", pad2(mi), ":", pad2(s)], "")
+  if timespec == "seconds" or (timespec == "auto" and us == 0) then
+    return hms
+  end
+  if timespec == "milliseconds" then
+    return join([hms, ".", padLeft(intToString(us / 1000), 3, "0")], "")
+  end
+  return join([hms, ".", padLeft(intToString(us), 6, "0")], "")
+end
+
+// What a formatted value reads back as: components the timespec leaves
+// out are truncated (documented: "truncated, not rounded").
+function truncateTo(v: Stamp, timespec: String) returns Stamp
+  effects pure
+do
+  var mi = v.minute
+  var s = v.second
+  var us = v.micro
+  if timespec == "hours" then
+    mi = 0
+    s = 0
+    us = 0
+  elif timespec == "minutes" then
+    s = 0
+    us = 0
+  elif timespec == "seconds" then
+    us = 0
+  elif timespec == "milliseconds" then
+    us = (us / 1000) * 1000
+  end
+  return Stamp(v.year, v.month, v.day, v.hour, mi, s, us, v.hasOffset, v.offsetMicros)
+end
+
+function sameStamp(a: Stamp, b: Stamp) returns Bool
+  effects pure
+do
+  return a.year == b.year and a.month == b.month and a.day == b.day and a.hour == b.hour and a.minute == b.minute and a.second == b.second and a.micro == b.micro and a.hasOffset == b.hasOffset and a.offsetMicros == b.offsetMicros
+end
+
+function validStamp(v: Stamp) returns Bool
+  effects pure
+do
+  return v.hour >= 0 and v.hour <= 23 and v.minute >= 0 and v.minute <= 59 and v.second >= 0 and v.second <= 59 and v.micro >= 0 and v.micro <= 999999 and v.offsetMicros > 0 - 86400000000 and v.offsetMicros < 86400000000
+end
+
+function formatDate(v: Stamp) returns String
+  effects pure
+  requires v.year >= 1 and v.year <= 9999
+  ensures sameStamp(unwrapOr(parseDate(result, isoProfile()), Stamp(0, 0, 0, 0, 0, 0, 0, false, 1)), Stamp(v.year, v.month, v.day, 0, 0, 0, 0, false, 0))
+do
+  return join([padLeft(intToString(v.year), 4, "0"), "-", pad2(v.month), "-", pad2(v.day)], "")
+end
+
+// time.isoformat(timespec)
+function formatTime(v: Stamp, timespec: String) returns String
+  effects pure
+  requires validStamp(v)
+  ensures sameStamp(unwrapOr(parseTime(result, documentedProfile()), Stamp(0, 0, 0, 0, 0, 0, 0, false, 1)), truncateTo(Stamp(0, 0, 0, v.hour, v.minute, v.second, v.micro, v.hasOffset, v.offsetMicros), timespec))
+do
+  var out = formatClock(v.hour, v.minute, v.second, v.micro, timespec)
+  if v.hasOffset then
+    out = join([out, formatOffset(v.offsetMicros)], "")
+  end
+  return out
+end
+
+// datetime.isoformat(sep, timespec). The ensures clause is the round-trip
+// law: fromisoformat(isoformat(x)) == x, up to the documented truncation.
+function formatDateTime(v: Stamp, sep: String, timespec: String) returns String
+  effects pure
+  requires validStamp(v) and v.year >= 1 and v.year <= 9999 and length(sep) == 1
+  ensures sameStamp(unwrapOr(parseDateTime(result, documentedProfile()), Stamp(0, 0, 0, 0, 0, 0, 0, false, 1)), truncateTo(v, timespec))
+do
+  let date = join([padLeft(intToString(v.year), 4, "0"), "-", pad2(v.month), "-", pad2(v.day)], "")
+  var out = join([date, sep, formatClock(v.hour, v.minute, v.second, v.micro, timespec)], "")
+  if v.hasOffset then
+    out = join([out, formatOffset(v.offsetMicros)], "")
+  end
+  return out
+end
+
+function main() returns Unit
+  effects log
+do
+  let doc = documentedProfile()
+  for s in ["2021-W01-1", "2020-W53-7T24:00+05:30", "20111104T000523", "2011-11-04 00:05:23.283+00:00", "12:30,5", "2020-01-01T12:30:45+0530"] do
+    let r = parseDateTime(s, doc)
+    if isOk?(r) then
+      let v = unwrapOr(r, Stamp(0, 0, 0, 0, 0, 0, 0, false, 0))
+      print(join([s, " -> ", formatDateTime(v, "T", "auto")], ""))
+    else
+      print(join([s, " -> rejected"], ""))
+    end
+  end
+end
