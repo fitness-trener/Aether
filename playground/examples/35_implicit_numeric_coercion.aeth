@@ -1,0 +1,31 @@
+// expect: E0209x2
+// Implicit Int/Float mixing (iteration 75). BROKEN on purpose.
+//
+// The humanize 4.16.0 intword carry defect in its natural shape: a Float
+// mantissa multiplied by an exact Int power and compared with an exact
+// Int (bench/realworld_humanize/buggy_intword_carry416.aeth has the port).
+// Above 2**53 the product is rounded, so the carry test fails for
+// 10**24 - 1. Before E0209 this passed `aether check` with exit 0.
+//
+// Now the `/` mixing the Int `t` with the Float literal `10.0` is E0209,
+// and so is `roundedF * power` (the mix made `roundedF` a Float, then it
+// meets the Int `power`). The fix keeps the arithmetic in exact Int, as
+// the port in bench/realworld_humanize/humanize_port.aeth does.
+//
+// E0209 fires only where BOTH operand types are known (literals,
+// annotated names, `returns Int|Float` calls); it is not a type checker.
+
+function carries?(t: Int, power: Int, nextPower: Int) returns Bool
+  effects pure
+do
+  let roundedF = t / 10.0
+  return floor(roundedF * power) == nextPower
+end
+
+function main() returns Unit
+  effects log
+do
+  if carries?(10000, 1000, 1000000) then
+    print("carry")
+  end
+end

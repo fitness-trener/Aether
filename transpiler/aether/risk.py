@@ -56,6 +56,9 @@ RISK = {
     "E0208": "medium",     # undeclared name — a NameError on the path
                            # that reaches it; a misspelt sink is one no
                            # taint pass can see
+    "E0209": "low",        # implicit Int/Float coercion — a silently
+                           # wrong number (rounding above 2**53, `/`
+                           # floor vs true division), not a crash
 
     # --- contract / refinement (E03xx) ------------------------------
     "E0301": "low", "E0303": "low", "E0304": "low",

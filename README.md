@@ -246,7 +246,7 @@ letting you assume otherwise:
 - The marker rows `E0712`, `E0715`, `E0717`, `E0724`, `E0725`, `E0726`,
   `E0728`, `E0729` and `E0730`, which need a
   `Secret`/`PII`/`Untrusted`/`Authorized` type.
-- The static-semantic family `E0202`–`E0208`: it checks Aether language
+- The static-semantic family `E0202`–`E0209`: it checks Aether language
   constructs, and on translated Python it would describe the translation,
   not the program.
 
@@ -399,12 +399,12 @@ for:
 - **`E0717` cross-tenant access / IDOR** (CWE-639) — an authorization proof
   that is not bound to the *same resource id* the sink mutates.
 
-Current surface: **56 diagnostic codes across 32 gated detectors**, held by
+Current surface: **57 diagnostic codes across 33 gated detectors**, held by
 a monotonic ratchet (`tests/ratchet_baseline.json`) that turns the build red
 if a detector is ever removed or weakened. Security family `E0710`–`E0731`;
-static-semantic family `E0202`–`E0208` (non-exhaustive match, unreachable
+static-semantic family `E0202`–`E0209` (non-exhaustive match, unreachable
 arm, dead code, dead store, ignored `Result`, unsatisfiable refinement,
-undeclared name).
+undeclared name, implicit Int/Float mixing where both types are known).
 
 Working with the language directly:
 

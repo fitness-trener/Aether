@@ -5,7 +5,9 @@
 **Aether has no type checker.** It does resolve names (E0208, below):
 every identifier must refer to some binding. Type annotations are parsed,
 kept in the AST, printed by `fmt`, and read by the specific passes listed
-below; they are never checked against the values that flow into them.
+below; they are not checked against the values that flow into them,
+except that an `Int` meeting a `Float` is refused where both types are
+statically known (E0209, below).
 Measured with `aether check` / `aether run` at `99f09cc` and again at
 `52f04aa`; the `frobnicate` row re-measured with name resolution in place
 (every other `check` below still exits 0):
@@ -18,6 +20,8 @@ Measured with `aether check` / `aether run` at `99f09cc` and again at
 | `f(1, 2, 3)` where `f` takes one parameter | exit 0 | Python `TypeError`, exit 1 |
 | `frobnicate(1)`, never declared anywhere | E0208, exit 1 | not run (`check` refuses it) |
 | `function empty?(n: Int) returns Int` (a `?` name not returning `Bool`) | exit 0 | exit 0 |
+| `let a = 1 + 2.5` (re-measured with E0209 in place) | E0209, exit 1 | not run (`check` refuses it) |
+| `half(1)` where `half(x: Float) returns Float` does `return x / 2.0` (an Int argument to a Float parameter) | exit 0 | exit 0 (arguments are not checked) |
 
 What *is* checked, split by when it happens. `aether run` runs every
 static pass before it executes, so a program `check` refuses does not run.
@@ -35,6 +39,17 @@ static pass before it executes, so a program `check` refuses does not run.
   proves a name refers to SOME binding — not that the binding has the
   right type, arity or kind; that is still unchecked (below). Silent on a
   partially parsed program and on one whose imports were not resolved.
+- Implicit numeric coercion — `E0209`: an `Int` meeting a `Float` at an
+  arithmetic or comparison operator, a `return` against the declared
+  `returns Int`/`Float`, or a binding to a name of known type — refused
+  only when BOTH types are statically known. Types are known locally, with
+  no inference: numeric literals, `Int`/`Float` parameter / `let` / `var` /
+  `const` annotations (refined aliases included), an unannotated binding's
+  first value, `for` over `range`, calls to `returns Int|Float` functions
+  and to the fixed-result stdlib functions (`diagnostics.md`, E0209). An
+  operand of unknown type (a record field, a list element, a `match`
+  binding, `abs`/`min`/`max`/`pow`) is not checked, nor is an argument
+  passed to a parameter. This is not a type checker.
 - Effects: every call's effects must be declared by the caller — `E0801`
   (see `effects.md`).
 - Capabilities: when the file declares a module, every effect's capability
@@ -59,7 +74,8 @@ static pass before it executes, so a program `check` refuses does not run.
   preconditions — `E0305`.
 - Declared effects, only under `--effect-strict` — `E0501` / `E0502`.
 
-**Not checked at all:** expression types, return types, argument types,
+**Not checked at all:** expression types (beyond E0209's Int/Float mix),
+return types (beyond E0209), argument types,
 arity, whether a called name is a function (a `let` or `const` holding an
 `Int` passes E0208 when called), consistent use of generic parameters
 (SPEC_ISSUES S-007), and the `?`/`!` naming conventions (`keywords.md`).
@@ -194,8 +210,11 @@ is bound, e.g. on entry to the callee (see *Refinement types*).
 ## Inference
 
 There is none. A `let` without an annotation has no static type, and one
-with an annotation is not checked. Function parameters and return types
-are always written.
+with an annotation is not checked — with one narrow exception: E0209
+takes an unannotated `let`/`var`'s numeric type from its first value when
+that value's `Int`/`Float` type is known, and refuses an annotated or
+typed binding given the other numeric type. Function parameters and
+return types are always written.
 
 ## Equality and hashability
 
@@ -218,9 +237,18 @@ reach the runtime (measured):
 
 - Higher-kinded types: a parameter typed `F<_>` passes `check`; type
   names are not resolved.
-- Implicit numeric coercion: `let a = 1 + 2.5` passes `check` and
-  evaluates to `3.5`.
 - Method-call syntax: `xs.length()` passes `check` and fails at runtime
   with a Python `TypeError`. Write `length(xs)`; field access `x.field` is
   the only `.` form that works.
 - Subtyping: there is none to check (see *Subtyping*).
+
+Excluded by design and **refused statically when both operand types are
+known**:
+
+- Implicit numeric coercion: `let a = 1 + 2.5` is `E0209` at `check`
+  (before E0209 it passed and evaluated to `3.5`). Where one side's type is
+  not known statically (a list element, a record field, a `match`
+  binding, a polymorphic stdlib call, an argument passed to a parameter)
+  the mix still reaches the runtime, which converts silently. The stdlib
+  converts Float→Int explicitly (`floor`, `ceil`); it has no Int→Float
+  function.

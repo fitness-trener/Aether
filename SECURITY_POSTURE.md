@@ -8,7 +8,7 @@ effect, capability and marker-type checks, which Python code has no
 declarations for.
 
 On Aether source, beyond the base passes (effect composition `E0801`,
-capability scope `E0701`–`E0704`, static-semantic `E0202`–`E0208`), a
+capability scope `E0701`–`E0704`, static-semantic `E0202`–`E0209`), a
 default-on security stage refuses **22 security-violation codes,
 `E0710`–`E0731`**. Every one is opt-out with `--no-scope-check`, emits a
 structured, machine-readable diagnostic an agent fix-loop can act on, and
@@ -93,7 +93,7 @@ rather than implying parity:
 | effect composition (`E0801`) | compares against a **declared** `effects` clause; Python has none |
 | **taint** (`E0712`, `E0715`, `E0717`, `E0724`–`E0726`, `E0728`–`E0730`) | needs marker types on a signature; Python has no annotation-free equivalent |
 | **effect-string** (`E0710`, `E0721`, `E0722`) | reads the **declared** `net.fetch` annotation (fires only on a mapped call named `fetch`) |
-| static-semantic (`E0202`–`E0208`) | checks Aether constructs; on translated Python it would describe the translation |
+| static-semantic (`E0202`–`E0209`) | checks Aether constructs; on translated Python it would describe the translation |
 
 Findings on Python name Aether's sanitizers (`sqlBind`, `shellArg`,
 `safeRedirect`, …); the README's *What it checks on Python* section maps
@@ -149,9 +149,10 @@ none masks another.
   preconditions, TOCTOU, unbounded-resource DoS are parked until a clean
   static signal exists.
 - **Types** — names are resolved statically (`E0208`: a call to an
-  undeclared name, such as a misspelt sink, is refused), but there is no
-  type checker (`grammar/types.md`); a detector reads the shapes it
-  models, not types.
+  undeclared name, such as a misspelt sink, is refused), and an `Int`
+  meeting a `Float` is refused where both types are statically known
+  (`E0209`), but there is no type checker (`grammar/types.md`); a
+  detector reads the shapes it models, not types.
 - **Runtime vs static** — refinement and contract guarantees fire at
   runtime and are runtime guarantees, never presented as static proof.
 
