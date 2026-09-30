@@ -2617,7 +2617,7 @@ and `--min-confidence 0.9` hides these findings. The `bash -c` form keeps
 
 Both tests fail against the pre-fix code.
 
-### BUG-098  `.text(x)` on any receiver was a raw-SQL entry, so document builders fired E0713  [OPEN]
+### BUG-098  `.text(x)` on any receiver was a raw-SQL entry, so document builders fired E0713  [FIXED d18d2e2]
 test: tests/test_py_precision.py (`::test_bug098_text_needs_sql_evidence`)
 
 The one-argument `.text(x)` row (iteration 59, BUG-065) matched by method
@@ -2653,7 +2653,7 @@ Negative controls (all still E0713):
   `.filter(...)`;
 - `session.execute(DocumentBuilder().text(q))`.
 
-### BUG-099  a dict allowlist of literals was a dynamic expression  [OPEN]
+### BUG-099  a dict allowlist of literals was a dynamic expression  [FIXED d18d2e2]
 test: tests/test_py_precision.py (`::test_bug099_dict_allowlist_is_literal`)
 
 `order = {"a": "p.x ASC", "b": "p.x DESC"}.get(sort, "p.x ASC")`, then
@@ -2676,7 +2676,7 @@ Negative controls (all still E0713):
 - `f"... ORDER BY {sort}"` where `sort` is a parameter;
 - a sink call used as the lookup key.
 
-### BUG-100  a lambda parameter fed only literals was a parameter  [OPEN]
+### BUG-100  a lambda parameter fed only literals was a parameter  [FIXED d18d2e2]
 test: tests/test_py_precision.py (`::test_bug100_lambda_fed_only_literals`)
 
 `g = lambda sql: con.execute(sql)`, called only as
@@ -2705,7 +2705,7 @@ Negative controls (all still E0713):
 - the parameter name also bound to a function parameter;
 - a module-level `g` called as `g(x)` from a function.
 
-### BUG-101  a SQLAlchemy statement unpacked in a `for` loop was a for-target  [OPEN]
+### BUG-101  a SQLAlchemy statement unpacked in a `for` loop was a for-target  [FIXED d18d2e2]
 test: tests/test_py_precision.py (`::test_bug101_for_over_sqlalchemy_specs`)
 
 `delete_specs = (("a", delete(A).where(...)), ...)` followed by
