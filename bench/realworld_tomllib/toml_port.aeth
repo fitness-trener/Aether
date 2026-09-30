@@ -1,0 +1,1053 @@
+// expect: clean
+// TOML v1.0.0, written from the spec (https://toml.io/en/v1.0.0, and
+// toml.abnf at tag 1.0.0), not from tomllib's code, for a differential run
+// against CPython 3.11.15's tomllib.loads.
+//
+// In scope (sections of the v1.0.0 spec):
+//   Spec        whitespace is tab/space; newline is LF or CRLF
+//   Comment     control characters other than tab, and U+007F, are refused
+//               (the prose; the 1.0.0 ABNF `non-eol` admits U+007F)
+//   Key/Value   key, "=", value on one line; a newline or EOF after it
+//   Keys        bare A-Za-z0-9_- (non-empty), quoted (basic or literal,
+//               may be empty), dotted with whitespace around the dots;
+//               bare and quoted keys are equivalent; a key is defined
+//               once; a value cannot become a table
+//   String      basic (escapes \b \t \n \f \r \" \\ \uXXXX \UXXXXXXXX,
+//               the code point must be a Unicode scalar value, every other
+//               escape is reserved), multi-line basic (first newline
+//               trimmed, line ending backslash, 1-2 quotes inside the
+//               delimiters), literal, multi-line literal
+//   Integer     decimal with +/-, no leading zeros, "_" between digits;
+//               0x/0o/0b lowercase prefixes, no sign, leading zeros allowed
+//   Float       integer part + fraction and/or exponent (e or E, signed,
+//               zero-prefixable), "_" between digits, inf/nan with sign
+//   Boolean     true / false
+//   Table       [key]; a table is defined once; a table created by dotted
+//               keys cannot be redefined with [table]; dotted keys cannot
+//               add to a table defined with [table]; [table] may define
+//               sub-tables of a dotted-key table and super-tables of an
+//               implicitly created one
+// Out of scope, refused with an "out of scope" message: dates and times,
+// arrays, inline tables, arrays of tables.
+//
+// Where the spec leaves a choice:
+//   * Newlines inside multi-line strings are normalized to LF ("TOML
+//     parsers should feel free to normalize newline").
+//   * A bare CR inside a multi-line basic string is refused, as in the
+//     ABNF (`newline = LF / CRLF`); the String prose lists CR among the
+//     allowed characters.
+//   * Integers outside the 64-bit range are kept exactly (Aether Int is
+//     arbitrary precision): the spec asks for an error only when an
+//     integer "cannot be represented losslessly".
+//
+// Value representation: a float is kept exact as sign, decimal
+// significand and power of ten (value = num * 10^exp), or a special
+// ("inf"/"nan") with its sign. Rounding to binary64 is left to the
+// harness; the spec says floats "should be implemented as IEEE 754
+// binary64 values".
+
+record Entry do
+  path: List<String>
+  kind: String
+  num: Int
+  exp: Int
+  neg: Bool
+  special: String
+  flag: Bool
+  text: String
+end
+
+record Scan do
+  ok: Bool
+  pos: Int
+  text: String
+  err: String
+end
+
+record KeyScan do
+  ok: Bool
+  pos: Int
+  parts: List<String>
+  err: String
+end
+
+record ValScan do
+  ok: Bool
+  pos: Int
+  value: Entry
+  err: String
+end
+
+record Digits do
+  ok: Bool
+  pos: Int
+  value: Int
+  ndigits: Int
+  err: String
+end
+
+// ------------------------------------------------------------ helpers
+
+function blankEntry() returns Entry
+  effects pure
+do
+  return Entry([], "", 0, 0, false, "", false, "")
+end
+
+function scanOk(pos: Int, text: String) returns Scan
+  effects pure
+do
+  return Scan(true, pos, text, "")
+end
+
+function scanErr(msg: String) returns Scan
+  effects pure
+do
+  return Scan(false, 0, "", msg)
+end
+
+function valErr(msg: String) returns ValScan
+  effects pure
+do
+  return ValScan(false, 0, blankEntry(), msg)
+end
+
+function valOk(pos: Int, v: Entry) returns ValScan
+  effects pure
+do
+  return ValScan(true, pos, v, "")
+end
+
+function charAt(cs: List<String>, i: Int) returns String
+  effects pure
+do
+  return unwrapOrElse(get(cs, i), "")
+end
+
+function isWs(c: String) returns Bool
+  effects pure
+do
+  return c == " " or c == "\t"
+end
+
+// Spec: "Newline means LF (0x0A) or CRLF (0x0D 0x0A)." Returns its length.
+function newlineLen(cs: List<String>, i: Int) returns Int
+  effects pure
+  ensures result >= 0 and result <= 2
+do
+  let c = charAt(cs, i)
+  if c == "\n" then
+    return 1
+  end
+  // chr(13), not the "\r" literal: `fmt` prints that literal as a raw CR
+  // and then drops a comment line on its next pass (BUG-104).
+  if c == chr(13) and charAt(cs, i + 1) == "\n" then
+    return 2
+  end
+  return 0
+end
+
+function skipWs(cs: List<String>, i: Int) returns Int
+  effects pure
+  ensures result >= i
+do
+  var j = i
+  while isWs(charAt(cs, j)) do
+    j = j + 1
+  end
+  return j
+end
+
+function isSurrogate(o: Int) returns Bool
+  effects pure
+do
+  return o >= 55296 and o <= 57343
+end
+
+function isScalarValue(o: Int) returns Bool
+  effects pure
+do
+  return o >= 0 and o <= 1114111 and not isSurrogate(o)
+end
+
+// A character allowed as-is in a comment, a basic string or a literal
+// string: tab, U+0020..U+007E, and non-ASCII scalar values (ABNF
+// `non-ascii = %x80-D7FF / %xE000-10FFFF`). The quote and backslash
+// cases are handled by the callers before this is asked.
+function isPlainChar(c: String) returns Bool
+  effects pure
+do
+  if length(c) != 1 then
+    return false
+  end
+  let o = ord(c)
+  if o == 9 then
+    return true
+  end
+  if o < 32 or o == 127 then
+    return false
+  end
+  return not isSurrogate(o)
+end
+
+// Why isPlainChar refused c. A lone surrogate can only reach the port
+// through a host string that is not Unicode text ("A TOML file must be a
+// valid UTF-8 encoded Unicode document").
+function badChar(c: String, place: String) returns String
+  effects pure
+do
+  if length(c) == 1 and isSurrogate(ord(c)) then
+    return join(["input is not Unicode text: lone surrogate in ", place], "")
+  end
+  return join(["control character or newline in ", place], "")
+end
+
+function scalarOnly(s: String) returns Bool
+  effects pure
+do
+  for c in chars(s) do
+    if isSurrogate(ord(c)) then
+      return false
+    end
+  end
+  return true
+end
+
+// Value of an ASCII digit in the given radix, -1 otherwise. Hex digits
+// are case-insensitive (ABNF HEXDIG, RFC 5234; Integer: "Hex values are
+// case-insensitive").
+function digitVal(c: String, radix: Int) returns Int
+  effects pure
+  ensures result >= 0 - 1 and result < radix
+do
+  if length(c) != 1 then
+    return 0 - 1
+  end
+  let o = ord(c)
+  var v = 0 - 1
+  if o >= 48 and o <= 57 then
+    v = o - 48
+  elif o >= 97 and o <= 102 then
+    v = o - 87
+  elif o >= 65 and o <= 70 then
+    v = o - 55
+  end
+  if v >= radix then
+    return 0 - 1
+  end
+  return v
+end
+
+// Keys: "Bare keys may only contain ASCII letters, ASCII digits,
+// underscores, and dashes (A-Za-z0-9_-)."
+function isBareKeyChar(c: String) returns Bool
+  effects pure
+do
+  if length(c) != 1 then
+    return false
+  end
+  let o = ord(c)
+  return (o >= 65 and o <= 90) or (o >= 97 and o <= 122) or (o >= 48 and o <= 57) or o == 45 or o == 95
+end
+
+function pow10(k: Int) returns Int
+  effects pure
+  requires k >= 0
+  ensures result >= 1
+do
+  var r = 1
+  var i = 0
+  while i < k do
+    r = r * 10
+    i = i + 1
+  end
+  return r
+end
+
+// ------------------------------------------------------------ comments
+
+function scanComment(cs: List<String>, i: Int) returns Scan
+  effects pure
+  requires charAt(cs, i) == "#"
+do
+  var j = i + 1
+  while true do
+    let c = charAt(cs, j)
+    if c == "" or newlineLen(cs, j) > 0 then
+      return scanOk(j, "")
+    end
+    if not isPlainChar(c) then
+      return scanErr(badChar(c, "a comment"))
+    end
+    j = j + 1
+  end
+  return scanErr("unreachable")
+end
+
+// ------------------------------------------------------------ strings
+
+// At a backslash. Single-line and multi-line basic strings share the
+// escapes; only multi-line strings have the line ending backslash
+// (ABNF mlb-escaped-nl = escape ws newline *( wschar / newline )).
+function scanEscape(cs: List<String>, i: Int, multiline: Bool) returns Scan
+  effects pure
+  requires charAt(cs, i) == "\\"
+  ensures (not result.ok) or scalarOnly(result.text)
+do
+  let e = charAt(cs, i + 1)
+  if e == "b" then
+    return scanOk(i + 2, chr(8))
+  elif e == "t" then
+    return scanOk(i + 2, chr(9))
+  elif e == "n" then
+    return scanOk(i + 2, chr(10))
+  elif e == "f" then
+    return scanOk(i + 2, chr(12))
+  elif e == "r" then
+    return scanOk(i + 2, chr(13))
+  elif e == "\"" then
+    return scanOk(i + 2, "\"")
+  elif e == "\\" then
+    return scanOk(i + 2, "\\")
+  elif e == "u" or e == "U" then
+    var width = 4
+    if e == "U" then
+      width = 8
+    end
+    var v = 0
+    var k = 0
+    while k < width do
+      let d = digitVal(charAt(cs, i + 2 + k), 16)
+      if d < 0 then
+        return scanErr("\\u needs 4 and \\U needs 8 hex digits")
+      end
+      v = v * 16 + d
+      k = k + 1
+    end
+    // "The escape codes must be valid Unicode scalar values."
+    if not isScalarValue(v) then
+      return scanErr("escaped code point is not a Unicode scalar value")
+    end
+    return scanOk(i + 2 + width, chr(v))
+  end
+  if multiline and (isWs(e) or newlineLen(cs, i + 1) > 0) then
+    var j = skipWs(cs, i + 1)
+    let nl = newlineLen(cs, j)
+    if nl == 0 then
+      return scanErr("a line ending backslash must be followed by a newline")
+    end
+    j = j + nl
+    var moving = true
+    while moving do
+      if isWs(charAt(cs, j)) then
+        j = j + 1
+      elif newlineLen(cs, j) > 0 then
+        j = j + newlineLen(cs, j)
+      else
+        moving = false
+      end
+    end
+    return scanOk(j, "")
+  end
+  // "All other escape sequences not listed above are reserved"
+  return scanErr("reserved escape sequence")
+end
+
+function scanBasic(cs: List<String>, i: Int) returns Scan
+  effects pure
+  requires charAt(cs, i) == "\""
+do
+  var j = i + 1
+  var parts = []
+  while true do
+    let c = charAt(cs, j)
+    if c == "" then
+      return scanErr("unterminated basic string")
+    end
+    if c == "\"" then
+      return scanOk(j + 1, join(parts, ""))
+    end
+    if c == "\\" then
+      let s = scanEscape(cs, j, false)
+      if not s.ok then
+        return s
+      end
+      parts = append(parts, s.text)
+      j = s.pos
+    elif isPlainChar(c) then
+      parts = append(parts, c)
+      j = j + 1
+    else
+      return scanErr(badChar(c, "a basic string"))
+    end
+  end
+  return scanErr("unreachable")
+end
+
+function scanLiteral(cs: List<String>, i: Int) returns Scan
+  effects pure
+  requires charAt(cs, i) == "'"
+do
+  var j = i + 1
+  var parts = []
+  while true do
+    let c = charAt(cs, j)
+    if c == "" then
+      return scanErr("unterminated literal string")
+    end
+    if c == "'" then
+      return scanOk(j + 1, join(parts, ""))
+    end
+    if not isPlainChar(c) then
+      return scanErr(badChar(c, "a literal string"))
+    end
+    parts = append(parts, c)
+    j = j + 1
+  end
+  return scanErr("unreachable")
+end
+
+function quoteRun(cs: List<String>, i: Int, q: String) returns Int
+  effects pure
+  ensures result >= 0
+do
+  var k = 0
+  while charAt(cs, i + k) == q do
+    k = k + 1
+  end
+  return k
+end
+
+// Multi-line basic and literal strings. A newline right after the
+// opening delimiter is trimmed; one or two quotes may sit anywhere inside,
+// including just inside the closing delimiter (ml-basic-body /
+// ml-literal-body). A run of q >= 3 quotes ends the string, keeping
+// min(q - 3, 2) of them; more than 5 leaves quotes after the string,
+// which the statement check then refuses.
+function scanMultiline(cs: List<String>, i: Int, q: String) returns Scan
+  effects pure
+  requires quoteRun(cs, i, q) >= 3
+do
+  var j = i + 3
+  j = j + newlineLen(cs, j)
+  var parts = []
+  while true do
+    let c = charAt(cs, j)
+    if c == "" then
+      return scanErr("unterminated multi-line string")
+    end
+    if c == q then
+      let run = quoteRun(cs, j, q)
+      if run >= 3 then
+        let extra = min(run - 3, 2)
+        return scanOk(j + 3 + extra, join(append(parts, repeat(q, extra)), ""))
+      end
+      parts = append(parts, repeat(q, run))
+      j = j + run
+    elif c == "\\" and q == "\"" then
+      let s = scanEscape(cs, j, true)
+      if not s.ok then
+        return s
+      end
+      parts = append(parts, s.text)
+      j = s.pos
+    else
+      let nl = newlineLen(cs, j)
+      if nl > 0 then
+        parts = append(parts, "\n")
+        j = j + nl
+      elif isPlainChar(c) then
+        parts = append(parts, c)
+        j = j + 1
+      else
+        return scanErr(badChar(c, "a multi-line string"))
+      end
+    end
+  end
+  return scanErr("unreachable")
+end
+
+// ------------------------------------------------------------ keys
+
+function scanKey(cs: List<String>, i: Int) returns KeyScan
+  effects pure
+  ensures (not result.ok) or length(result.parts) >= 1
+do
+  var j = i
+  var parts = []
+  while true do
+    let c = charAt(cs, j)
+    if isBareKeyChar(c) then
+      var buf = []
+      while isBareKeyChar(charAt(cs, j)) do
+        buf = append(buf, charAt(cs, j))
+        j = j + 1
+      end
+      parts = append(parts, join(buf, ""))
+    elif c == "\"" then
+      let s = scanBasic(cs, j)
+      if not s.ok then
+        return KeyScan(false, 0, [], s.err)
+      end
+      parts = append(parts, s.text)
+      j = s.pos
+    elif c == "'" then
+      let s = scanLiteral(cs, j)
+      if not s.ok then
+        return KeyScan(false, 0, [], s.err)
+      end
+      parts = append(parts, s.text)
+      j = s.pos
+    else
+      return KeyScan(false, 0, [], "expected a key")
+    end
+    j = skipWs(cs, j)
+    if charAt(cs, j) != "." then
+      return KeyScan(true, j, parts, "")
+    end
+    j = skipWs(cs, j + 1)
+  end
+  return KeyScan(false, 0, [], "unreachable")
+end
+
+// ------------------------------------------------------------ numbers
+
+// One or more digits of the radix, "_" only between two digits
+// (Integer: "Each underscore must be surrounded by at least one digit on
+// each side").
+function scanDigits(cs: List<String>, i: Int, radix: Int) returns Digits
+  effects pure
+  requires radix == 2 or radix == 8 or radix == 10 or radix == 16
+  ensures (not result.ok) or (result.ndigits >= 1 and result.value >= 0)
+do
+  var j = i
+  var v = 0
+  var nd = 0
+  if digitVal(charAt(cs, j), radix) < 0 then
+    return Digits(false, 0, 0, 0, "invalid value")
+  end
+  while true do
+    let d = digitVal(charAt(cs, j), radix)
+    if d >= 0 then
+      v = v * radix + d
+      nd = nd + 1
+      j = j + 1
+    elif charAt(cs, j) == "_" then
+      if digitVal(charAt(cs, j + 1), radix) < 0 then
+        return Digits(false, 0, 0, 0, "an underscore must sit between two digits")
+      end
+      j = j + 1
+    else
+      return Digits(true, j, v, nd, "")
+    end
+  end
+  return Digits(false, 0, 0, 0, "unreachable")
+end
+
+function scanNumber(cs: List<String>, i: Int) returns ValScan
+  effects pure
+  ensures (not result.ok) or result.value.kind == "int" or result.value.kind == "float"
+do
+  var j = i
+  var neg = false
+  var signed = false
+  let c0 = charAt(cs, j)
+  if c0 == "+" or c0 == "-" then
+    neg = c0 == "-"
+    signed = true
+    j = j + 1
+  end
+  // special-float = [ minus / plus ] ( inf / nan ), always lowercase
+  let w = join([charAt(cs, j), charAt(cs, j + 1), charAt(cs, j + 2)], "")
+  if w == "inf" or w == "nan" then
+    return valOk(j + 3, Entry([], "float", 0, 0, neg, w, false, ""))
+  end
+  // "In these formats, leading + is not allowed and leading zeros are
+  // allowed (after the prefix)." The prefixes are lowercase in the ABNF.
+  if not signed and charAt(cs, j) == "0" then
+    let p = charAt(cs, j + 1)
+    var radix = 0
+    if p == "x" then
+      radix = 16
+    elif p == "o" then
+      radix = 8
+    elif p == "b" then
+      radix = 2
+    end
+    if radix > 0 then
+      let pd = scanDigits(cs, j + 2, radix)
+      if not pd.ok then
+        return valErr(pd.err)
+      end
+      return valOk(pd.pos, Entry([], "int", pd.value, 0, false, "", false, ""))
+    end
+  end
+  let ip = scanDigits(cs, j, 10)
+  if not ip.ok then
+    return valErr(ip.err)
+  end
+  if not signed and ip.pos == j + 4 and charAt(cs, ip.pos) == "-" then
+    return valErr("out of scope: dates")
+  end
+  if not signed and ip.pos == j + 2 and charAt(cs, ip.pos) == ":" then
+    return valErr("out of scope: times")
+  end
+  // "Leading zeros are not allowed."
+  if charAt(cs, j) == "0" and ip.ndigits > 1 then
+    return valErr("leading zeros are not allowed")
+  end
+  var k = ip.pos
+  var sig = ip.value
+  var fracDigits = 0
+  var isFloat = false
+  // "A fractional part is a decimal point followed by one or more digits."
+  if charAt(cs, k) == "." then
+    let fp = scanDigits(cs, k + 1, 10)
+    if not fp.ok then
+      return valErr("a decimal point must be surrounded by digits")
+    end
+    sig = sig * pow10(fp.ndigits) + fp.value
+    fracDigits = fp.ndigits
+    k = fp.pos
+    isFloat = true
+  end
+  // "An exponent part is an E (upper or lower case) followed by an integer
+  // part (which follows the same rules as decimal integer values but may
+  // include leading zeros)."
+  let ec = charAt(cs, k)
+  var e10 = 0
+  if ec == "e" or ec == "E" then
+    var m = k + 1
+    var eneg = false
+    let es = charAt(cs, m)
+    if es == "+" or es == "-" then
+      eneg = es == "-"
+      m = m + 1
+    end
+    let xp = scanDigits(cs, m, 10)
+    if not xp.ok then
+      return valErr("an exponent needs digits")
+    end
+    e10 = xp.value
+    if eneg then
+      e10 = 0 - e10
+    end
+    k = xp.pos
+    isFloat = true
+  end
+  if isFloat then
+    return valOk(k, Entry([], "float", sig, e10 - fracDigits, neg, "", false, ""))
+  end
+  var v = ip.value
+  if neg then
+    v = 0 - v
+  end
+  return valOk(k, Entry([], "int", v, 0, false, "", false, ""))
+end
+
+// ------------------------------------------------------------ values
+
+function stringValue(s: Scan) returns ValScan
+  effects pure
+do
+  if not s.ok then
+    return valErr(s.err)
+  end
+  return valOk(s.pos, Entry([], "string", 0, 0, false, "", false, s.text))
+end
+
+function scanValue(cs: List<String>, i: Int) returns ValScan
+  effects pure
+do
+  let c = charAt(cs, i)
+  if c == "\"" then
+    if quoteRun(cs, i, "\"") >= 3 then
+      return stringValue(scanMultiline(cs, i, "\""))
+    end
+    return stringValue(scanBasic(cs, i))
+  elif c == "'" then
+    if quoteRun(cs, i, "'") >= 3 then
+      return stringValue(scanMultiline(cs, i, "'"))
+    end
+    return stringValue(scanLiteral(cs, i))
+  elif c == "t" then
+    if join([c, charAt(cs, i + 1), charAt(cs, i + 2), charAt(cs, i + 3)], "") == "true" then
+      return valOk(i + 4, Entry([], "bool", 0, 0, false, "", true, ""))
+    end
+    return valErr("invalid value")
+  elif c == "f" then
+    if join([c, charAt(cs, i + 1), charAt(cs, i + 2), charAt(cs, i + 3), charAt(cs, i + 4)], "") == "false" then
+      return valOk(i + 5, Entry([], "bool", 0, 0, false, "", false, ""))
+    end
+    return valErr("invalid value")
+  elif c == "[" or c == "{" then
+    return valErr("out of scope: arrays and inline tables")
+  elif c == "" then
+    return valErr("a key/value pair needs a value")
+  end
+  return scanNumber(cs, i)
+end
+
+// ------------------------------------------------------------ canonical text
+
+function hexDigit(d: Int) returns String
+  effects pure
+  requires d >= 0 and d < 16
+do
+  return charAt(chars("0123456789ABCDEF"), d)
+end
+
+function quoteBasic(s: String) returns String
+  effects pure
+do
+  var parts = ["\""]
+  for c in chars(s) do
+    let o = ord(c)
+    if c == "\"" then
+      parts = append(parts, "\\\"")
+    elif c == "\\" then
+      parts = append(parts, "\\\\")
+    elif o < 32 or o == 127 then
+      parts = append(parts, join(["\\u00", hexDigit(o / 16), hexDigit(o % 16)], ""))
+    else
+      parts = append(parts, c)
+    end
+  end
+  return join(append(parts, "\""), "")
+end
+
+function pathKey(path: List<String>) returns String
+  effects pure
+do
+  var parts = []
+  for p in path do
+    parts = append(parts, quoteBasic(p))
+  end
+  return join(parts, ".")
+end
+
+function signText(neg: Bool) returns String
+  effects pure
+do
+  if neg then
+    return "-"
+  end
+  return ""
+end
+
+// Canonical TOML text of a value. Floats are written as significand and
+// exponent ("-15e-1"), which keeps them exact and keeps -0.0 negative.
+function encodeValue(e: Entry) returns String
+  effects pure
+do
+  if e.kind == "int" then
+    return intToString(e.num)
+  elif e.kind == "bool" then
+    if e.flag then
+      return "true"
+    end
+    return "false"
+  elif e.kind == "string" then
+    return quoteBasic(e.text)
+  elif e.special != "" then
+    return join([signText(e.neg), e.special], "")
+  end
+  return join([signText(e.neg), intToString(e.num), "e", intToString(e.exp)], "")
+end
+
+// The same value, independent of how its digits were spelled: 1.50,
+// 15e-1 and 150e-2 all compare equal.
+function valueKey(e: Entry) returns String
+  effects pure
+do
+  if e.kind == "float" and e.special == "" then
+    var num = e.num
+    var x = e.exp
+    if num == 0 then
+      x = 0
+    end
+    while num != 0 and num % 10 == 0 do
+      num = num / 10
+      x = x + 1
+    end
+    return join([signText(e.neg), intToString(num), "e", intToString(x)], "")
+  end
+  return encodeValue(e)
+end
+
+function entryKey(e: Entry) returns String
+  effects pure
+do
+  return join([pathKey(e.path), e.kind, valueKey(e)], " ")
+end
+
+function sameDoc(a: List<Entry>, b: List<Entry>) returns Bool
+  effects pure
+do
+  var ka = []
+  for e in a do
+    ka = append(ka, entryKey(e))
+  end
+  var kb = []
+  for e in b do
+    kb = append(kb, entryKey(e))
+  end
+  return join(sort(ka), "\n") == join(sort(kb), "\n")
+end
+
+// ------------------------------------------------------------ document invariants
+
+function isPrefix(p: List<String>, q: List<String>) returns Bool
+  effects pure
+do
+  if length(p) >= length(q) then
+    return false
+  end
+  return pathKey(p) == pathKey(take(q, length(p)))
+end
+
+function hasChild(es: List<Entry>, p: List<String>) returns Bool
+  effects pure
+do
+  for e in es do
+    if isPrefix(p, e.path) then
+      return true
+    end
+  end
+  return false
+end
+
+// What a parsed document must satisfy, from the spec: every path is
+// defined once ("Defining a key multiple times is invalid"), a value is
+// never also a table ("You can't turn an integer into a table"), and all
+// text is Unicode scalar values.
+function wellFormed(es: List<Entry>) returns Bool
+  effects pure
+do
+  var seen = {}
+  for e in es do
+    if length(e.path) == 0 then
+      return false
+    end
+    let k = pathKey(e.path)
+    if has?(seen, k) then
+      return false
+    end
+    seen = set(seen, k, true)
+    for p in e.path do
+      if not scalarOnly(p) then
+        return false
+      end
+    end
+    if e.kind == "string" and not scalarOnly(e.text) then
+      return false
+    end
+    if e.kind == "float" and e.num < 0 then
+      return false
+    end
+    if e.kind != "table" and hasChild(es, e.path) then
+      return false
+    end
+  end
+  return true
+end
+
+// ------------------------------------------------------------ documents
+
+function entryAt(v: Entry, path: List<String>) returns Entry
+  effects pure
+do
+  return Entry(path, v.kind, v.num, v.exp, v.neg, v.special, v.flag, v.text)
+end
+
+function tableEntry(path: List<String>) returns Entry
+  effects pure
+do
+  return Entry(path, "table", 0, 0, false, "", false, "")
+end
+
+// After a statement: optional whitespace and comment, then a newline or
+// the end of the document. Returns the position after the newline, or -1.
+function endOfStatement(cs: List<String>, i: Int) returns Scan
+  effects pure
+do
+  var j = skipWs(cs, i)
+  if charAt(cs, j) == "#" then
+    let cm = scanComment(cs, j)
+    if not cm.ok then
+      return cm
+    end
+    j = cm.pos
+  end
+  if charAt(cs, j) == "" then
+    return scanOk(j, "")
+  end
+  let nl = newlineLen(cs, j)
+  if nl == 0 then
+    return scanErr("expected a newline or end of document after a statement")
+  end
+  return scanOk(j + nl, "")
+end
+
+// The table state of each path (by pathKey):
+//   "leaf"     holds a value
+//   "header"   defined with [table]
+//   "implicit" created as a parent in a [table] header, not yet defined
+//   "dotted"   created or defined through dotted keys
+function parseToml(src: String) returns Result<List<Entry>, String>
+  effects pure
+  ensures wellFormed(unwrapOr(result, []))
+do
+  let cs = chars(src)
+  let n = length(cs)
+  var i = 0
+  var current = []
+  var state = {}
+  var tables = {}
+  var leaves = []
+  while i < n do
+    i = skipWs(cs, i)
+    let c = charAt(cs, i)
+    if c == "" then
+      break
+    end
+    if newlineLen(cs, i) > 0 then
+      i = i + newlineLen(cs, i)
+      continue
+    end
+    var after = i
+    if c == "#" then
+      after = i
+    elif c == "[" then
+      if charAt(cs, i + 1) == "[" then
+        return Err("out of scope: arrays of tables")
+      end
+      let ks = scanKey(cs, skipWs(cs, i + 1))
+      if not ks.ok then
+        return Err(ks.err)
+      end
+      if charAt(cs, ks.pos) != "]" then
+        return Err("expected ] after a table header key")
+      end
+      let path = ks.parts
+      var k = 1
+      while k < length(path) do
+        let a = take(path, k)
+        let ak = pathKey(a)
+        let st = unwrapOrElse(get(state, ak), "")
+        if st == "leaf" then
+          return Err("a table header goes through a key that holds a value")
+        end
+        if st == "" then
+          state = set(state, ak, "implicit")
+          tables = set(tables, ak, a)
+        end
+        k = k + 1
+      end
+      let pk = pathKey(path)
+      let st = unwrapOrElse(get(state, pk), "")
+      if st == "leaf" then
+        return Err("a table header names a key that holds a value")
+      elif st == "header" then
+        return Err("a table cannot be defined more than once")
+      elif st == "dotted" then
+        return Err("a table defined by dotted keys cannot be redefined with [table]")
+      end
+      state = set(state, pk, "header")
+      tables = set(tables, pk, path)
+      current = path
+      after = ks.pos + 1
+    elif isBareKeyChar(c) or c == "\"" or c == "'" then
+      let ks = scanKey(cs, i)
+      if not ks.ok then
+        return Err(ks.err)
+      end
+      if charAt(cs, ks.pos) != "=" then
+        return Err("expected = after a key")
+      end
+      let vs = scanValue(cs, skipWs(cs, ks.pos + 1))
+      if not vs.ok then
+        return Err(vs.err)
+      end
+      let full = concat(current, ks.parts)
+      var k = length(current) + 1
+      while k < length(full) do
+        let a = take(full, k)
+        let ak = pathKey(a)
+        let st = unwrapOrElse(get(state, ak), "")
+        if st == "leaf" then
+          return Err("a dotted key goes through a key that holds a value")
+        elif st == "header" then
+          return Err("dotted keys cannot add to a table defined with [table]")
+        elif st == "" or st == "implicit" then
+          state = set(state, ak, "dotted")
+          tables = set(tables, ak, a)
+        end
+        k = k + 1
+      end
+      let fk = pathKey(full)
+      if unwrapOrElse(get(state, fk), "") != "" then
+        return Err("a key cannot be defined more than once")
+      end
+      state = set(state, fk, "leaf")
+      leaves = append(leaves, entryAt(vs.value, full))
+      after = vs.pos
+    else
+      return Err("invalid statement")
+    end
+    let eos = endOfStatement(cs, after)
+    if not eos.ok then
+      return Err(eos.err)
+    end
+    i = eos.pos
+  end
+  var out = leaves
+  for p in values(tables) do
+    out = append(out, tableEntry(p))
+  end
+  return Ok(out)
+end
+
+function invalidDoc() returns List<Entry>
+  effects pure
+do
+  return [tableEntry([])]
+end
+
+// Canonical document: every value as a quoted dotted key at the root,
+// then a [table] header for each empty table. The ensures clause is the
+// round-trip law: parsing the encoding gives back the same document.
+function encodeToml(es: List<Entry>) returns String
+  effects pure
+  requires wellFormed(es)
+  ensures sameDoc(unwrapOr(parseToml(result), invalidDoc()), es)
+do
+  var lines = []
+  for e in es do
+    if e.kind != "table" then
+      lines = append(lines, join([pathKey(e.path), " = ", encodeValue(e)], ""))
+    end
+  end
+  for e in es do
+    if e.kind == "table" and not hasChild(es, e.path) then
+      lines = append(lines, join(["[", pathKey(e.path), "]"], ""))
+    end
+  end
+  return join(append(lines, ""), "\n")
+end
+
+function main() returns Unit
+  effects log
+do
+  let docs = ["a.b = 1\n[a.c]\nx = 0x_1", "a = 0x1F\nb = -0.0\nc = 1e1_0", "s = \"\\uD800\"", "[t]\nx.y = 1\n[t.x]", "k = \"\"\"\nq\"\"\"\"\"", "n = 1_000\nf = -inf"]
+  for d in docs do
+    match parseToml(d) do
+      case Ok(es) do
+        print(encodeToml(es))
+      end
+      case Err(msg) do
+        print(join(["rejected: ", msg], ""))
+      end
+    end
+  end
+end
