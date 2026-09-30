@@ -179,6 +179,12 @@ is added.
   E0201 (BUG-083..085).
 - E0801 is reported at the offending call, not the function (BUG-082).
 - `remove` on a `Set` works (BUG-050).
+- **Behaviour change:** `parseInt` accepts exactly the ASCII grammar
+  `-?[0-9]+`. Surrounding whitespace, `+`, `_` and non-ASCII digits used
+  to parse, because `int()` accepts them; they are now `Err`. `parseInt`
+  and `intToString` also round-trip an `Int` of any length, past CPython's
+  4300-digit guard, as the arbitrary-precision `Int` of `grammar/types.md`
+  requires (BUG-102).
 
 ### Fix-loop and tool surfaces
 

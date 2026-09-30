@@ -232,6 +232,13 @@ There is no `Set` literal; a `Set` value comes from `setUnion` /
     function intToString(n: Int) returns String
       effects pure
 
+`parseInt` accepts exactly the ASCII decimal grammar `-?[0-9]+`: an
+optional leading `-`, then one or more digits `0`-`9`; leading zeros are
+allowed. Surrounding whitespace, a leading `+`, `_` separators and
+non-ASCII digits are `Err`. Neither `parseInt` nor `intToString` has a size
+limit: `Int` is arbitrary-precision (`types.md`), and a value longer than
+CPython's 4300-digit `int_max_str_digits` guard round-trips (BUG-102).
+
 ## IO
 
     function print(s: String) returns Unit

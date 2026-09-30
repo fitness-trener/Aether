@@ -2728,7 +2728,9 @@ Negative controls (all still E0713):
 - the target rebound to input after the loop.
 
 ### BUG-102  `parseInt`/`intToString` inherit CPython's `int()` grammar and 4300-digit limit, though `Int` is specified arbitrary-precision  [OPEN]
-test: none yet
+test: tests/test_int_strings.py
+(`::test_parse_int_accepts_ascii_decimal_only`,
+`::test_long_ints_round_trip_past_the_cpython_digit_guard`)
 
 Found 2026-09-30 while porting SemVer 2.0.0 for the semver differential
 (`bench/realworld_semver/`). The first three lines below were re-run by
@@ -2761,7 +2763,15 @@ accepts nor any size bound.
 - A program that prints a large but valid `Int` crashes with no structured
   diagnostic.
 
-**Fix direction** (not done; tightening `parseInt` changes behaviour):
+**Fixed 2026-09-30 at the owner's request.** `_ae_parseInt` accepts
+exactly ASCII `-?[0-9]+` (leading zeros allowed) and converts values
+longer than 4000 digits in chunks. `_ae_intToString` falls back to chunked
+conversion when `str()` hits the guard. `grammar/stdlib.md` states the
+grammar. Both tests fail against the pre-fix runtime. The in-repo corpus
+and the gate are unchanged (51 PASS). This is a behaviour change: a caller
+that relied on `parseInt(" 12 ")` now gets `Err`.
+
+**The original fix direction:**
 - Specify and enforce `parseInt` as ASCII `-?[0-9]+`.
 - In both functions, either lift the digit limit or fail with `E0305`
   (stdlib precondition violation, already in `grammar/diagnostics.md`)

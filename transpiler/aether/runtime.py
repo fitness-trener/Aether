@@ -326,11 +326,29 @@ def _ae_replace(s, frm, to):           return s.replace(frm, to)
 def _ae_startsWith__q(s, prefix):       return s.startswith(prefix)
 def _ae_endsWith__q(s, suffix):         return s.endswith(suffix)
 
+# `parseInt` / `intToString` follow Aether's spec, not Python's `int()`
+# (BUG-102): the grammar is ASCII `-?[0-9]+` — no surrounding whitespace,
+# `_`, leading `+` or non-ASCII digits, which `int()` all accepts — and an
+# Int is arbitrary-precision (`grammar/types.md`), so CPython's
+# `int_max_str_digits` guard (4300 digits) must not leak through. Long
+# values are converted in chunks well under the guard.
+_INT_LITERAL = re.compile(r"-?[0-9]+\Z")
+_INT_CHUNK = 4000
+
+
 def _ae_parseInt(s):
-    try:
-        return _ae_Ok(int(s))
-    except (ValueError, TypeError):
+    if not isinstance(s, str) or not _INT_LITERAL.match(s):
         return _ae_Err(f"could not parse Int: {s!r}")
+    neg = s.startswith("-")
+    digits = s[1:] if neg else s
+    if len(digits) <= _INT_CHUNK:
+        n = int(digits)
+    else:
+        n = 0
+        for i in range(0, len(digits), _INT_CHUNK):
+            chunk = digits[i:i + _INT_CHUNK]
+            n = n * 10 ** len(chunk) + int(chunk)
+    return _ae_Ok(-n if neg else n)
 
 def _ae_parseFloat(s):
     try:
@@ -338,7 +356,20 @@ def _ae_parseFloat(s):
     except (ValueError, TypeError):
         return _ae_Err(f"could not parse Float: {s!r}")
 
-def _ae_intToString(n):                return str(n)
+def _ae_intToString(n):
+    try:
+        return str(n)
+    except ValueError:              # past CPython's int_max_str_digits (BUG-102)
+        pass
+    neg = n < 0
+    m = -n if neg else n
+    base = 10 ** _INT_CHUNK
+    parts = []
+    while m:
+        m, r = divmod(m, base)
+        parts.append(r)
+    text = str(parts[-1]) + "".join(str(p).zfill(_INT_CHUNK) for p in reversed(parts[:-1]))
+    return "-" + text if neg else text
 
 
 # ----------------------------------------------------------------------
