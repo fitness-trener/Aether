@@ -1,0 +1,646 @@
+// expect: clean
+// RFC 5545 recurrence expansion (RECUR, §3.3.10; RRULE, §3.8.5.3), written
+// from the RFC text, not from dateutil's code, for a differential run
+// against python-dateutil 2.9.0.post0 `dateutil.rrule`.
+//
+// Subset: FREQ in {YEARLY, MONTHLY, WEEKLY, DAILY}; INTERVAL; COUNT or
+// UNTIL (never both, §3.3.10 grammar comment); BYMONTH; BYMONTHDAY
+// (1..31, -31..-1); BYDAY with ordinals (only for MONTHLY/YEARLY, §3.3.10
+// "MUST NOT be specified with a numeric value when the FREQ rule part is
+// not set to MONTHLY or YEARLY"); BYSETPOS; WKST. Naive calendar dates only:
+// no times, no time zones, no BYYEARDAY/BYWEEKNO/BYHOUR/BYMINUTE/BYSECOND.
+//
+// Dates are exact Int year/month/day in the proleptic Gregorian calendar.
+// FREQ numbering follows dateutil (0 YEARLY, 1 MONTHLY, 2 WEEKLY, 3 DAILY);
+// weekdays are 0 = MO .. 6 = SU. An occurrence is returned as the key
+// y*10000 + m*100 + d, so keys order the same way as dates.
+//
+// Semantics, each clause from §3.3.10 unless stated:
+// - The set of one period is the FREQ/INTERVAL period, expanded or limited
+//   by the BYxxx parts per the expand/limit table: BYMONTH expands YEARLY and
+//   limits the rest; BYMONTHDAY expands YEARLY and MONTHLY and limits DAILY;
+//   BYDAY expands WEEKLY, limits DAILY, and for MONTHLY/YEARLY follows
+//   Note 1 / Note 2 (limit if BYMONTHDAY is present, otherwise a special
+//   expand within the month, or within the year when YEARLY has no BYMONTH).
+// - A BYDAY ordinal counts within the month, or within the year for YEARLY
+//   without BYMONTH ("corresponds to an offset within the month when the
+//   BYMONTH rule part is present").
+// - A part the rule lacks is taken from DTSTART ("Information, not
+//   contained in the rule ... derived from ... DTSTART"): the month and day
+//   for YEARLY, the day for MONTHLY, the weekday for WEEKLY, when no
+//   BYMONTHDAY/BYDAY says otherwise.
+// - Invalid dates (February 30, BYMONTHDAY=31 in a 30-day month) are
+//   ignored and not counted.
+// - BYSETPOS picks the nth member of one period's sorted set; the set
+//   "starts at the beginning of the interval defined by the FREQ rule part",
+//   so a WEEKLY set is the whole WKST-aligned week, even the first one.
+// - Then instances before DTSTART are dropped, and COUNT/UNTIL bound the rest
+//   (UNTIL inclusive).
+// - DTSTART "defines the first instance" when it is synchronized with the
+//   rule (§3.8.5.3). For an unsynchronized DTSTART the recurrence set is
+//   undefined (§3.8.5.3); this port then returns only rule instances on or
+//   after DTSTART and does not inject DTSTART.
+
+record Ymd do
+  y: Int
+  m: Int
+  d: Int
+end
+
+record Rule do
+  freq: Int
+  startY: Int
+  startM: Int
+  startD: Int
+  interval: Int
+  count: Int
+  untilKey: Int
+  byMonth: List<Int>
+  byMonthDay: List<Int>
+  byDayWd: List<Int>
+  byDayN: List<Int>
+  bySetPos: List<Int>
+  wkst: Int
+end
+
+// ------------------------------------------------------------ calendar
+
+function isLeap(y: Int) returns Bool
+  effects pure
+do
+  return (y % 4 == 0 and y % 100 != 0) or y % 400 == 0
+end
+
+function yearLength(y: Int) returns Int
+  effects pure
+  ensures result == 365 or result == 366
+do
+  if isLeap(y) then
+    return 366
+  end
+  return 365
+end
+
+function monthLength(y: Int, m: Int) returns Int
+  effects pure
+  requires m >= 1 and m <= 12
+  ensures result >= 28 and result <= 31
+do
+  if m == 2 then
+    if isLeap(y) then
+      return 29
+    end
+    return 28
+  end
+  if m == 4 or m == 6 or m == 9 or m == 11 then
+    return 30
+  end
+  return 31
+end
+
+function validDate(y: Int, m: Int, d: Int) returns Bool
+  effects pure
+do
+  return y >= 1 and y <= 9999 and m >= 1 and m <= 12 and d >= 1 and d <= monthLength(y, m)
+end
+
+function daysBeforeMonth(y: Int, m: Int) returns Int
+  effects pure
+  requires m >= 1 and m <= 12
+  ensures result >= 0 and result <= 335
+do
+  let t = unwrapOrElse(get([0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334], m - 1), 0)
+  if m > 2 and isLeap(y) then
+    return t + 1
+  end
+  return t
+end
+
+// Day number of January 1 of year y, with 0001-01-01 = 1. Every operand
+// of / is non-negative.
+function yearStart(y: Int) returns Int
+  effects pure
+  requires y >= 1
+  ensures result >= 1
+do
+  let p = y - 1
+  return 365 * p + p / 4 - p / 100 + p / 400 + 1
+end
+
+function ordinal(y: Int, m: Int, d: Int) returns Int
+  effects pure
+  requires validDate(y, m, d)
+  ensures result >= 1
+do
+  return yearStart(y) + daysBeforeMonth(y, m) + d - 1
+end
+
+// 0 = Monday. 0001-01-01 (day 1) is a Monday in the proleptic calendar.
+function weekdayOf(n: Int) returns Int
+  effects pure
+  requires n >= 1
+  ensures result >= 0 and result <= 6
+do
+  return (n + 6) % 7
+end
+
+function fromOrdinal(n: Int) returns Ymd
+  effects pure
+  requires n >= 1
+  ensures ordinal(result.y, result.m, result.d) == n
+do
+  // 146097 days per 400 years; the estimate is then corrected both ways
+  var y = max(1, ((n - 1) * 400) / 146097)
+  while y > 1 and yearStart(y) > n do
+    y = y - 1
+  end
+  while yearStart(y + 1) <= n do
+    y = y + 1
+  end
+  let doy = n - yearStart(y)
+  // no month is longer than 31 days, so doy / 32 + 1 never overshoots
+  var m = doy / 32 + 1
+  while m < 12 and daysBeforeMonth(y, m + 1) <= doy do
+    m = m + 1
+  end
+  return Ymd(y, m, doy - daysBeforeMonth(y, m) + 1)
+end
+
+function keyOf(y: Int, m: Int, d: Int) returns Int
+  effects pure
+do
+  return y * 10000 + m * 100 + d
+end
+
+function keyOfOrdinal(n: Int) returns Int
+  effects pure
+  requires n >= 1
+do
+  let t = fromOrdinal(n)
+  return keyOf(t.y, t.m, t.d)
+end
+
+function validKey(k: Int) returns Bool
+  effects pure
+do
+  return k >= 10101 and validDate(k / 10000, (k / 100) % 100, k % 100)
+end
+
+function ordinalOfKey(k: Int) returns Int
+  effects pure
+  requires validKey(k)
+do
+  return ordinal(k / 10000, (k / 100) % 100, k % 100)
+end
+
+// ------------------------------------------------------------ lists
+
+function at(xs: List<Int>, i: Int) returns Int
+  effects pure
+do
+  return unwrapOrElse(get(xs, i), 0)
+end
+
+function has(xs: List<Int>, x: Int) returns Bool
+  effects pure
+do
+  for v in xs do
+    if v == x then
+      return true
+    end
+  end
+  return false
+end
+
+function strictlyIncreasing(xs: List<Int>) returns Bool
+  effects pure
+do
+  var i = 1
+  while i < length(xs) do
+    if at(xs, i - 1) >= at(xs, i) then
+      return false
+    end
+    i = i + 1
+  end
+  return true
+end
+
+// sorted, duplicates removed
+function sortedUnique(xs: List<Int>) returns List<Int>
+  effects pure
+  ensures strictlyIncreasing(result) and length(result) <= length(xs)
+do
+  var out = []
+  for v in sort(xs) do
+    if empty?(out) or at(out, length(out) - 1) != v then
+      out = append(out, v)
+    end
+  end
+  return out
+end
+
+function allAtLeast(xs: List<Int>, lo: Int) returns Bool
+  effects pure
+do
+  for v in xs do
+    if v < lo then
+      return false
+    end
+  end
+  return true
+end
+
+function allAtMost(xs: List<Int>, hi: Int) returns Bool
+  effects pure
+do
+  for v in xs do
+    if v > hi then
+      return false
+    end
+  end
+  return true
+end
+
+// ------------------------------------------------------------ the rule
+
+function allBetween(xs: List<Int>, lo: Int, hi: Int) returns Bool
+  effects pure
+do
+  for v in xs do
+    if v < lo or v > hi then
+      return false
+    end
+  end
+  return true
+end
+
+// Signed values: 1..hi or -hi..-1.
+function allSigned(xs: List<Int>, hi: Int) returns Bool
+  effects pure
+do
+  for v in xs do
+    if v == 0 or v > hi or v < 0 - hi then
+      return false
+    end
+  end
+  return true
+end
+
+function validRule(r: Rule) returns Bool
+  effects pure
+do
+  if r.freq < 0 or r.freq > 3 or r.interval < 1 or r.count < 0 or r.wkst < 0 or r.wkst > 6 then
+    return false
+  end
+  if not validDate(r.startY, r.startM, r.startD) then
+    return false
+  end
+  // "The UNTIL or COUNT rule parts are OPTIONAL, but they MUST NOT occur
+  // in the same 'recur'."
+  if r.count > 0 and r.untilKey != 0 then
+    return false
+  end
+  if r.untilKey != 0 and not validKey(r.untilKey) then
+    return false
+  end
+  if not allBetween(r.byMonth, 1, 12) or not allSigned(r.byMonthDay, 31) then
+    return false
+  end
+  if length(r.byDayWd) != length(r.byDayN) or not allBetween(r.byDayWd, 0, 6) then
+    return false
+  end
+  for n in r.byDayN do
+    if n != 0 and (n > 53 or n < 0 - 53 or r.freq == 2 or r.freq == 3) then
+      return false
+    end
+  end
+  // BYMONTHDAY "MUST NOT be specified when the FREQ rule part is set to WEEKLY".
+  if r.freq == 2 and not empty?(r.byMonthDay) then
+    return false
+  end
+  // BYSETPOS: 1..366 or -366..-1, "MUST only be used in conjunction with
+  // another BYxxx rule part".
+  if not allSigned(r.bySetPos, 366) then
+    return false
+  end
+  if not empty?(r.bySetPos) and empty?(r.byMonth) and empty?(r.byMonthDay) and empty?(r.byDayWd) then
+    return false
+  end
+  return true
+end
+
+function startOrdinal(r: Rule) returns Int
+  effects pure
+  requires validDate(r.startY, r.startM, r.startD)
+do
+  return ordinal(r.startY, r.startM, r.startD)
+end
+
+// The parts a rule lacks, taken from DTSTART.
+function effective(r: Rule) returns Rule
+  effects pure
+  requires validRule(r)
+  ensures validRule(result)
+do
+  var bm = r.byMonth
+  var bmd = r.byMonthDay
+  var wd = r.byDayWd
+  var wn = r.byDayN
+  if r.freq == 0 and empty?(bmd) and empty?(wd) then
+    if empty?(bm) then
+      bm = [r.startM]
+    end
+    bmd = [r.startD]
+  elif r.freq == 1 and empty?(bmd) and empty?(wd) then
+    bmd = [r.startD]
+  elif r.freq == 2 and empty?(wd) then
+    wd = [weekdayOf(startOrdinal(r))]
+    wn = [0]
+  end
+  return Rule(r.freq, r.startY, r.startM, r.startD, r.interval, r.count, r.untilKey, bm, bmd, wd, wn, r.bySetPos, r.wkst)
+end
+
+// BYDAY ordinals count within the year only for YEARLY without BYMONTH.
+function ordinalScopeIsYear(r: Rule) returns Bool
+  effects pure
+do
+  return r.freq == 0 and empty?(r.byMonth)
+end
+
+function monthDayMatches(xs: List<Int>, y: Int, m: Int, d: Int) returns Bool
+  effects pure
+  requires validDate(y, m, d)
+do
+  let ml = monthLength(y, m)
+  for v in xs do
+    if (v > 0 and v == d) or (v < 0 and ml + 1 + v == d) then
+      return true
+    end
+  end
+  return false
+end
+
+function byDayMatches(r: Rule, y: Int, m: Int, d: Int) returns Bool
+  effects pure
+  requires validDate(y, m, d)
+do
+  let n0 = ordinal(y, m, d)
+  let wd = weekdayOf(n0)
+  var fwd = (d - 1) / 7 + 1
+  var back = (monthLength(y, m) - d) / 7 + 1
+  if ordinalScopeIsYear(r) then
+    let doy = n0 - ordinal(y, 1, 1) + 1
+    fwd = (doy - 1) / 7 + 1
+    back = (yearLength(y) - doy) / 7 + 1
+  end
+  var i = 0
+  while i < length(r.byDayWd) do
+    if at(r.byDayWd, i) == wd then
+      let n = at(r.byDayN, i)
+      if n == 0 or (n > 0 and fwd == n) or (n < 0 and back == 0 - n) then
+        return true
+      end
+    end
+    i = i + 1
+  end
+  return false
+end
+
+// Every BYxxx part present, read as a condition on one date. Used as the
+// DAILY/WEEKLY limit and, for every FREQ, as a postcondition.
+function dayMatches(r: Rule, y: Int, m: Int, d: Int) returns Bool
+  effects pure
+  requires validDate(y, m, d)
+do
+  if not empty?(r.byMonth) and not has(r.byMonth, m) then
+    return false
+  end
+  if not empty?(r.byMonthDay) and not monthDayMatches(r.byMonthDay, y, m, d) then
+    return false
+  end
+  if not empty?(r.byDayWd) and not byDayMatches(r, y, m, d) then
+    return false
+  end
+  return true
+end
+
+function allMatch(r: Rule, keys: List<Int>) returns Bool
+  effects pure
+do
+  for k in keys do
+    if not dayMatches(r, k / 10000, (k / 100) % 100, k % 100) then
+      return false
+    end
+  end
+  return true
+end
+
+// One month's days for YEARLY/MONTHLY (r already effective): BYMONTHDAY
+// expands and BYDAY limits (Notes 1 and 2), else BYDAY expands.
+function monthCandidates(r: Rule, y: Int, m: Int) returns List<Int>
+  effects pure
+  requires m >= 1 and m <= 12 and y >= 1 and y <= 9999
+  ensures strictlyIncreasing(result)
+do
+  let ml = monthLength(y, m)
+  var out = []
+  if not empty?(r.byMonthDay) then
+    for v in r.byMonthDay do
+      var d = v
+      if v < 0 then
+        d = ml + 1 + v
+      end
+      // an invalid date (Feb 30, day 31 of a 30-day month) is ignored
+      if d >= 1 and d <= ml then
+        if empty?(r.byDayWd) or byDayMatches(r, y, m, d) then
+          out = append(out, ordinal(y, m, d))
+        end
+      end
+    end
+  else
+    let first = ordinal(y, m, 1)
+    let fw = weekdayOf(first)
+    for wd in r.byDayWd do
+      var d = 1 + (wd - fw + 7) % 7
+      while d <= ml do
+        if byDayMatches(r, y, m, d) then
+          out = append(out, first + d - 1)
+        end
+        d = d + 7
+      end
+    end
+  end
+  return sortedUnique(out)
+end
+
+function weekStart(r: Rule, n: Int) returns Int
+  effects pure
+  requires n >= 7
+  ensures result <= n and result > n - 7 and weekdayOf(result) == r.wkst
+do
+  return n - (weekdayOf(n) - r.wkst + 7) % 7
+end
+
+// The whole WKST-aligned week that starts at ws, limited by BYMONTH/BYDAY.
+function weekCandidates(r: Rule, ws: Int) returns List<Int>
+  effects pure
+  requires ws >= 1
+  ensures strictlyIncreasing(result) and length(result) <= 7
+do
+  var out = []
+  var n = ws
+  while n < ws + 7 do
+    let t = fromOrdinal(n)
+    if dayMatches(r, t.y, t.m, t.d) then
+      out = append(out, n)
+    end
+    n = n + 1
+  end
+  return out
+end
+
+// Period k's set before BYSETPOS, as sorted day numbers (r effective).
+// Returns [-1] once the period starts after `horizon` (a day number).
+function periodCandidates(r: Rule, k: Int, horizon: Int) returns List<Int>
+  effects pure
+  requires k >= 0
+do
+  if r.freq == 0 then
+    let y = r.startY + k * r.interval
+    if y > 9999 or ordinal(y, 1, 1) > horizon then
+      return [0 - 1]
+    end
+    var out = []
+    for m in range(1, 13) do
+      if empty?(r.byMonth) or has(r.byMonth, m) then
+        out = concat(out, monthCandidates(r, y, m))
+      end
+    end
+    return out
+  elif r.freq == 1 then
+    let mi = (r.startM - 1) + k * r.interval
+    let y = r.startY + mi / 12
+    let m = mi % 12 + 1
+    if y > 9999 or ordinal(y, m, 1) > horizon then
+      return [0 - 1]
+    end
+    if not empty?(r.byMonth) and not has(r.byMonth, m) then
+      return []
+    end
+    return monthCandidates(r, y, m)
+  elif r.freq == 2 then
+    let ws = weekStart(r, startOrdinal(r)) + 7 * r.interval * k
+    if ws > horizon then
+      return [0 - 1]
+    end
+    return weekCandidates(r, ws)
+  end
+  let n = startOrdinal(r) + r.interval * k
+  if n > horizon then
+    return [0 - 1]
+  end
+  let t = fromOrdinal(n)
+  if dayMatches(r, t.y, t.m, t.d) then
+    return [n]
+  end
+  return []
+end
+
+// "the nth occurrence within the set of recurrence instances"
+function applySetPos(pos: List<Int>, cands: List<Int>) returns List<Int>
+  effects pure
+  ensures strictlyIncreasing(result) and length(result) <= length(cands)
+do
+  if empty?(pos) then
+    return cands
+  end
+  let n = length(cands)
+  var picked = []
+  for p in pos do
+    if p > 0 and p <= n then
+      picked = append(picked, at(cands, p - 1))
+    elif p < 0 and n + p >= 0 then
+      picked = append(picked, at(cands, n + p))
+    end
+  end
+  return sortedUnique(picked)
+end
+
+// DTSTART is synchronized when it is an instance of its own period's set.
+function isSynchronized(r: Rule) returns Bool
+  effects pure
+  requires validRule(r)
+do
+  let e = effective(r)
+  let s = startOrdinal(e)
+  return has(applySetPos(e.bySetPos, periodCandidates(e, 0, s + 400)), s)
+end
+
+// The recurrence set, bounded to instances on or before horizonKey and to
+// the first `limit` of them. Runtime-checked contracts, not proofs.
+function expand(r: Rule, horizonKey: Int, limit: Int) returns List<Int>
+  effects pure
+  requires validRule(r) and validKey(horizonKey) and limit >= 0
+  ensures strictlyIncreasing(result)
+  ensures allAtLeast(result, keyOf(r.startY, r.startM, r.startD))
+  ensures allAtMost(result, horizonKey) and length(result) <= limit
+  ensures r.count > 0 implies length(result) <= r.count
+  ensures r.untilKey != 0 implies allAtMost(result, r.untilKey)
+  ensures allMatch(effective(r), result)
+  ensures (isSynchronized(r) and limit > 0 and (r.untilKey == 0 or r.untilKey >= keyOf(r.startY, r.startM, r.startD)) and horizonKey >= keyOf(r.startY, r.startM, r.startD)) implies at(result, 0) == keyOf(r.startY, r.startM, r.startD)
+do
+  let e = effective(r)
+  let s = startOrdinal(e)
+  var hi = ordinalOfKey(horizonKey)
+  if e.untilKey != 0 then
+    hi = min(hi, ordinalOfKey(e.untilKey))
+  end
+  var out = []
+  var k = 0
+  var done = limit == 0
+  while not done do
+    let cands = periodCandidates(e, k, hi)
+    if cands == [0 - 1] then
+      done = true
+    else
+      for n in applySetPos(e.bySetPos, cands) do
+        if not done and n >= s and n <= hi then
+          out = append(out, keyOfOrdinal(n))
+          if length(out) == limit or (e.count > 0 and length(out) == e.count) then
+            done = true
+          end
+        end
+      end
+      k = k + 1
+    end
+  end
+  return out
+end
+
+function mkRule(freq: Int, y: Int, m: Int, d: Int, interval: Int, count: Int, untilKey: Int, byMonth: List<Int>, byMonthDay: List<Int>, byDayWd: List<Int>, byDayN: List<Int>, bySetPos: List<Int>, wkst: Int) returns Rule
+  effects pure
+do
+  return Rule(freq, y, m, d, interval, count, untilKey, byMonth, byMonthDay, byDayWd, byDayN, bySetPos, wkst)
+end
+
+// Three RFC 5545 §3.8.5.3 examples, with their published instances.
+function main() returns Unit
+  effects log
+do
+  // "Monthly on the first Friday for 10 occurrences", DTSTART 1997-09-05
+  let a = expand(mkRule(1, 1997, 9, 5, 1, 10, 0, [], [], [4], [1], [], 0), 99991231, 60)
+  print(join(map(a, intToString), " "))
+  // "An example where the days generated makes a difference because of
+  // WKST": FREQ=WEEKLY;INTERVAL=2;COUNT=4;BYDAY=TU,SU;WKST=SU -> Aug 5,17,19,31
+  let b = expand(mkRule(2, 1997, 8, 5, 2, 4, 0, [], [], [1, 6], [0, 0], [], 6), 99991231, 60)
+  print(join(map(b, intToString), " "))
+  // "An example where an invalid date (i.e., February 30) is ignored."
+  let c = expand(mkRule(1, 2007, 1, 15, 1, 5, 0, [], [15, 30], [], [], [], 0), 99991231, 60)
+  print(join(map(c, intToString), " "))
+  let ok = a == [19970905, 19971003, 19971107, 19971205, 19980102, 19980206, 19980306, 19980403, 19980501, 19980605] and b == [19970805, 19970817, 19970819, 19970831] and c == [20070115, 20070130, 20070215, 20070315, 20070330]
+  if ok then
+    print("RFC examples: match")
+  else
+    print("RFC examples: MISMATCH")
+  end
+end

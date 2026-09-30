@@ -1,0 +1,56 @@
+--- a/src/dateutil/rrule.py
++++ b/src/dateutil/rrule.py
+@@ -794,6 +794,17 @@
+         byminute = self._byminute
+         bysecond = self._bysecond
+ 
++        if freq == WEEKLY and bysetpos:
++            # RFC 5545 section 3.3.10: BYSETPOS counts within the whole
++            # period, and "a set of recurrence instances starts at the
++            # beginning of the interval defined by the FREQ rule part".
++            # Start the first week at WKST, not at DTSTART; the instances
++            # before DTSTART are dropped by the dtstart check below.
++            back = (weekday - wkst) % 7
++            if back and self._dtstart.toordinal() - back >= 1:
++                ws = datetime.date.fromordinal(self._dtstart.toordinal() - back)
++                year, month, day, weekday = ws.year, ws.month, ws.day, ws.weekday()
++
+         ii = _iterinfo(self)
+         ii.rebuild(year, month)
+ 
+--- a/tests/test_rrule.py
++++ b/tests/test_rrule.py
+@@ -1039,6 +1039,33 @@
+                           datetime(1997, 9, 4, 6, 0),
+                           datetime(1997, 9, 9, 18, 0)])
+ 
++    def testWeeklyBySetPosFirstWeek(self):
++        # BYDAY=MO,WE,FR;BYSETPOS=2 selects the Wednesday of every week, and
++        # DTSTART (Wednesday) is the first instance. The set of the first
++        # week starts at WKST, not at DTSTART (RFC 5545 3.3.10, BYSETPOS).
++        self.assertEqual(list(rrule(WEEKLY,
++                              count=3,
++                              byweekday=(MO, WE, FR),
++                              bysetpos=2,
++                              wkst=MO,
++                              dtstart=datetime(2024, 11, 13))),
++                         [datetime(2024, 11, 13),
++                          datetime(2024, 11, 20),
++                          datetime(2024, 11, 27)])
++
++    def testWeeklyBySetPosFirstWeekAcrossNewYear(self):
++        # the first week (Sunday 2025-12-28 to Saturday 2026-01-03) starts
++        # in the previous year; its third instance is DTSTART, Friday 2 Jan
++        self.assertEqual(list(rrule(WEEKLY,
++                              count=3,
++                              byweekday=(SU, TU, FR),
++                              bysetpos=3,
++                              wkst=SU,
++                              dtstart=datetime(2026, 1, 2))),
++                         [datetime(2026, 1, 2),
++                          datetime(2026, 1, 9),
++                          datetime(2026, 1, 16)])
++
+     def testDaily(self):
+         self.assertEqual(list(rrule(DAILY,
+                               count=3,
