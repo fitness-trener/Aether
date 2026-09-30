@@ -295,6 +295,10 @@ def test_bug098_text_needs_sql_evidence():
          "    return User.query.filter(cond).all()\n", ["E0713"]),
         (doc + "def f(session, q):\n    return session.execute(DocumentBuilder().text(q))\n",
          ["E0713"]),
+        # an imported `db` handle whose text clause never reaches an
+        # executor here, in a file that never imports sqlalchemy itself
+        # (coordinator: over-flag rather than miss)
+        ("from app.extensions import db\ndef f(q):\n    return db.text(q)\n", ["E0713"]),
     ])
     print("BUG-098: .text(x) is SQL only with SQL evidence; db.text(f\"...\") stays E0713")
 

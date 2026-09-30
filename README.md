@@ -169,6 +169,23 @@ The fix is not yet in a release. This is a correctness bug, not a
 vulnerability, and nothing says the run caused the fix. The full record,
 with the bisect table and the method, is in
 [`docs/history/REALWORLD_HUMANIZE.md`](https://github.com/fitness-trener/Aether/blob/main/docs/history/REALWORLD_HUMANIZE.md).
+
+The same method was run on 2026-09-30 against three more libraries, with
+the results stated as they came out:
+
+- **semver 3.1.0** (280,000 checks against the SemVer 2.0.0 spec): no
+  divergence on any realistic version string. Past 4300 digits,
+  `is_valid` accepts a version that `compare` cannot order.
+- **isodate 0.7.2** (135,000 checks): two low-severity departures from
+  the ISO 8601 grammar, neither reported before. `PT` is accepted, and so
+  is a trailing newline.
+- **num2words 0.5.14** (1.6M checks): 0 integer divergences. Two decimal
+  defects that were already open upstream.
+
+None of the three findings is a security bug. The semver run also found
+a bug in Aether itself (BUG-102). Reports are in `bench/realworld_semver/`,
+`bench/realworld_isodate/` and `bench/realworld_num2words/`.
+
 The 44 million figure is humanize's monthly download count as read on
 pypistats.org on 2026-07-05; that report cites 44.1M.
 
@@ -308,7 +325,7 @@ rates 0.95 confidence, a method matched only by its name on a receiver of
 unknown type 0.6, and so does a finding whose argument already contains a
 sanitizer or an own-origin URL builder, and a non-literal argv word handed
 to `git`/`ssh`/`tar`/`find`/`rsync`/`zip`. `--min-confidence 0.9` hides the
-0.6 findings — 633 of 684 on the 15-framework corpus (re-scanned
+0.6 findings — 628 of 679 on the 15-framework corpus (re-scanned
 2026-09-29 at 0.5.0,
 [`bench/framework_scan/REPORT.md`](https://github.com/fitness-trener/Aether/blob/main/bench/framework_scan/REPORT.md);
 framework versions pinned in `bench/framework_scan/frameworks.lock.txt`). It is a filter, not a verdict on what it

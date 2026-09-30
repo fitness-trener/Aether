@@ -436,3 +436,18 @@ file, line and code. `--min-confidence 0.9` now hides 633 of 684. The
 evidence for the change is `bench/agent_apps_scan/REPORT.md`: there, 765
 argv findings rated 0.9 were nearly all positional paths handed to `git`
 in test code.
+
+## 14. Re-measured 2026-09-30, after iteration 67: 684 → 679
+
+`.text(x)` now counts as raw SQL only with SQL evidence (BUG-098): a
+SQLAlchemy or Flask-SQLAlchemy receiver, an imported `db`/`sa`, or the
+result reaching an executor or clause in the same function. Five
+non-SQL `.text` calls stopped firing, all rated 0.6, none SQL:
+
+- LanceDB's full-text `.text(query)`;
+- streamlit's `st.text` ×2;
+- outlines' `generate.text(client)` ×2.
+
+Nothing was added. `--min-confidence 0.9` hides 628 of 679, and keeps
+51. The other three fixes of the iteration (BUG-099..101) have no site
+on this corpus. They removed 8 findings on the maintainer's own projects.

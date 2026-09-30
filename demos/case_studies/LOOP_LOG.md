@@ -2774,6 +2774,118 @@ State carried forward: the full gate suite must stay green
 
 ---
 
+## Iteration 67 — precision: four E0713 false-positive shapes from the owner's projects (no new detector)
+
+- **Target:** the owner's projects produced 16 default findings, and 8 of
+  them were four false-positive shapes, all E0713 at 0.6. This is a
+  precision iteration. No detector was added or removed, and
+  `tests/ratchet_baseline.json` is unchanged.
+- **Gap confirmed first:** a minimal snippet per shape went red under
+  `--json check-py` at `4435ee2`. The four new tests fail on `4435ee2` only
+  on their clean shapes; every negative control already fired there.
+- **Fixes (`d18d2e2`, `transpiler/aether/py_frontend.py`):**
+  - BUG-098: `.text` needs SQL evidence (receiver or same-scope flow).
+  - BUG-099: a dict allowlist of literals is those literals.
+  - BUG-100: a non-escaping lambda fed only literals has literal
+    parameters.
+  - BUG-101: a `for` over a literal display of SQLAlchemy expressions or
+    literals binds sanctioned names.
+- **Measured** (`--json check-py`, `4435ee2` → `d18d2e2`, same inputs):
+
+| corpus | before | after | removed | added |
+|---|---|---|---|---|
+| framework corpus (`bench/framework_scan/_work/src`) | 684 | 679 | 5 | 0 |
+| in-repo `bench tests tools playground demos` | 113 | 113 | 0 | 0 |
+| owner projects (Growly, Halyk, Law_Consultant, MedTech, Sulu-Read, TrumpaBot) | 16 | 8 | 8 | 0 |
+
+- **Gate:** `python -B scripts/run_all.py` exit 0.
+- **TYPE gap surfaced:** receiver evidence for `.text` stops at the
+  function boundary. `from app.extensions import db` followed by
+  `return db.text(q)`, in a file importing neither sqlalchemy nor
+  flask_sqlalchemy, is now silent: the one miss-direction trade in this
+  iteration, and the owner's call (see q1 row 1).
+
+---
+
+## Iteration 68 — real-world differential: semver (no new detector)
+
+- **Target:** not a backlog row; a real-world evidence run. SemVer 2.0.0
+  parsing and precedence were ported to Aether from the spec text and
+  differential-tested against python-semver 3.1.0
+  (`bench/realworld_semver/REPORT.md`).
+- **Measured:** 60,000 validity checks and 220,000 comparisons, seed
+  20260930, CPython 3.11.15.
+  - 6 divergences, all attributed, 0 port bugs.
+  - All 6 come from CPython's 4300-digit `int()` limit. They are classed as
+    spec-ambiguous and caused by the interpreter, not as a library bug.
+    Not filed.
+  - Six single-rule mutants of the port all fail the harness, one of them
+    through the port's own §10 `ensures` (`E0304`, runtime).
+- **Aether bug surfaced:** BUG-102, `parseInt` / `intToString` inherit
+  Python `int()`'s grammar and digit limit.
+- **TYPE gap surfaced for next iter:** the stdlib boundary between integers
+  and strings is unspecified. Pin `parseInt`'s grammar in
+  `grammar/stdlib.md`, and decide how the runtime honours the
+  arbitrary-precision `Int` past 4300 digits.
+- **Suite:** exit 0.
+
+---
+
+## Iteration 69 — real-world differential: isodate (no new detector)
+
+- **Target:** the evidence campaign, not a backlog row. ISO 8601 durations:
+  an Aether port derived from the grammar, against isodate 0.7.2
+  (`bench/realworld_isodate/`).
+- **Measured:** 110,000 strings and 13,991 divergences, 0 unexplained.
+  25,000 round trips pass all 4 checks (`differential.py`, seed 20260930).
+- **Port bug (a):** the fraction check fired before a following component
+  was confirmed, giving the wrong rejection reason on `P64,70588W\n`.
+  Fixed; the accept/reject verdicts did not change.
+- **Library (b), low severity, not filed:**
+  - `PT` and `P1DT` are accepted; PR #18 fixed bare `P` only.
+  - `P1D\n` is accepted, because the pattern ends in `$` rather than `\Z`;
+    PR #16 fixed dates and times only.
+  - No earlier report was found on gweis/isodate. The coordinator re-ran
+    both against the installed library. Filing is the owner's call.
+- **Aether bugs hit:** none, so BUG-103 is unused.
+- **TYPE gap surfaced for next iter:** none for the security loop. One
+  harness note: Aether records reach Python as dicts (`d["field"]`).
+- **Suite:** `python -B scripts/run_all.py` exit 0 (smt SKIP).
+
+---
+
+## Iteration 70 — real-world differential: num2words (no new detector)
+
+- **Target:** not a backlog row. This extends the real-world evidence
+  campaign (the humanize method) to num2words 0.5.14, English
+  (savoirfairelinux/num2words, 969 stars per `gh api`, 2026-09-30).
+- **Built:**
+  - `bench/realworld_num2words/num2words_port.aeth`: cardinal, ordinal,
+    ordinal_num and year for integers, plus cardinal for decimal strings,
+    written from the naming convention. Its runtime contracts cover "zero"
+    never appearing inside n ≠ 0, the scale word of the magnitude class,
+    the sign, the ordinal suffix, and BC.
+  - `differential.py`, seed 20260930.
+  - `buggy_negative_fraction.aeth`, which shows the sign contract firing as
+    a runtime E0304.
+- **Measured:** 1,596,072 cases, 0 port bugs, 0 unexplained divergences,
+  and no E0304 in the port.
+  - The 1,532,104 integer cases: 0 divergences.
+  - The 63,968 decimal cases: 5,702 divergences, all on the library side.
+    1,196 lose the sign for -1 < x < 0 (upstream #402, #644). 4,506 have
+    the last decimal digit one too low, from about 15 significant digits
+    (upstream #603).
+  - The coordinator re-ran both repros.
+- **Upstream:** nothing new; both defects are already open issues.
+- **TYPE gap surfaced for next iter:** none in Aether. The 64-bit `Int`
+  caveat in `docs/history/REALWORLD_HUMANIZE.md` §6 is out of date: `Int`
+  is arbitrary-precision per `grammar/types.md`, though BUG-102 records
+  where the runtime still inherits Python's 4300-digit limit.
+- **Suite:** `python -B scripts/run_all.py` exit 0.
+- **Aether bugs hit:** none, so BUG-104 is unused.
+
+---
+
 ---
 
 ## Next-iteration checklist (for the loop)

@@ -12,9 +12,10 @@ the record.
 
 On the 15-framework corpus (4,946 files, versions pinned in
 `bench/framework_scan/frameworks.lock.txt`) 0.4.0 reports 676 findings
-and 0.5.0 reports 684 (`bench/framework_scan/REPORT.md` sections 9-11):
-31 added by closed misses, 24 removed as documented safe idioms, 1 added
-by argument injection. None of the four misses closed for Python in
+and 0.5.0 reports 679 (`bench/framework_scan/REPORT.md` sections 9-11,
+13): 31 added by closed misses, 1 added by argument injection, and 29
+removed as documented safe idioms or non-SQL calls (24 in iteration 60,
+5 in iteration 67). None of the four misses closed for Python in
 "Silent misses" below occurs in that corpus.
 
 ### Breaking: one exit-code table, one JSON contract
@@ -134,6 +135,24 @@ What changes for a caller:
 - E0727 text is written per callee: what each standard-library and lxml
   parser actually does with external entities, measured (0.4.1 work,
   BUG-031).
+
+### Python scanner: four more false positives removed
+
+Found by scanning the maintainer's own projects on 2026-09-30:
+
+- `.text(x)` counts as raw SQL only with SQL evidence: a SQLAlchemy
+  receiver, an imported `db`/`sa`, or the result reaching an executor or
+  clause. Document builders are not SQL (BUG-098).
+- An inline dict of string literals read with `.get(key, literal)` is
+  literal (BUG-099).
+- A local lambda that never escapes and is called only with literals has
+  literal parameters (BUG-100).
+- A loop over a local tuple of SQLAlchemy expressions gives a sanctioned
+  loop variable (BUG-101).
+
+Each has a negative control that stays a finding. On the framework corpus
+the findings go from 684 to 679 (five non-SQL `.text` calls), and nothing
+is added.
 
 ### Language (`.aeth`)
 

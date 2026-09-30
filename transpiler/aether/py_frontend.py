@@ -1091,6 +1091,12 @@ def _text_is_sql(call: _pyast.Call, imp: "_Imports", scope: Any) -> bool:
     if ctor is not None or not isinstance(recv, _pyast.Name) \
             or recv.id not in _TEXT_SQL_RECEIVERS:
         return False
+    # `from app.extensions import db`: the project's own Flask-SQLAlchemy
+    # handle, imported from a module this file does not show. Over-flag
+    # rather than miss — an imported `db`/`sa` counts even when the file
+    # never imports sqlalchemy itself (coordinator, iteration 67).
+    if recv.id in imp.fromimport or recv.id in imp.alias_to_path:
+        return True
     return any(_module_root(t) in _TEXT_SQL_ROOTS
                for t in list(imp.alias_to_path.values()) + list(imp.fromimport.values()))
 
