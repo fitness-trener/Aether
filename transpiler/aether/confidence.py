@@ -92,6 +92,13 @@ CONFIDENCE = {
     "builtin": 0.9,
     # Literal program and literal flag in the argv list.
     "argv": 0.9,
+    # A non-literal word handed to git/ssh/tar/find/rsync/zip in an argv
+    # list: dangerous only if it lands as an option that runs a command,
+    # which the word itself decides at run time. On 209 agent/MCP repos
+    # (2026-09-29) nearly all of these words were positional paths in test
+    # code (`["git", "init", str(tmp_path)]`), so the rating is the floor:
+    # the finding stays, and `--min-confidence 0.9` hides it.
+    "argv_option": FLOOR,
     # `compile()` builds a code object; whether it is ever executed is
     # outside the call. 4 of 8 measured sites never run it (three
     # linters, one round-trip test); `exec(compile(...))` rates `builtin`.

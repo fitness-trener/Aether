@@ -397,3 +397,57 @@ the six programs, so the rows are sized for the shape, not for this corpus
 (`audits/gaps/C_record.md`). A per-class attribute summary for receivers
 (`self.x = Ctor(...)`) was measured and not built: 25 by-method sink calls
 would resolve, and none would change its finding or rating.
+
+## 12. Triaged 2026-09-29: the 51 high-confidence findings, read for exploitability
+
+Every finding at `--min-confidence 0.9` on this corpus (51 of 683 at
+`a2f13db`; the same 51 at 0.5.0, plus the argument-injection finding of
+section 11) was read at source. For each, the triage recorded where the
+flagged value comes from (HTTP request, MCP client, LLM tool argument,
+developer configuration, constant), what guards it, and a verdict. Where a
+dataflow looked reachable, it built a local proof of concept against the
+pinned version. Nothing was installed, and nothing was reported upstream.
+
+| verdict | n | share |
+|---|---:|---:|
+| exploitable in a default or common configuration | 0 | 0% |
+| by design: the documented purpose is to run code, SQL or pickle, gated or opt-in (`allow_dangerous_deserialization`, an explicit confirmation) | 22 | 43% |
+| developer-only: the developer or operator controls the input | 18 | 35% |
+| false positive: the rule misread the code (constants from another module, redirects validated elsewhere, a `SafeLoader` subclass, lxml at 5.0 or later without entity resolution, an all-literal argv) | 11 | 22% |
+
+Read as a vulnerability finder, the high-confidence set found **no
+exploitable vulnerability** in these 15 frameworks at the pinned versions.
+Read as what the rules claim, "a dangerous sink reached by a dynamic
+argument", it was right on 40 of 51 findings (78%). The promising
+0.6-confidence XML and template findings were read too, and none is a
+candidate. One borderline, low-severity item, which the protocol's own
+specification sanctions, is being re-checked against the current release
+before any report; its details are not published here. Two negative
+controls were run: haystack's YAML loader refuses `!!python/name`, and
+lxml 6.1.1 does not load an external entity in the docugami call shape.
+Both confirm false-positive verdicts.
+
+## 13. 2026-09-29: the argv option-injection match is rated at the floor
+
+The argument-injection rule of section 11 now has its own match kind,
+`argv_option`, rated 0.6. On this corpus that moves one finding, agno's
+`git *args` runner, from 0.9 to 0.6. The 684 findings are identical by
+file, line and code. `--min-confidence 0.9` now hides 633 of 684. The
+evidence for the change is `bench/agent_apps_scan/REPORT.md`: there, 765
+argv findings rated 0.9 were nearly all positional paths handed to `git`
+in test code.
+
+## 14. Re-measured 2026-09-30, after iteration 67: 684 → 679
+
+`.text(x)` now counts as raw SQL only with SQL evidence (BUG-098): a
+SQLAlchemy or Flask-SQLAlchemy receiver, an imported `db`/`sa`, or the
+result reaching an executor or clause in the same function. Five
+non-SQL `.text` calls stopped firing, all rated 0.6, none SQL:
+
+- LanceDB's full-text `.text(query)`;
+- streamlit's `st.text` ×2;
+- outlines' `generate.text(client)` ×2.
+
+Nothing was added. `--min-confidence 0.9` hides 628 of 679, and keeps
+51. The other three fixes of the iteration (BUG-099..101) have no site
+on this corpus. They removed 8 findings on the maintainer's own projects.

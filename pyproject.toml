@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aether-lang"
-version = "0.4.1"
+version = "0.5.0"
 description = "Security checker for Python, aimed at AI-agent code: SQL, command and code injection, deserialization, SSTI, hardcoded credentials, untrusted XML parsing (XXE through lxml or a resolving parser). Emits SARIF."
 readme = "README.md"
 requires-python = ">=3.10"

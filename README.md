@@ -132,6 +132,66 @@ Aether reported nothing on**, `marshal.load`, `pickle.Unpickler(...).load()`,
 Reproduce both: `python -B bench/pypi_scan/run_scan.py` and
 `python -B bench/pypi_scan/run_recall.py`.
 
+The same holds for the 15 AI-agent frameworks the other corpus pins
+(4,946 files): all 51 findings at `--min-confidence 0.9` were read at
+source on 2026-09-29, and **none is exploitable** in a default or common
+configuration. 22 are gated, documented dangerous features, 18 take
+developer-controlled input, and 11 are false positives. The rules' own
+claim, "a dangerous sink reached by a dynamic argument", held on 40 of 51
+([`bench/framework_scan/REPORT.md`](https://github.com/fitness-trener/Aether/blob/main/bench/framework_scan/REPORT.md) §12).
+
+On a third set, 209 small AI-agent and MCP-server repositories found by a
+GitHub topic search (41,499 Python files), `check-py` finished with **0
+analyzer errors** in 277 s on 8 logical cores. 209 files did not parse,
+194 of them because they use syntax newer than the scanning Python (3.11).
+That run measured robustness only, not precision:
+[`bench/agent_apps_scan/REPORT.md`](https://github.com/fitness-trener/Aether/blob/main/bench/agent_apps_scan/REPORT.md).
+
+## A bug in a library with 44 million monthly downloads, confirmed by others
+
+The same machinery works outside security, too. On 2026-07-05 four
+functions of [humanize](https://pypi.org/project/humanize/) were ported to
+Aether with their contracts declared, and 247,294 inputs were run through
+both the port and the real library. The run found a correctness regression
+in the current release, 4.16.0: `intword(10**24 - 1)` returns
+`'1000.0 sextillion'` instead of `'1.0 septillion'`. It was bisected to
+4.15.0 (PR #273), with the root cause a float compared against an exact
+int above 2**53.
+
+It was not filed from here. It was confirmed independently:
+- a third-party contributor opened
+  [PR #346](https://github.com/python-humanize/humanize/pull/346) with the
+  same diagnosis the next day, and a maintainer merged it on 2026-09-16;
+- another user re-reported it as
+  [#400](https://github.com/python-humanize/humanize/issues/400).
+
+The fix is not yet in a release. This is a correctness bug, not a
+vulnerability, and nothing says the run caused the fix. The full record,
+with the bisect table and the method, is in
+[`docs/history/REALWORLD_HUMANIZE.md`](https://github.com/fitness-trener/Aether/blob/main/docs/history/REALWORLD_HUMANIZE.md).
+
+The same method was run on 2026-09-30 against three more libraries, with
+the results stated as they came out:
+
+- **semver 3.1.0** (280,000 checks against the SemVer 2.0.0 spec): no
+  divergence on any realistic version string. Past 4300 digits,
+  `is_valid` accepts a version that `compare` cannot order.
+- **isodate 0.7.2** (135,000 checks): two low-severity departures from
+  the ISO 8601 grammar, neither reported before. `PT` is accepted, and so
+  is a trailing newline.
+- **num2words 0.5.14** (1.6M checks): 0 integer divergences. Two decimal
+  defects that were already open upstream.
+
+The semver and isodate findings were reported upstream on 2026-09-30 as
+[python-semver#487](https://github.com/python-semver/python-semver/issues/487)
+and [gweis/isodate#114](https://github.com/gweis/isodate/issues/114). None
+of the three findings is a security bug. The semver run also found
+a bug in Aether itself (BUG-102). Reports are in `bench/realworld_semver/`,
+`bench/realworld_isodate/` and `bench/realworld_num2words/`.
+
+The 44 million figure is humanize's monthly download count as read on
+pypistats.org on 2026-07-05; that report cites 44.1M.
+
 ## What it checks on Python, and what it does not
 
 Default-on, no annotations required:
@@ -266,9 +326,10 @@ Findings sort worst-first by the per-code risk rating, then, within a
 rating, most-certain first: a callee resolved through the file's imports
 rates 0.95 confidence, a method matched only by its name on a receiver of
 unknown type 0.6, and so does a finding whose argument already contains a
-sanitizer or an own-origin URL builder. `--min-confidence 0.9` hides the
-0.6 findings — 632 of 684 on the 15-framework corpus (re-scanned
-2026-09-29 on the 0.5.0 branch,
+sanitizer or an own-origin URL builder, and a non-literal argv word handed
+to `git`/`ssh`/`tar`/`find`/`rsync`/`zip`. `--min-confidence 0.9` hides the
+0.6 findings — 628 of 679 on the 15-framework corpus (re-scanned
+2026-09-29 at 0.5.0,
 [`bench/framework_scan/REPORT.md`](https://github.com/fitness-trener/Aether/blob/main/bench/framework_scan/REPORT.md);
 framework versions pinned in `bench/framework_scan/frameworks.lock.txt`). It is a filter, not a verdict on what it
 hides (those are what the rules flag, measured over-flags included), and
@@ -298,7 +359,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: fitness-trener/Aether@v0.4.1
+      - uses: fitness-trener/Aether@v0.5.0
         with:
           path: 'src tests'      # default: .
           strict: 'false'        # adds E0711 + the E0701 inventory
@@ -387,7 +448,7 @@ modeled surface", never as "sound".
     tests/          Integration tests and the monotonic ratchet
     scripts/        run_all.py — the full gate
 
-Full gate: `python -B scripts/run_all.py` (exit 0 = green; 50 PASS suites, and `smt` reports SKIP
+Full gate: `python -B scripts/run_all.py` (exit 0 = green; 51 PASS suites, and `smt` reports SKIP
 when z3 is not installed).
 
 ## Documentation

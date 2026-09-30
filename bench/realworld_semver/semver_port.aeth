@@ -1,0 +1,345 @@
+// expect: clean
+// Aether port of Semantic Versioning 2.0.0 parsing and precedence, written
+// from the specification (https://semver.org/spec/v2.0.0.html), not from any
+// implementation. Section numbers (§) and the "Backus-Naur Form Grammar for
+// Valid SemVer Versions" (BNF) are the spec's own.
+//
+// Differential target: python-semver 3.1.0 (`semver.Version.parse`,
+// `Version.is_valid`, `Version.compare`), driven by
+// bench/realworld_semver/differential.py.
+//
+// Two deliberate choices, both from the spec text:
+//   * Character classes are ASCII code-point ranges. The BNF enumerates
+//     "0".."9", "A".."Z", "a".."z" and "-"; §9/§10 say "ASCII alphanumerics
+//     and hyphens [0-9A-Za-z-]". A Unicode digit is not a <digit>.
+//   * Numeric values are built digit by digit, not with parseInt: parseInt
+//     inherits Python int()'s grammar (Unicode digits, "_", "+", surrounding
+//     whitespace), which is wider than the BNF's <digits>. The FAQ places no
+//     limit on the size of a version number, and Aether Int is
+//     arbitrary-precision (grammar/types.md).
+
+// ---- character classes (BNF <digit>, <letter>, "-") ----
+
+function isAsciiDigit(c: String) returns Bool
+  requires length(c) == 1
+  effects pure
+do
+  let o = ord(c)
+  return o >= 48 and o <= 57
+end
+
+// BNF <identifier character> ::= <digit> | <non-digit>; <non-digit> ::= <letter> | "-"
+function isIdentChar(c: String) returns Bool
+  requires length(c) == 1
+  effects pure
+do
+  let o = ord(c)
+  return (o >= 48 and o <= 57) or (o >= 65 and o <= 90) or (o >= 97 and o <= 122) or o == 45
+end
+
+// BNF <digits>: one or more ASCII digits.
+function allDigits(s: String) returns Bool
+  effects pure
+do
+  if length(s) == 0 then
+    return false
+  end
+  for c in chars(s) do
+    if not isAsciiDigit(c) then
+      return false
+    end
+  end
+  return true
+end
+
+// §9/§10: "Identifiers MUST comprise only ASCII alphanumerics and hyphens
+// [0-9A-Za-z-]. Identifiers MUST NOT be empty."
+function isIdentifier(s: String) returns Bool
+  effects pure
+do
+  if length(s) == 0 then
+    return false
+  end
+  for c in chars(s) do
+    if not isIdentChar(c) then
+      return false
+    end
+  end
+  return true
+end
+
+// §2: "X, Y, and Z are non-negative integers, and MUST NOT contain leading
+// zeroes." §9: "Numeric identifiers MUST NOT include leading zeroes."
+// BNF <numeric identifier> ::= "0" | <positive digit> | <positive digit> <digits>
+function isNumericIdentifier(s: String) returns Bool
+  effects pure
+do
+  if not allDigits(s) then
+    return false
+  end
+  return s == "0" or not startsWith?(s, "0")
+end
+
+// BNF <pre-release identifier> ::= <alphanumeric identifier> | <numeric identifier>
+// An all-digit pre-release identifier is numeric, so it may not have a leading zero.
+function isPrereleaseIdentifier(s: String) returns Bool
+  effects pure
+do
+  if not isIdentifier(s) then
+    return false
+  end
+  if allDigits(s) then
+    return isNumericIdentifier(s)
+  end
+  return true
+end
+
+// BNF <build identifier> ::= <alphanumeric identifier> | <digits>
+// Leading zeroes ARE allowed in build metadata (<digits>, not <numeric identifier>).
+function isBuildIdentifier(s: String) returns Bool
+  effects pure
+do
+  return isIdentifier(s)
+end
+
+// Exact value of an all-digit string (arbitrary precision).
+function digitsValue(s: String) returns Int
+  requires allDigits(s)
+  ensures result >= 0
+  effects pure
+do
+  var n = 0
+  for c in chars(s) do
+    n = n * 10 + (ord(c) - 48)
+  end
+  return n
+end
+
+// ---- splitting ----
+// No <identifier character> is "+", so the first "+" (if any) starts the
+// build metadata, and the core cannot contain "-", so the first "-" before
+// that starts the pre-release (which may itself contain hyphens).
+
+function withoutBuild(s: String) returns String
+  effects pure
+do
+  return unwrapOrElse(get(split(s, "+"), 0), "")
+end
+
+function coreText(s: String) returns String
+  effects pure
+do
+  return unwrapOrElse(get(split(withoutBuild(s), "-"), 0), "")
+end
+
+function hasPrerelease(s: String) returns Bool
+  effects pure
+do
+  return length(split(withoutBuild(s), "-")) > 1
+end
+
+function prereleaseText(s: String) returns String
+  effects pure
+do
+  let dash = split(withoutBuild(s), "-")
+  if length(dash) < 2 then
+    return ""
+  end
+  return join(drop(dash, 1), "-")
+end
+
+function hasBuild(s: String) returns Bool
+  effects pure
+do
+  return length(split(s, "+")) > 1
+end
+
+function buildText(s: String) returns String
+  effects pure
+do
+  let plus = split(s, "+")
+  if length(plus) < 2 then
+    return ""
+  end
+  return join(drop(plus, 1), "+")
+end
+
+// ---- validity: <valid semver> ----
+// <valid semver> ::= <version core>
+//                  | <version core> "-" <pre-release>
+//                  | <version core> "+" <build>
+//                  | <version core> "-" <pre-release> "+" <build>
+// The shortest valid string is "0.0.0".
+function isValid(s: String) returns Bool
+  ensures result implies length(s) >= 5
+  effects pure
+do
+  if length(split(s, "+")) > 2 then
+    return false
+  end
+  if hasBuild(s) then
+    for b in split(buildText(s), ".") do
+      if not isBuildIdentifier(b) then
+        return false
+      end
+    end
+  end
+  let core = split(coreText(s), ".")
+  if length(core) != 3 then
+    return false
+  end
+  for x in core do
+    if not isNumericIdentifier(x) then
+      return false
+    end
+  end
+  if hasPrerelease(s) then
+    for p in split(prereleaseText(s), ".") do
+      if not isPrereleaseIdentifier(p) then
+        return false
+      end
+    end
+  end
+  return true
+end
+
+// Field accessors for a valid version (the harness checks them against
+// Version.parse's major/minor/patch/prerelease/build).
+function coreValues(s: String) returns List<Int>
+  requires isValid(s)
+  ensures length(result) == 3
+  effects pure
+do
+  var out = []
+  for x in split(coreText(s), ".") do
+    out = append(out, digitsValue(x))
+  end
+  return out
+end
+
+function prereleaseIdentifiers(s: String) returns List<String>
+  requires isValid(s)
+  effects pure
+do
+  if not hasPrerelease(s) then
+    return []
+  end
+  return split(prereleaseText(s), ".")
+end
+
+// ---- precedence (§11) ----
+
+function cmpInt(a: Int, b: Int) returns Int
+  ensures result == 0 - 1 or result == 0 or result == 1
+  effects pure
+do
+  if a < b then
+    return 0 - 1
+  elif a > b then
+    return 1
+  end
+  return 0
+end
+
+// §11.4.2: "compared lexically in ASCII sort order".
+function cmpAscii(a: String, b: String) returns Int
+  ensures result == 0 - 1 or result == 0 or result == 1
+  effects pure
+do
+  let ca = chars(a)
+  let cb = chars(b)
+  let n = min(length(ca), length(cb))
+  for i in range(0, n) do
+    let r = cmpInt(ord(unwrapOrElse(get(ca, i), "")), ord(unwrapOrElse(get(cb, i), "")))
+    if r != 0 then
+      return r
+    end
+  end
+  return cmpInt(length(ca), length(cb))
+end
+
+// §11.4.1 digits-only identifiers compare numerically; §11.4.2 identifiers
+// with letters or hyphens compare in ASCII order; §11.4.3 numeric
+// identifiers always have lower precedence than alphanumeric ones.
+function cmpIdentifier(a: String, b: String) returns Int
+  ensures result == 0 - 1 or result == 0 or result == 1
+  effects pure
+do
+  let na = allDigits(a)
+  let nb = allDigits(b)
+  if na and nb then
+    return cmpInt(digitsValue(a), digitsValue(b))
+  elif na then
+    return 0 - 1
+  elif nb then
+    return 1
+  end
+  return cmpAscii(a, b)
+end
+
+// §11.1-§11.4, without the public contracts (compare() states them in
+// terms of this function, so it cannot recurse into itself).
+function precedence(a: String, b: String) returns Int
+  ensures result == 0 - 1 or result == 0 or result == 1
+  effects pure
+do
+  // §11.2: major, minor, patch compared numerically, left to right.
+  let ca = coreValues(a)
+  let cb = coreValues(b)
+  for i in range(0, 3) do
+    let r = cmpInt(unwrapOrElse(get(ca, i), 0), unwrapOrElse(get(cb, i), 0))
+    if r != 0 then
+      return r
+    end
+  end
+  let pa = prereleaseIdentifiers(a)
+  let pb = prereleaseIdentifiers(b)
+  // §11.3: a pre-release version has lower precedence than a normal version.
+  if length(pa) == 0 and length(pb) == 0 then
+    return 0
+  elif length(pa) == 0 then
+    return 1
+  elif length(pb) == 0 then
+    return 0 - 1
+  end
+  // §11.4: identifier by identifier, left to right, until a difference.
+  let n = min(length(pa), length(pb))
+  for i in range(0, n) do
+    let r = cmpIdentifier(unwrapOrElse(get(pa, i), ""), unwrapOrElse(get(pb, i), ""))
+    if r != 0 then
+      return r
+    end
+  end
+  // §11.4.4: a larger set of pre-release fields has higher precedence
+  // when all preceding identifiers are equal.
+  return cmpInt(length(pa), length(pb))
+end
+
+// Public precedence. Contracts state spec invariants, checked at runtime:
+//   * antisymmetry: compare(a, b) == -compare(b, a) (§11 defines a total order);
+//   * §10 "Build metadata MUST be ignored when determining version precedence."
+function compare(a: String, b: String) returns Int
+  requires isValid(a) and isValid(b)
+  ensures result == 0 - 1 or result == 0 or result == 1
+  ensures result == 0 - precedence(b, a)
+  ensures result == precedence(withoutBuild(a), withoutBuild(b))
+  ensures withoutBuild(a) == withoutBuild(b) implies result == 0
+  effects pure
+do
+  return precedence(a, b)
+end
+
+function main() returns Unit
+  effects log
+do
+  // §11.4 worked example: each is lower than the next.
+  let chain = ["1.0.0-alpha", "1.0.0-alpha.1", "1.0.0-alpha.beta", "1.0.0-beta",
+               "1.0.0-beta.2", "1.0.0-beta.11", "1.0.0-rc.1", "1.0.0"]
+  for i in range(0, length(chain) - 1) do
+    let a = unwrapOrElse(get(chain, i), "")
+    let b = unwrapOrElse(get(chain, i + 1), "")
+    print(join([a, " < ", b, " : ", intToString(compare(a, b))], ""))
+  end
+  print(join(["1.0.0+20130313144700 vs 1.0.0+exp.sha.5114f85 : ",
+              intToString(compare("1.0.0+20130313144700", "1.0.0+exp.sha.5114f85"))], ""))
+end

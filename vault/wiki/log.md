@@ -1,5 +1,25 @@
 # Operation Log (append-only — newest on top)
 
+## [2026-09-30] New question page | q9: why Aether ports find library bugs
+- **The answer separates method from language.** The bug-finding power is mostly the
+  differential method. Aether's enforced parts are the runtime contracts and the
+  arbitrary-precision Int. The exactness that exposed the humanize bug was the
+  porter's choice, because `1 + 2.5` passes `check`.
+- **Lesson carried:** before crediting the language for a finding, check whether a
+  language rule enforced the property. "The port was exact" and "Aether makes ports
+  exact" are different claims.
+
+## [2026-09-30] Q1 rows + evidence runs | iterations 67-70
+- **Iteration 67 (precision):** 4 q1 rows (one CLOSED by the coordinator). BUG-098..101 remove four E0713
+  false-positive shapes found on the owner's projects. An imported `db`/`sa`
+  still counts as SQL evidence (the coordinator closed that miss).
+- **Iterations 68-70 (real-world differentials):** semver, isodate, num2words.
+  - semver found a library inconsistency: `is_valid` accepts a string that
+    `compare` cannot order.
+  - isodate found two low-severity departures from the ISO grammar.
+  - num2words found two defects that are already open upstream.
+  - Aether-side, BUG-102 (`parseInt` inherits Python's `int()` grammar) is filed open.
+
 ## [2026-09-29] Q1 rows | iteration 65: one frontend walk per scope; argv option injection
 - **2 q1 row(s)** from `audits/gaps/C_record.md`; BUGS entries and the LOOP_LOG block folded from the same record.
 

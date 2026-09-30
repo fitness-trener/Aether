@@ -21,7 +21,7 @@ For the current state read `README.md`, `SECURITY_POSTURE.md`,
 | `PHASE1_RESULTS.md` | 2026-06-07 | Phase 1: coverage lift, runtime backstop, ALLOW/BLOCK |
 | `RW_MINING.md` | 2026-06-07 | Real-world diff-shape mining toolkit and runbook |
 | `AETHER_UADD_DRIFT_REPORT.md` | 2026-06-07 | `u_add` reconciliation; its "DRIFT (HALT)" verdict is that day's |
-| `REALWORLD_HUMANIZE.md` | 2026-07-05 | Evidence run 1: port of `humanize` |
+| `REALWORLD_HUMANIZE.md` | 2026-07-05 | Evidence run 1: port of `humanize`. Still current: its regression was independently fixed upstream (section 0, updated 2026-09-30), and the README cites it |
 | `REALWORLD_SECURITY_PACKAGING.md` | 2026-07-05 | Evidence run 2: `packaging` ordering, JWT proof tokens, CVE replay |
 | `REALWORLD_TIER2.md` | 2026-07-05 | Evidence run 3: bech32, IRR/NPV, cron scheduling |
 | `REALWORLD_CVE_HIGHVALUE.md` | 2026-07-06 | Evidence run 4: high-bounty bug classes |

@@ -2586,3 +2586,193 @@ because such a word can be any of the options.
 Measurement: framework corpus 683 → 684, +1 / −0 (agno `git *args`
 wrapper, true by rule); `--min-confidence 0.9` 51 → 52. In-repo trees
 107 → 113, +6 / −0 (list and triage below). No kept finding changed.
+
+### BUG-097  the argv option-injection match was rated 0.9 and dominated the high-confidence set with positional paths in test code  [FIXED 0cc8743]
+test: tests/test_py_frontend_sinks.py
+(`::test_argv_option_injection_is_a_command_injection`,
+`::test_match_kind_reaches_extra_for_every_sink_match`)
+
+Found 2026-09-29 while scanning 209 AI-agent and MCP-server repositories
+(`bench/agent_apps_scan/REPORT.md`): 765 of 2,079 findings at confidence
+0.9 or more were E0714 argv findings from the iteration-65 rule, and
+nearly all were a positional path handed to `git` in test code
+(`["git", "init", str(tmp_path)]`).
+
+Root cause: the rule judges the first non-literal argv word of a program
+with command-running options, and returned the same match kind (`argv`,
+0.9) as the literal `["bash", "-c", cmd]` shell form. The shell form
+parses its third word as a command line. The option form runs a command
+only if the word lands as an option, and the word decides that at run
+time.
+
+Fix: the option form has its own match kind, `argv_option`, rated at the
+0.6 floor (`confidence.py`). Output only: the finding set is unchanged,
+and `--min-confidence 0.9` hides these findings. The `bash -c` form keeps
+`argv` and 0.9. Measured:
+- 15-framework corpus: 684 findings, identical keys, one finding 0.9 to
+  0.6.
+- The 209-repository set: 6,862 findings, identical; 1,361 at 0.9 or more
+  (was 2,079), with 718 moving to 0.6 and 47 `bash -c` findings staying
+  at 0.9.
+
+Both tests fail against the pre-fix code.
+
+### BUG-098  `.text(x)` on any receiver was a raw-SQL entry, so document builders fired E0713  [FIXED d18d2e2]
+test: tests/test_py_precision.py (`::test_bug098_text_needs_sql_evidence`)
+
+The one-argument `.text(x)` row (iteration 59, BUG-065) matched by method
+name on every receiver. `DocumentBuilder().text(text)` and
+`builder.page(1).text(s)` fired (Halyk tests ×5), and so did streamlit
+`st.text`, outlines `generate.text(client)` and LanceDB's hybrid FTS
+builder `.vector(e).text(query)` on the framework corpus.
+
+Fix (`d18d2e2`, `_text_is_sql`): a `.text(x)` call is a raw-SQL entry only
+with SQL evidence. The evidence can be:
+- the receiver resolves, through the imports or the constructor it is
+  bound to, into `sqlalchemy` / `sqlmodel` / `flask_sqlalchemy`
+  (`db = SQLAlchemy(app)`);
+- the receiver is spelled `db` or `sa` in a file that imports one of those
+  modules;
+- the call's result reaches an argument of a SQL executor or clause in the
+  same scope (`_sql_flow_ids`: the `sqlQuery`/`sqlExec` by-method rows plus
+  `scalars`, `scalar`, `where`, `filter`, `order_by`, `from_statement`,
+  `having`), through names bound to it (`cond = db.text(q)` then
+  `.where(cond)`).
+
+A receiver bound to any other constructor is not SQL by its name, but
+flow still counts. Inside a recognised builder chain, `.text` with a
+non-literal argument still sanctions nothing (`_is_sql_expression`,
+unchanged).
+
+Negative controls (all still E0713):
+- `db.session.execute(select(User).where(db.text(f"name = '{n}'")))` with
+  flask_sqlalchemy imported;
+- `cond = db.text(q)` then `.where(cond)`;
+- a bare `return db.text(q)` in a file importing flask_sqlalchemy;
+- `from app.extensions import db` with `db.text(q)` flowing into
+  `.filter(...)`;
+- `session.execute(DocumentBuilder().text(q))`.
+
+### BUG-099  a dict allowlist of literals was a dynamic expression  [FIXED d18d2e2]
+test: tests/test_py_precision.py (`::test_bug099_dict_allowlist_is_literal`)
+
+`order = {"a": "p.x ASC", "b": "p.x DESC"}.get(sort, "p.x ASC")`, then
+`f"... ORDER BY {order}"` passed to `con.execute(sql, args)`, fired E0713:
+the `.get` call was an opaque computed call. The value can only be one of
+the literals written there.
+
+Fix (`d18d2e2`, `_dict_choice`): the shape is a dict DISPLAY whose every
+value is a str literal and which has no `**` splat, read with
+`.get(key, "<str literal>")` or `[key]`. It is translated as a `+` of its
+candidate literals, so it is accepted wherever a literal is. Any literal
+bans are read over the candidates together, which errs toward over-flag.
+The keys and the lookup key are still translated and carried, so a sink
+inside the key is still found.
+
+Negative controls (all still E0713):
+- a dict with a non-literal value;
+- `.get(key, key)`;
+- `.get(key)` with no default;
+- `f"... ORDER BY {sort}"` where `sort` is a parameter;
+- a sink call used as the lookup key.
+
+### BUG-100  a lambda parameter fed only literals was a parameter  [FIXED d18d2e2]
+test: tests/test_py_precision.py (`::test_bug100_lambda_fed_only_literals`)
+
+`g = lambda sql: con.execute(sql)`, called only as
+`g("SELECT COUNT(*) FROM t")`, fired E0713 because the lambda body was
+judged on its own and `sql` is a parameter (MedTech `db.py`).
+
+Fix (`d18d2e2`, `_refine_bindings`): the lambda is refined when all of
+these hold:
+- it is bound once to a local name in a FUNCTION scope;
+- it has plain positional parameters only (no defaults, `*args`,
+  `**kwargs` or keyword-only parameters);
+- every load of the name in the scope, nested defs included, is the callee
+  of a positional call with matching arity (no escape).
+
+Each parameter whose every call-site argument is a str literal then takes
+those literals: one binding row per call site, and one synthetic Let per
+call site that E0723 skips. Module and class scopes are excluded, because
+a function the scope walk never sees may call the name.
+
+Negative controls (all still E0713):
+- `g(user_sql)` at any call site;
+- `other(g)`;
+- `return g`;
+- `g = other`;
+- `g(sql=q)`;
+- the parameter name also bound to a function parameter;
+- a module-level `g` called as `g(x)` from a function.
+
+### BUG-101  a SQLAlchemy statement unpacked in a `for` loop was a for-target  [FIXED d18d2e2]
+test: tests/test_py_precision.py (`::test_bug101_for_over_sqlalchemy_specs`)
+
+`delete_specs = (("a", delete(A).where(...)), ...)` followed by
+`for label, statement in delete_specs: session.execute(statement)` fired
+E0713: a for-target has no value, so it was never a safe name (Growly).
+
+Fix (`d18d2e2`, `_refine_bindings`): the iterable must be a tuple/list
+display. It can be written inline, bound once to a tuple, or bound once to
+a list whose only loads are `for` iterables (so the list is never
+mutated). Every element is unpacked to the target's arity with no starred
+elements. A target position whose every element is a SQLAlchemy
+expression (`_is_sql_expression`) or a str literal is bound to those
+elements. The binding is an argument-free `sqlBind` or a synthetic literal
+Let. This applies to function scopes only.
+
+Negative controls (all still E0713):
+- `text(user)` among the elements;
+- an f-string SQL element;
+- a list `.append`ed before the loop;
+- the target rebound to input after the loop.
+
+### BUG-102  `parseInt`/`intToString` inherit CPython's `int()` grammar and 4300-digit limit, though `Int` is specified arbitrary-precision  [FIXED f2f870e]
+test: tests/test_int_strings.py
+(`::test_parse_int_accepts_ascii_decimal_only`,
+`::test_long_ints_round_trip_past_the_cpython_digit_guard`)
+
+Found 2026-09-30 while porting SemVer 2.0.0 for the semver differential
+(`bench/realworld_semver/`). The first three lines below were re-run by
+the coordinator.
+
+Repro (`aether run`, CPython 3.11.15; `check` exits 0):
+
+```
+parseInt(" 12 ")            -> Ok 12
+parseInt("1_000")           -> Ok 1000
+parseInt("+7")              -> Ok 7
+parseInt("١٢")              -> Ok 12      (Arabic-Indic digits)
+parseInt(repeat("1", 4301)) -> Err        (a valid decimal)
+intToString(10**4301)       -> Python ValueError "Exceeds the limit (4300 digits)",
+                               raw traceback, exit 1, no structured diagnostic
+```
+
+**Root cause.** In `transpiler/aether/runtime.py`, `_ae_parseInt` is
+`int(s)` and `_ae_intToString` is `str(n)`. Both accept Python's grammar
+(surrounding whitespace, `_`, `+`, any Unicode `Nd` digit) and the
+`sys.int_max_str_digits` guard (the CVE-2020-10735 mitigation).
+
+**Spec conflict.** `grammar/types.md` specifies `Int` as arbitrary
+precision. `grammar/stdlib.md` states neither the grammar `parseInt`
+accepts nor any size bound.
+
+**Impact.**
+- A parser that must follow a grammar, such as SemVer's ASCII `<digits>`,
+  cannot use `parseInt`.
+- A program that prints a large but valid `Int` crashes with no structured
+  diagnostic.
+
+**Fixed 2026-09-30 at the owner's request.** `_ae_parseInt` accepts
+exactly ASCII `-?[0-9]+` (leading zeros allowed) and converts values
+longer than 4000 digits in chunks. `_ae_intToString` falls back to chunked
+conversion when `str()` hits the guard. `grammar/stdlib.md` states the
+grammar. Both tests fail against the pre-fix runtime. The in-repo corpus
+and the gate are unchanged (51 PASS). This is a behaviour change: a caller
+that relied on `parseInt(" 12 ")` now gets `Err`.
+
+**The original fix direction:**
+- Specify and enforce `parseInt` as ASCII `-?[0-9]+`.
+- In both functions, either lift the digit limit or fail with `E0305`
+  (stdlib precondition violation, already in `grammar/diagnostics.md`)
+  naming a documented bound.
