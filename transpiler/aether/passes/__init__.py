@@ -40,6 +40,7 @@ from .effects import (
 )
 from .modules import check_modules
 from .names import check_name_resolution
+from .numeric import check_numeric_coercion
 
 STAGES = [
     # B.1/B.2 — call-site effects must be a subset of declared effects.
@@ -56,11 +57,13 @@ STAGES = [
         check_marker_boundary, check_return_laundering,
         check_code_injection,
     ]),
-    # E0202-E0208 — static semantic checks (E0208: name resolution).
+    # E0202-E0209 — static semantic checks (E0208: name resolution;
+    # E0209: implicit Int/Float coercion where both types are known).
     ("semantic", [
         check_exhaustiveness, check_unreachable_arms, check_dead_code,
         check_unused_binding, check_ignored_result,
         check_unsatisfiable_refinement, check_name_resolution,
+        check_numeric_coercion,
     ]),
     # B.3 — transitive capability composition.
     ("capability", [check_capabilities]),

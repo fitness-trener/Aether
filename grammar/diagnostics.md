@@ -48,6 +48,7 @@ what's in `extra`, and what an agent fix-loop is supposed to do.
 | **E0206** | a bare statement discards the `Result<...>` of a call — an unchecked error (e.g. a failed write silently ignored, CWE-252) | `function`, `callee` |
 | **E0207** | a refinement type's predicate is unsatisfiable (e.g. `Int where self >= 10 and self <= 5`) — an uninhabitable / impossible type | `type`, `lo`, `hi` |
 | **E0208** | a reference to an undeclared name: a call to, or a read of, an identifier that is not a parameter, a local bound earlier in the same or an enclosing block, a top-level function / `const` / record / union case (imports included), or a stdlib function — it would be a `NameError` at `run`. Name resolution only, not type checking | `function`, `name`, `kind` (`call` \| `value`), `suggestion` (closest known name, or null) |
+| **E0209** | implicit numeric coercion: an `Int` meets a `Float` where BOTH types are statically known — an arithmetic (`+ - * / %`) or comparison (`== != < <= > >=`) operator, a `return` of the other type than the declared `returns Int`/`Float`, or a binding (annotated `let`/`var`/`const`, or an assignment to a name of known type) of the other type. A local check, not a type checker: an operand of unknown type is never a finding | `function`, `kind` (`binop` \| `return` \| `binding`), `op` (the operator; the bound name for `binding`; null for `return`), `left_type` (operator's left operand; the declared type for `return`/`binding`), `right_type` |
 
 E0201 is emitted by `Parser.err`. The lenient `parse_collect` (C.6)
 accumulates all E0201 diagnostics it can recover past; strict `parse`
@@ -113,6 +114,31 @@ the lenient parser, or an `import` that was not resolved
 (`--no-import-resolution`). It proves a name refers to SOME binding; it
 does not check that binding's type, arity or kind (`types.md`). It
 does not run on Python (`check-py` skips the semantic stage).
+
+E0209 refuses implicit numeric coercion (same default-on step / opt-out,
+`transpiler/aether/passes/numeric.py`). `Int` is exact and
+arbitrary-precision, `Float` is IEEE-754, and the emitted Python mixes
+them silently: `1 + 2.5` was `3.5` after `check` exited 0, a Float
+compared with an Int above 2**53 is compared after rounding (the humanize
+4.16.0 intword carry defect, `bench/realworld_humanize/`), and `/` is floor
+division only when both operands are Int — so a `Float`-annotated name
+holding an Int changes what `/` computes. It fires only where BOTH types
+are known, from local facts and no inference: numeric literals; names
+bound by an `Int`/`Float` (or refined-alias) parameter, `let`/`var`/`const`
+annotation, or an unannotated `let`/`var` whose first value has a known
+type; a `for` variable over `range(...)`; `result` in `ensures`, `self`
+in a refinement; calls to user functions declaring `returns Int|Float`
+and to the stdlib functions whose result type does not follow their
+argument (`length`, `count`, `size`, `bytesLen`, `byteAt`, `ord`, `gcd`,
+`lcm`, `floor`, `ceil` → Int; `sqrt` → Float). Unknown — so never a
+finding: record fields, collection elements, `Option`/`Result` payloads,
+`match` bindings, `abs`/`min`/`max`/`sum`/`product`/`pow` (their runtime
+result follows the argument), and call arguments (an `Int` passed to a
+`Float` parameter is not checked). The explicit conversions the stdlib
+offers are Float→Int only (`floor`, `ceil`); there is no Int→Float
+function, so the hint for an Int literal is to write it as a Float
+literal (`2` → `2.0`). Silent on a partial AST or unresolved imports, as
+E0208. It does not run on Python.
 
 ## Contract / refinement (E03xx)
 

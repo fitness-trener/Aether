@@ -215,7 +215,7 @@ def cmd_fmt(args) -> int:
 _STAGE_OPT_OUT = {
     "effects":    "no_static_effects",      # B.1/B.2
     "security":   "no_scope_check",         # E0710-E0730
-    "semantic":   "no_exhaustiveness_check",  # E0202-E0208
+    "semantic":   "no_exhaustiveness_check",  # E0202-E0209
     "capability": "no_capability_check",    # B.3
     "modules":    "no_module_check",        # D.3
 }
