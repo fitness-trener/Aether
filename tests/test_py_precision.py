@@ -271,7 +271,105 @@ def test_fp_probe_shapes_are_quiet_above_the_floor():
     print("probes: flagged-by-design fix shapes rate at the floor")
 
 
+def test_bug098_text_needs_sql_evidence():
+    """BUG-098: `.text(x)` on an unresolved receiver is a raw-SQL entry
+    only with SQL evidence — a SQLAlchemy / Flask-SQLAlchemy receiver, a
+    `db`/`sa` receiver in a file importing one, or the result reaching a
+    SQL executor/clause in the same function. Document builders are not
+    SQL; every SQL-evidenced shape stays E0713."""
+    doc = "from myproj.docs import DocumentBuilder\n"
+    fsa = ("from flask_sqlalchemy import SQLAlchemy\nfrom sqlalchemy import select\n"
+           "from models import User\ndb = SQLAlchemy()\n")
+    _check([
+        (doc + "def f(text):\n    DocumentBuilder().text(text)\n", []),
+        (doc + "def f(text):\n    b = DocumentBuilder()\n    b.text(text)\n    return b\n", []),
+        ("def f(builder, s):\n    builder.page(1).text(s)\n", []),
+        # negative controls
+        (fsa + "def f(n):\n    return db.session.execute("
+               "select(User).where(db.text(f\"name = '{n}'\")))\n", ["E0713"]),
+        (fsa + "def f(q):\n    cond = db.text(q)\n    return select(User).where(cond)\n",
+         ["E0713"]),
+        ("from flask_sqlalchemy import SQLAlchemy\ndef f(q):\n    return db.text(q)\n",
+         ["E0713"]),
+        ("from app.extensions import db\ndef f(q):\n    cond = db.text(q)\n"
+         "    return User.query.filter(cond).all()\n", ["E0713"]),
+        (doc + "def f(session, q):\n    return session.execute(DocumentBuilder().text(q))\n",
+         ["E0713"]),
+    ])
+    print("BUG-098: .text(x) is SQL only with SQL evidence; db.text(f\"...\") stays E0713")
+
+
+def test_bug099_dict_allowlist_is_literal():
+    """BUG-099: `{k: "lit", ...}.get(key, "lit")` / `{...}[key]` is one of
+    the literals written there. A non-literal value, a non-literal or
+    missing default, or the raw parameter stays E0713."""
+    con = "import sqlite3\ndef f(con, sort, col, args):\n"
+    tail = "    return con.execute(f'SELECT * FROM p ORDER BY {order}', args)\n"
+    _check([
+        (con + "    order = {'a': 'p.x ASC', 'b': 'p.x DESC'}.get(sort, 'p.x ASC')\n"
+               "    sql = f'SELECT * FROM p ORDER BY {order}'\n"
+               "    return con.execute(sql, args)\n", []),
+        (con + "    order = {'a': 'p.x ASC', 'b': 'p.x DESC'}[sort]\n" + tail, []),
+        # negative controls
+        (con + "    order = {'a': 'p.x ASC', 'b': col}.get(sort, 'p.x ASC')\n" + tail, ["E0713"]),
+        (con + "    order = {'a': 'p.x ASC'}.get(sort, sort)\n" + tail, ["E0713"]),
+        (con + "    order = {'a': 'p.x ASC'}.get(sort)\n" + tail, ["E0713"]),
+        (con + "    return con.execute(f'SELECT * FROM p ORDER BY {sort}', args)\n", ["E0713"]),
+        (con + "    return {'a': 'x'}.get(con.execute('SELECT ' + sort), 'x')\n", ["E0713"]),
+    ])
+    print("BUG-099: a dict allowlist of literals is a literal; any computed value is not")
+
+
+def test_bug100_lambda_fed_only_literals():
+    """BUG-100: a lambda bound once to a local name, called only with str
+    literals and never escaping, has literal-only parameters. One
+    non-literal call, an escape (passed, returned, rebound) or a
+    keyword call keeps the finding."""
+    head = "import sqlite3\ndef f(con, user_sql, other):\n    g = lambda sql: con.execute(sql)\n"
+    _check([
+        (head + "    a = g('SELECT COUNT(*) FROM t')\n    b = g('SELECT COUNT(*) FROM u')\n"
+                "    return a, b\n", []),
+        # negative controls
+        (head + "    g('SELECT 1')\n    return g(user_sql)\n", ["E0713"]),
+        (head + "    g('SELECT 1')\n    other(g)\n", ["E0713"]),
+        (head + "    g('SELECT 1')\n    return g\n", ["E0713"]),
+        (head + "    g('SELECT 1')\n    g = other\n", ["E0713"]),
+        (head + "    return g(sql=user_sql)\n", ["E0713"]),
+        # module level: a function the scope walk never sees may call it
+        ("import sqlite3\ncon = sqlite3.connect('x')\ng = lambda sql: con.execute(sql)\n"
+         "g('SELECT 1')\ndef h(x):\n    return g(x)\n", ["E0713"]),
+    ])
+    print("BUG-100: a lambda fed only literals is clean; g(user_sql) stays E0713")
+
+
+def test_bug101_for_over_sqlalchemy_specs():
+    """BUG-101: a `for` over a tuple/list display (inline or bound once,
+    never mutated) whose target position holds only SQLAlchemy expressions
+    or literals binds a sanctioned name. A `text(user)`, an f-string, or a
+    list mutated before the loop stays E0713."""
+    sa = "from sqlalchemy import delete, text\nfrom models import A, B\n"
+    loop = "    for label, statement in specs:\n        session.execute(statement)\n"
+    _check([
+        (sa + "def f(session, uid):\n    specs = (('a', delete(A).where(A.uid == uid)),"
+              " ('b', delete(B).where(B.uid == uid)))\n" + loop, []),
+        (sa + "def f(session):\n    for statement in (delete(A), 'DELETE FROM b'):\n"
+              "        session.execute(statement)\n", []),
+        # negative controls
+        (sa + "def f(session, user):\n    specs = (('a', delete(A)), ('b', text(user)))\n" + loop,
+         ["E0713", "E0713"]),
+        (sa + "def f(session, uid):\n    specs = [('a', delete(A)),"
+              " ('b', f'DELETE FROM b WHERE id = {uid}')]\n" + loop, ["E0713"]),
+        (sa + "def f(session, extra):\n    specs = [('a', delete(A))]\n"
+              "    specs.append(('b', extra))\n" + loop, ["E0713"]),
+    ])
+    print("BUG-101: a for over SQLAlchemy specs is clean; a raw string in the specs is not")
+
+
 if __name__ == "__main__":
+    test_bug098_text_needs_sql_evidence()
+    test_bug099_dict_allowlist_is_literal()
+    test_bug100_lambda_fed_only_literals()
+    test_bug101_for_over_sqlalchemy_specs()
     test_c1_quoted_pieces_compose()
     test_c2_own_origin_redirects()
     test_c3_sql_constants_and_composition()
