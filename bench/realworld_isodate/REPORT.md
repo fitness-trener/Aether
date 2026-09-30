@@ -127,7 +127,8 @@ fraction before confirming that another component followed, so it rejected
 right and did not change. The 178 unexplained cases of the first run
 became 0: 175 moved to trailing_newline and 3 to decimal_28_digits.
 
-**Upstream candidates (not filed; the owner decides).**
+**Upstream candidates.** Reported on 2026-09-30, with the owner's approval,
+as [gweis/isodate#114](https://github.com/gweis/isodate/issues/114).
 
     isodate.parse_duration("PT")        # timedelta(0)
     isodate.parse_duration("P1DT")      # timedelta(days=1)

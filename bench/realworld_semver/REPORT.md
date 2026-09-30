@@ -170,9 +170,10 @@ semver.Version.parse(s).compare(s)   # ValueError: Exceeds the limit (4300 digit
   - `integer`, `large`: nothing related (#291 negative numbers, #437
     leading-zero input, #474 the native backend proposal).
   - It appears unreported, which is not proof that it is unknown.
-- **Worth reporting upstream?** At most as a low-severity consistency note
-  ("`is_valid` accepts what `compare` cannot order"). The owner decides.
-  Nothing was filed.
+- **Reported upstream** on 2026-09-30, with the owner's approval, as
+  [python-semver#487](https://github.com/python-semver/python-semver/issues/487),
+  a low-severity consistency note that suggests comparing canonical numeric
+  identifiers by `(len, str)`.
 
 ## 5. What this does NOT prove
 

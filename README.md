@@ -182,7 +182,10 @@ the results stated as they came out:
 - **num2words 0.5.14** (1.6M checks): 0 integer divergences. Two decimal
   defects that were already open upstream.
 
-None of the three findings is a security bug. The semver run also found
+The semver and isodate findings were reported upstream on 2026-09-30 as
+[python-semver#487](https://github.com/python-semver/python-semver/issues/487)
+and [gweis/isodate#114](https://github.com/gweis/isodate/issues/114). None
+of the three findings is a security bug. The semver run also found
 a bug in Aether itself (BUG-102). Reports are in `bench/realworld_semver/`,
 `bench/realworld_isodate/` and `bench/realworld_num2words/`.
 
