@@ -2587,7 +2587,7 @@ Measurement: framework corpus 683 → 684, +1 / −0 (agno `git *args`
 wrapper, true by rule); `--min-confidence 0.9` 51 → 52. In-repo trees
 107 → 113, +6 / −0 (list and triage below). No kept finding changed.
 
-### BUG-097  the argv option-injection match was rated 0.9 and dominated the high-confidence set with positional paths in test code  [OPEN]
+### BUG-097  the argv option-injection match was rated 0.9 and dominated the high-confidence set with positional paths in test code  [FIXED 0cc8743]
 test: tests/test_py_frontend_sinks.py
 (`::test_argv_option_injection_is_a_command_injection`,
 `::test_match_kind_reaches_extra_for_every_sink_match`)
