@@ -140,6 +140,13 @@ developer-controlled input, and 11 are false positives. The rules' own
 claim, "a dangerous sink reached by a dynamic argument", held on 40 of 51
 ([`bench/framework_scan/REPORT.md`](https://github.com/fitness-trener/Aether/blob/main/bench/framework_scan/REPORT.md) §12).
 
+On a third set, 209 small AI-agent and MCP-server repositories found by a
+GitHub topic search (41,499 Python files), `check-py` finished with **0
+analyzer errors** in 277 s on 8 logical cores. 209 files did not parse,
+194 of them because they use syntax newer than the scanning Python (3.11).
+That run measured robustness only, not precision:
+[`bench/agent_apps_scan/REPORT.md`](https://github.com/fitness-trener/Aether/blob/main/bench/agent_apps_scan/REPORT.md).
+
 ## What it checks on Python, and what it does not
 
 Default-on, no annotations required:
@@ -274,8 +281,9 @@ Findings sort worst-first by the per-code risk rating, then, within a
 rating, most-certain first: a callee resolved through the file's imports
 rates 0.95 confidence, a method matched only by its name on a receiver of
 unknown type 0.6, and so does a finding whose argument already contains a
-sanitizer or an own-origin URL builder. `--min-confidence 0.9` hides the
-0.6 findings — 632 of 684 on the 15-framework corpus (re-scanned
+sanitizer or an own-origin URL builder, and a non-literal argv word handed
+to `git`/`ssh`/`tar`/`find`/`rsync`/`zip`. `--min-confidence 0.9` hides the
+0.6 findings — 633 of 684 on the 15-framework corpus (re-scanned
 2026-09-29 at 0.5.0,
 [`bench/framework_scan/REPORT.md`](https://github.com/fitness-trener/Aether/blob/main/bench/framework_scan/REPORT.md);
 framework versions pinned in `bench/framework_scan/frameworks.lock.txt`). It is a filter, not a verdict on what it

@@ -1452,6 +1452,7 @@ def test_match_kind_reaches_extra_for_every_sink_match():
         "qualified": ("import pickle\ndef f(b):\n    pickle.loads(b)\n", "E0720"),
         "guard": ("import subprocess\ndef f(c):\n    subprocess.run(c, shell=True)\n", "E0714"),
         "argv": ("import subprocess\ndef f(c):\n    subprocess.run(['bash', '-c', c])\n", "E0714"),
+        "argv_option": ("import subprocess\ndef f(u):\n    subprocess.run(['git', 'clone', u])\n", "E0714"),
         "builtin": ("def f(s):\n    exec(s)\n", "E0731"),
         "builtin_compile": ("def f(s):\n    compile(s, '<s>', 'exec')\n", "E0731"),
         "method": ("def f(cur, x):\n    cur.execute('SELECT ' + x)\n", "E0713"),
@@ -1890,7 +1891,9 @@ def test_argv_option_injection_is_a_command_injection():
     assert not bad, "\n  ".join(["argv option injection:"] + bad)
     ir, _u, _m = py_to_ir(head + flagged[0] + "\n")
     calls = [c for c in walk(ir, "Call") if c.get("func", {}).get("name") == "shellExec"]
-    assert calls and calls[0].get("match") == "argv" and confidence_of("argv") == 0.9
+    # rated at the floor: the word only runs a command if it lands as an
+    # option (the `bash -c` argv stays `argv`, 0.9)
+    assert calls and calls[0].get("match") == "argv_option" and confidence_of("argv_option") == 0.6
     print(f"G6: {len(flagged)} argv option-injection shapes flag, {len(clean)} stay clean")
 
 

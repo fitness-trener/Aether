@@ -426,3 +426,13 @@ before any report; its details are not published here. Two negative
 controls were run: haystack's YAML loader refuses `!!python/name`, and
 lxml 6.1.1 does not load an external entity in the docugami call shape.
 Both confirm false-positive verdicts.
+
+## 13. 2026-09-29: the argv option-injection match is rated at the floor
+
+The argument-injection rule of section 11 now has its own match kind,
+`argv_option`, rated 0.6. On this corpus that moves one finding, agno's
+`git *args` runner, from 0.9 to 0.6. The 684 findings are identical by
+file, line and code. `--min-confidence 0.9` now hides 633 of 684. The
+evidence for the change is `bench/agent_apps_scan/REPORT.md`: there, 765
+argv findings rated 0.9 were nearly all positional paths handed to `git`
+in test code.

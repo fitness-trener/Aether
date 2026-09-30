@@ -2753,6 +2753,27 @@ State carried forward: the full gate suite must stay green
 
 ---
 
+## Iteration 66 — robustness on 209 agent/MCP repositories; the argv option match rated at the floor (no new detector)
+
+- **Target:** not a backlog row. The owner asked for the scanner on small
+  AI-agent apps and MCP servers. A per-finding exploitability triage of
+  third-party projects was stopped and is out of scope, so this iteration
+  records robustness only (`bench/agent_apps_scan/REPORT.md`).
+- **Measured:** 41,499 files, 0 analyzer errors, 277 s on 8 logical cores.
+  209 `SyntaxError` files, 194 of them newer-Python syntax. 6,862 findings,
+  53% of them in test paths.
+- **Fix (BUG-097):** the argument-injection rule's argv form is match kind
+  `argv_option` at 0.6; `bash -c` stays `argv` at 0.9. 1,361 findings at
+  0.9 or more, down from 2,079; the framework corpus finding set is
+  identical.
+- **TYPE gap surfaced for next iter:** precision on this corpus is
+  unmeasured. The honest next measurement is a precision sample on code
+  whose owners consent, or on the in-repo CVE corpus, not on third-party
+  projects.
+- **Suite:** exit 0.
+
+---
+
 ---
 
 ## Next-iteration checklist (for the loop)

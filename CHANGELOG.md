@@ -111,7 +111,10 @@ What changes for a caller:
 - Argument injection: `git`, `ssh`, `tar`, `find`, `rsync` and `zip` with a
   non-literal word before a literal `--` in an argv list, or a
   `shlex.quote`d word in a shell string (a quoted word that starts with
-  `-` is still an option), are E0714 (BUG-096).
+  `-` is still an option), are E0714 (BUG-096). The argv form is rated
+  0.6 (match kind `argv_option`): on 209 agent/MCP repositories nearly
+  every such word was a positional path in test code, so
+  `--min-confidence 0.9` hides it; `["bash", "-c", cmd]` keeps 0.9.
 
 ### Python scanner: fewer false positives, findings in Python terms
 

@@ -2586,3 +2586,33 @@ because such a word can be any of the options.
 Measurement: framework corpus 683 → 684, +1 / −0 (agno `git *args`
 wrapper, true by rule); `--min-confidence 0.9` 51 → 52. In-repo trees
 107 → 113, +6 / −0 (list and triage below). No kept finding changed.
+
+### BUG-097  the argv option-injection match was rated 0.9 and dominated the high-confidence set with positional paths in test code  [OPEN]
+test: tests/test_py_frontend_sinks.py
+(`::test_argv_option_injection_is_a_command_injection`,
+`::test_match_kind_reaches_extra_for_every_sink_match`)
+
+Found 2026-09-29 while scanning 209 AI-agent and MCP-server repositories
+(`bench/agent_apps_scan/REPORT.md`): 765 of 2,079 findings at confidence
+0.9 or more were E0714 argv findings from the iteration-65 rule, and
+nearly all were a positional path handed to `git` in test code
+(`["git", "init", str(tmp_path)]`).
+
+Root cause: the rule judges the first non-literal argv word of a program
+with command-running options, and returned the same match kind (`argv`,
+0.9) as the literal `["bash", "-c", cmd]` shell form. The shell form
+parses its third word as a command line. The option form runs a command
+only if the word lands as an option, and the word decides that at run
+time.
+
+Fix: the option form has its own match kind, `argv_option`, rated at the
+0.6 floor (`confidence.py`). Output only: the finding set is unchanged,
+and `--min-confidence 0.9` hides these findings. The `bash -c` form keeps
+`argv` and 0.9. Measured:
+- 15-framework corpus: 684 findings, identical keys, one finding 0.9 to
+  0.6.
+- The 209-repository set: 6,862 findings, identical; 1,361 at 0.9 or more
+  (was 2,079), with 718 moving to 0.6 and 47 `bash -c` findings staying
+  at 0.9.
+
+Both tests fail against the pre-fix code.

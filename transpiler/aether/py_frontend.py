@@ -420,6 +420,7 @@ SINK_MATCH_KINDS: Tuple[str, ...] = (
     "builtin_compile",  # `compile` — builds a code object, runs nothing
     "method",           # method name only, receiver unresolved (q5)
     "argv",             # literal ["bash", "-c", cmd]
+    "argv_option",      # a non-literal argv word for git/ssh/tar/find/rsync/zip
     "stdlib_xml",       # stdlib XML parse with no parser argument: no XXE, DoS clause
 )
 
@@ -1752,10 +1753,10 @@ def _sink_match(call: _pyast.Call, imp: "_Imports",
         # input supplies can be an option that runs code (gaps round G6).
         if guard.sink_name == "shellExec" \
                 and _argv_option_payload(call, dotted, resolver) is not None:
-            return guard.sink_name, "argv"
+            return guard.sink_name, "argv_option"
         return None
     if dotted in _ARGV_POSITIONAL_RUNNERS:
-        return (("shellExec", "argv")
+        return (("shellExec", "argv_option")
                 if _argv_option_payload(call, dotted, resolver) is not None else None)
     sink = SINK_BY_QUALIFIED.get(dotted)
     if sink == "parseXml":
@@ -1984,7 +1985,7 @@ def _call_expr(node: _pyast.Call, imp: "_Imports",
     kws = list(node.keywords or [])
     if name == "shellExec":
         payload = _argv_shell_payload(node)
-        if payload is None and sink is not None and sink[1] == "argv":
+        if payload is None and sink is not None and sink[1] == "argv_option":
             # A code-option program's non-literal word (G6) is judged.
             payload = _argv_option_payload(node, dotted, resolver)
         if payload is not None:
