@@ -87,3 +87,10 @@ Draft issue text:
 > `TOMLDecodeError` with the position; valid documents over the limit
 > would then get a positioned error too. Low severity, since
 > `TOMLDecodeError` subclasses `ValueError`.
+
+Replied 2026-09-30, with the owner's approval:
+https://github.com/hukkin/tomli/issues/309#issuecomment-5916562247.
+The reply agrees to keep the behaviour and offers a README docs PR on
+implementation-limit errors (`ValueError` for over-long integers, and
+`RecursionError` for deep nesting: 5,000 levels raise it on `master`).
+It asks whether `tomllib.md` should get the note too.
