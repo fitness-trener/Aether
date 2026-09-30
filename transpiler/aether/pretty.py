@@ -358,8 +358,12 @@ class Pretty:
             s += ".0"
         return s
     def expr_StringLit(self, n):
+        # Every escape the lexer reads (`\n \t \r \\ \" \0`) is written back
+        # escaped. Printed raw, a CR broke comment re-attachment on the next
+        # `fmt` pass and a comment line was lost (BUG-104).
         v = n["value"]
-        v = v.replace("\\", "\\\\").replace('"', '\\"')
+        v = (v.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+              .replace("\r", "\\r").replace("\t", "\\t").replace("\0", "\\0"))
         return f'"{v}"'
     def expr_BoolLit(self, n):  return "true" if n["value"] else "false"
     def expr_NullLit(self, n):  return "null"

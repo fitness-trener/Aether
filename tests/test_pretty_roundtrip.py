@@ -112,7 +112,25 @@ def test_asts_equal_ignoring_pos_strips_pos_metadata():
     print("C.1 oracle: asts_equal_ignoring_pos strips pos + position metadata")
 
 
+def test_string_escapes_print_escaped():
+    """BUG-104: `expr_StringLit` escaped only `\\` and `"`, so `\\n` `\\r`
+    `\\t` `\\0` were printed as raw characters. A raw CR broke the
+    comment re-attachment on the next pass (a `// ...` line was lost), so
+    comment-keeping `fmt` was not a fixed point."""
+    for lit in ("\\n", "\\r", "\\t", "\\0", "\\\\", '\\"'):
+        src = ('function f() returns String\n  effects pure\ndo\n  return "%s"\nend\n\n'
+               "// one\n// two\nfunction g() returns Int\n  effects pure\ndo\n  return 1\nend\n") % lit
+        once = pretty(parse(src, "<r>"), src)
+        twice = pretty(parse(once, "<r>"), once)
+        assert f'return "{lit}"' in once, (lit, once)
+        assert once == twice, f"fmt not a fixed point for {lit!r}"
+        assert "// one" in twice and "// two" in twice, f"comment lost for {lit!r}"
+        assert asts_equal_ignoring_pos(parse(once, "<r>"), parse(src, "<r>")), lit
+    print("BUG-104: string escapes print escaped; comment-keeping fmt is a fixed point")
+
+
 if __name__ == "__main__":
+    test_string_escapes_print_escaped()
     test_roundtrip_full_corpus()
     test_pretty_is_idempotent()
     test_function_types_print_as_parsed()
