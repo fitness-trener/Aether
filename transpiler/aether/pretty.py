@@ -47,13 +47,29 @@ def pretty(ast: Dict[str, Any], source: Optional[str] = None) -> str:
     return p.render()
 
 
+def _quote_string(v: str) -> str:
+    """A string literal as source text. Every escape the lexer reads
+    (backslash-n, -t, -r, -backslash, -quote, -0) is written back escaped;
+    printed raw, a CR broke comment re-attachment on the next `fmt` pass
+    and a comment line was lost (BUG-104). Used by both string printers
+    (expressions and `match` literal patterns)."""
+    v = (v.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+          .replace("\r", "\\r").replace("\t", "\\t").replace("\0", "\\0"))
+    return f'"{v}"'
+
+
 def _comment_blocks(source: str, ast: Dict[str, Any]) -> Dict[Any, List[str]]:
     """{node start line: [comment lines above it]}, plus key None for the
     comments after the last code line. A block is the run of `//` and
     blank lines directly above an anchor line, scanning up to the nearest
     code line. Blank runs are collapsed to one line and leading blanks
     dropped, so the output is a fixed point."""
-    lines = source.splitlines()
+    # Split on "\n" only, as the lexer counts lines. `splitlines()` also
+    # breaks on CR, VT, FF, U+0085, U+2028 and U+2029, so one of those
+    # inside a string literal shifted every later anchor by a line and a
+    # comment line was dropped on each `fmt` pass (BUG-105). The `rstrip()`
+    # below still removes the CR of a CRLF line.
+    lines = source.split("\n")
     starts = sorted(_pos_lines(ast, set()))
     out: Dict[Any, List[str]] = {}
     for key, stop in [(s, s - 1) for s in starts] + [(None, len(lines))]:
@@ -358,13 +374,7 @@ class Pretty:
             s += ".0"
         return s
     def expr_StringLit(self, n):
-        # Every escape the lexer reads (`\n \t \r \\ \" \0`) is written back
-        # escaped. Printed raw, a CR broke comment re-attachment on the next
-        # `fmt` pass and a comment line was lost (BUG-104).
-        v = n["value"]
-        v = (v.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-              .replace("\r", "\\r").replace("\t", "\\t").replace("\0", "\\0"))
-        return f'"{v}"'
+        return _quote_string(n["value"])
     def expr_BoolLit(self, n):  return "true" if n["value"] else "false"
     def expr_NullLit(self, n):  return "null"
     def expr_Ident(self, n):    return n["name"]
@@ -426,7 +436,7 @@ class Pretty:
             lk = n.get("lit_kind")
             v = n["value"]
             if lk == "string":
-                return '"' + str(v).replace('\\', '\\\\').replace('"', '\\"') + '"'
+                return _quote_string(str(v))
             if lk == "kw":
                 return str(v)  # true / false / null
             return str(v)

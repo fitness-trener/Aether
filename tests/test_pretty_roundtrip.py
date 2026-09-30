@@ -129,8 +129,37 @@ def test_string_escapes_print_escaped():
     print("BUG-104: string escapes print escaped; comment-keeping fmt is a fixed point")
 
 
+def test_pattern_literals_and_unicode_line_breaks_keep_comments():
+    """BUG-105: the `match` literal-pattern printer had the same narrow
+    escaping as BUG-104, and `_comment_blocks` split lines with
+    `splitlines()`, which also breaks on U+2028/U+0085/VT/FF while the
+    lexer counts only "\\n" — a raw U+2028 inside a string literal shifted
+    every later comment anchor and a comment line was dropped per pass."""
+    tail = ("\n// one\n// two\nfunction g() returns Int\n  effects pure\ndo\n"
+            "  return 1\nend\n")
+    cases = [
+        # a string literal pattern with an escape
+        'function f(s: String) returns Int\n  effects pure\ndo\n'
+        '  match s do\n    case "\\n" do\n      return 1\n    end\n'
+        '    case _ do\n      return 0\n    end\n  end\nend\n',
+        # a raw U+2028 inside a string literal
+        'function f() returns String\n  effects pure\ndo\n  return "a b"\nend\n',
+    ]
+    for head in cases:
+        src = head + tail
+        once = pretty(parse(src, "<r>"), src)
+        twice = pretty(parse(once, "<r>"), once)
+        assert once == twice, f"fmt not a fixed point:\n{once!r}"
+        assert "// one" in twice and "// two" in twice, f"comment lost:\n{twice!r}"
+        assert asts_equal_ignoring_pos(parse(once, "<r>"), parse(src, "<r>"))
+    once = pretty(parse(cases[0] + tail, "<r>"), cases[0] + tail)
+    assert 'case "\\n" do' in once, f"pattern literal printed raw:\n{once!r}"
+    print("BUG-105: pattern literals escape; a Unicode line separator keeps comment anchors")
+
+
 if __name__ == "__main__":
     test_string_escapes_print_escaped()
+    test_pattern_literals_and_unicode_line_breaks_keep_comments()
     test_roundtrip_full_corpus()
     test_pretty_is_idempotent()
     test_function_types_print_as_parsed()
