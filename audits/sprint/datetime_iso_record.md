@@ -46,7 +46,13 @@ None. No Aether bugs were hit, so BUG-106 is unused.
 
 ## Upstream candidates
 
-Nothing has been filed. Each filing needs the owner's approval.
+**Filed 2026-09-30 with the owner's approval, as issues only:**
+candidate 1 is https://github.com/python/cpython/issues/158500 and
+candidate 2 is https://github.com/python/cpython/issues/158501. Before
+filing, both were re-run against `_pydatetime` from `main` @ 7eada7c2c6.
+One correction to the draft below: `main`'s `_pydatetime` rejects
+`'20200101é'` ("Argument must be an ASCII str"), so the filed text keeps
+only the ASCII examples. The drafts below are as written before filing.
 
 ### 1. `date.fromisoformat` accepts and ignores trailing characters in a 10-byte basic-format string (new)
 

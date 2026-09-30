@@ -80,7 +80,13 @@ add explicit `quot`/`rem` and `div`/`mod` stdlib functions.
 
 ### 1. dateutil: a BYDAY list mixing plain and ordinal weekdays is intersected (looks new)
 
-Status: not filed. The owner approves any upstream contact. The draft
+**Filed 2026-09-30 with the owner's approval:** issue
+https://github.com/dateutil/dateutil/issues/1588 and fix PR
+https://github.com/dateutil/dateutil/pull/1589 (the 4 new tests fail
+before the change; `tests/test_rrule.py` 564 passed, 2 skipped after).
+The text below is the draft as written before filing.
+
+Status at drafting: not filed. The owner approves any upstream contact. The draft
 fix and tests are in `audits/sprint/dateutil_fix/01_mixed_byday_union.diff`.
 
 > **Title:** rrule: `BYDAY` mixing plain and ordinal weekdays (e.g. `MO,1FR`) returns the intersection instead of the union
@@ -132,6 +138,12 @@ fix and tests are in `audits/sprint/dateutil_fix/01_mixed_byday_union.diff`.
 > nearest are #34 and #1548.
 
 ### 2. dateutil: WEEKLY + BYSETPOS first week (known; do not file)
+
+**Commented 2026-09-30 with the owner's approval:**
+https://github.com/dateutil/dateutil/pull/1575#issuecomment-5911755789.
+The harness at 1/10 scale against the PR head: every WEEKLY+BYSETPOS
+divergence gone (272 rules, 94 synchronized); `tests/test_rrule.py` 588
+passed, 2 skipped.
 
 Already reported as #1398. Open PR #1575 (2026-09-26) fixes it with
 synchronized regression cases. The run adds 179 synchronized

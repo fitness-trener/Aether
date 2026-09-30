@@ -48,8 +48,11 @@ only `\\` and `"`.
 
 ### tomllib/tomli: `loads` raises `ValueError`, not `TOMLDecodeError`, on an invalid document with a >4300-digit integer (low)
 
-New as far as searched (cpython and tomli trackers, 2026-09-30). Not
-filed; the owner decides.
+New as far as searched (cpython and tomli trackers, 2026-09-30).
+**Filed 2026-09-30 with the owner's approval** in tomllib's upstream:
+https://github.com/hukkin/tomli/issues/309, after reproducing it on tomli
+`master` @ 5a77b12. The filed text drops the gh-156414 docs reference,
+which was not re-verified.
 
 Draft issue text:
 
