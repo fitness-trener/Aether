@@ -1,0 +1,355 @@
+// expect: clean
+// ISO 8601 durations, written from the grammar (not from isodate's code),
+// for a differential run against isodate 0.7.2's parse_duration and
+// duration_isoformat. Clauses are cited as recalled from ISO 8601:2004
+// §4.4.3 (ISO 8601-1:2019 §5.5.2); the standard is paywalled and was not
+// re-read for this port.
+//
+// Grammar accepted (format with designators, 2004 §4.4.3.2):
+//   ["-"] "P" [n"Y"] [n"M"] [n"D"] ["T" [n"H"] [n"M"] [n"S"]]
+//   ["-"] "P" n"W"                              (weeks stand alone)
+// where n is one or more ASCII digits, and ONLY the lowest-order component
+// present may carry a decimal fraction: "," or "." followed by one or more
+// digits (2004 §4.4.3.2; decimal sign per §4.2.2.4, comma preferred).
+// Refused: no component ("P", "PT"), "T" with no time component ("P1DT"),
+// designators out of order or repeated, "W" combined with anything,
+// lower-case designators, a sign other than a leading "-" (negative
+// durations are an ISO 8601-2:2019 extension, not in the 2004 grammar).
+//
+// The alternative format (2004 §4.4.3.3, "PYYYY-MM-DDThh:mm:ss") is out
+// of scope for this port.
+//
+// Representation: every value is exact. Years and months stay separate
+// (their length in seconds is calendar-dependent); days, weeks, hours,
+// minutes and seconds fold into one exact rational number of seconds with
+// a day taken as 86400 s — the same nominal day isodate's timedelta uses.
+
+record IsoDuration do
+  negative: Bool
+  yearsNum: Int
+  yearsDen: Int
+  monthsNum: Int
+  monthsDen: Int
+  secondsNum: Int
+  secondsDen: Int
+end
+
+function zeroDuration() returns IsoDuration
+  effects pure
+do
+  return IsoDuration(false, 0, 1, 0, 1, 0, 1)
+end
+
+// A value no parse can produce (negative numerator): the "not parsed"
+// stand-in for contracts that read a Result through unwrapOr.
+function invalidDuration() returns IsoDuration
+  effects pure
+do
+  return IsoDuration(false, 0 - 1, 1, 0, 1, 0, 1)
+end
+
+function nonNegative(d: IsoDuration) returns Bool
+  effects pure
+do
+  return d.yearsNum >= 0 and d.monthsNum >= 0 and d.secondsNum >= 0 and d.yearsDen >= 1 and d.monthsDen >= 1 and d.secondsDen >= 1
+end
+
+function isZero(d: IsoDuration) returns Bool
+  effects pure
+do
+  return d.yearsNum == 0 and d.monthsNum == 0 and d.secondsNum == 0
+end
+
+function signOf(d: IsoDuration) returns Int
+  effects pure
+  ensures result == 1 or result == 0 - 1
+do
+  if d.negative then
+    return 0 - 1
+  end
+  return 1
+end
+
+// Signed exact equality, component by component (a/b == c/e  <=>  a*e == c*b).
+function sameValue(a: IsoDuration, b: IsoDuration) returns Bool
+  effects pure
+do
+  let sa = signOf(a)
+  let sb = signOf(b)
+  return sa * a.yearsNum * b.yearsDen == sb * b.yearsNum * a.yearsDen and sa * a.monthsNum * b.monthsDen == sb * b.monthsNum * a.monthsDen and sa * a.secondsNum * b.secondsDen == sb * b.secondsNum * a.secondsDen
+end
+
+function charAt(cs: List<String>, i: Int) returns String
+  effects pure
+do
+  return unwrapOrElse(get(cs, i), "")
+end
+
+// 0..9 for an ASCII digit, -1 for anything else (including non-ASCII
+// digits, which the ISO grammar's "n" does not cover).
+function digitValue(c: String) returns Int
+  effects pure
+  ensures result >= 0 - 1 and result <= 9
+do
+  if length(c) != 1 then
+    return 0 - 1
+  end
+  let o = ord(c)
+  if o >= 48 and o <= 57 then
+    return o - 48
+  end
+  return 0 - 1
+end
+
+// Designator order: Y M W D | T | H M S. 0 = not a designator here.
+function designatorRank(d: String, inTime: Bool) returns Int
+  effects pure
+  ensures result >= 0 and result <= 7
+do
+  if inTime then
+    if d == "H" then
+      return 5
+    elif d == "M" then
+      return 6
+    elif d == "S" then
+      return 7
+    end
+    return 0
+  end
+  if d == "Y" then
+    return 1
+  elif d == "M" then
+    return 2
+  elif d == "W" then
+    return 3
+  elif d == "D" then
+    return 4
+  end
+  return 0
+end
+
+function unitSeconds(rank: Int) returns Int
+  effects pure
+  requires rank >= 3 and rank <= 7
+  ensures result >= 1
+do
+  if rank == 3 then
+    return 604800
+  elif rank == 4 then
+    return 86400
+  elif rank == 5 then
+    return 3600
+  elif rank == 6 then
+    return 60
+  end
+  return 1
+end
+
+function parseDuration(s: String) returns Result<IsoDuration, String>
+  effects pure
+  ensures nonNegative(unwrapOr(result, zeroDuration()))
+do
+  let cs = chars(s)
+  let n = length(cs)
+  var i = 0
+  var negative = false
+  if charAt(cs, 0) == "-" then
+    negative = true
+    i = 1
+  end
+  if charAt(cs, i) != "P" then
+    return Err("missing duration designator P")
+  end
+  i = i + 1
+  var inTime = false
+  var timeComponents = 0
+  var components = 0
+  var lastRank = 0
+  var sawFraction = false
+  var sawWeeks = false
+  var yN = 0
+  var yD = 1
+  var mN = 0
+  var mD = 1
+  var sN = 0
+  var sD = 1
+  while i < n do
+    let c = charAt(cs, i)
+    if c == "T" then
+      if inTime then
+        return Err("time designator T repeated")
+      end
+      inTime = true
+      i = i + 1
+    else
+      var intPart = 0
+      var intDigits = 0
+      while i < n and digitValue(charAt(cs, i)) >= 0 do
+        intPart = intPart * 10 + digitValue(charAt(cs, i))
+        intDigits = intDigits + 1
+        i = i + 1
+      end
+      if intDigits == 0 then
+        return Err("expected digits")
+      end
+      // Checked here, once a real component follows, not at the top of
+      // the loop: "P1.5D\n" is trailing garbage, not a misplaced fraction.
+      let fractionBefore = sawFraction
+      var fracPart = 0
+      var fracDen = 1
+      let sep = charAt(cs, i)
+      if sep == "," or sep == "." then
+        i = i + 1
+        var fracDigits = 0
+        while i < n and digitValue(charAt(cs, i)) >= 0 do
+          fracPart = fracPart * 10 + digitValue(charAt(cs, i))
+          fracDen = fracDen * 10
+          fracDigits = fracDigits + 1
+          i = i + 1
+        end
+        if fracDigits == 0 then
+          return Err("decimal sign with no digits after it")
+        end
+        sawFraction = true
+      end
+      let rank = designatorRank(charAt(cs, i), inTime)
+      if rank == 0 then
+        return Err("expected a designator")
+      end
+      if rank <= lastRank then
+        return Err("designator out of order or repeated")
+      end
+      if fractionBefore then
+        return Err("decimal fraction on a component that is not the lowest-order one")
+      end
+      if sawWeeks or (rank == 3 and components > 0) then
+        return Err("weeks cannot be combined with other components")
+      end
+      if rank == 3 then
+        sawWeeks = true
+      end
+      lastRank = rank
+      components = components + 1
+      if inTime then
+        timeComponents = timeComponents + 1
+      end
+      let num = intPart * fracDen + fracPart
+      if rank == 1 then
+        yN = num
+        yD = fracDen
+      elif rank == 2 then
+        mN = num
+        mD = fracDen
+      else
+        sN = sN * fracDen + num * unitSeconds(rank) * sD
+        sD = sD * fracDen
+      end
+      i = i + 1
+    end
+  end
+  if components == 0 then
+    return Err("a duration needs at least one component")
+  end
+  if inTime and timeComponents == 0 then
+    return Err("time designator T with no time component")
+  end
+  return Ok(IsoDuration(negative, yN, yD, mN, mD, sN, sD))
+end
+
+function isPowerOfTen(n: Int) returns Bool
+  effects pure
+do
+  var m = n
+  while m > 1 and m % 10 == 0 do
+    m = m / 10
+  end
+  return m == 1
+end
+
+function decimalExponent(n: Int) returns Int
+  effects pure
+  requires isPowerOfTen(n)
+  ensures result >= 0
+do
+  var m = n
+  var k = 0
+  while m > 1 do
+    m = m / 10
+    k = k + 1
+  end
+  return k
+end
+
+function stripTrailingZeros(s: String) returns String
+  effects pure
+  ensures not endsWith?(result, "0")
+do
+  var t = s
+  while endsWith?(t, "0") do
+    t = slice(t, 0, length(t) - 1)
+  end
+  return t
+end
+
+// Canonical designator form, same shape as isodate's "P%P": integral
+// years and months, then the seconds split into D / T H M S with 86400 s
+// per day, a fraction only on S, "P0D" for zero, "-" for a nonzero
+// negative. The ensures clause is the round-trip law.
+function formatDuration(d: IsoDuration) returns String
+  effects pure
+  requires nonNegative(d) and d.yearsDen == 1 and d.monthsDen == 1 and isPowerOfTen(d.secondsDen)
+  ensures sameValue(unwrapOr(parseDuration(result), invalidDuration()), d)
+do
+  let whole = d.secondsNum / d.secondsDen
+  let frac = d.secondsNum % d.secondsDen
+  let days = whole / 86400
+  let hours = (whole % 86400) / 3600
+  let minutes = (whole % 3600) / 60
+  let secs = whole % 60
+  var parts = []
+  if d.yearsNum != 0 then
+    parts = append(parts, join([intToString(d.yearsNum), "Y"], ""))
+  end
+  if d.monthsNum != 0 then
+    parts = append(parts, join([intToString(d.monthsNum), "M"], ""))
+  end
+  if days != 0 then
+    parts = append(parts, join([intToString(days), "D"], ""))
+  end
+  if hours != 0 or minutes != 0 or secs != 0 or frac != 0 then
+    parts = append(parts, "T")
+    if hours != 0 then
+      parts = append(parts, join([intToString(hours), "H"], ""))
+    end
+    if minutes != 0 then
+      parts = append(parts, join([intToString(minutes), "M"], ""))
+    end
+    if frac != 0 then
+      let digits = padLeft(intToString(frac), decimalExponent(d.secondsDen), "0")
+      parts = append(parts, join([intToString(secs), ".", stripTrailingZeros(digits), "S"], ""))
+    elif secs != 0 then
+      parts = append(parts, join([intToString(secs), "S"], ""))
+    end
+  end
+  var body = join(parts, "")
+  if body == "" then
+    body = "0D"
+  end
+  if d.negative and not isZero(d) then
+    return join(["-P", body], "")
+  end
+  return join(["P", body], "")
+end
+
+function main() returns Unit
+  effects log
+do
+  for s in ["P1Y2M3DT4H5M6.5S", "PT1,5H", "-P2W", "PT", "P1.5DT2H", "P1W1D"] do
+    let r = parseDuration(s)
+    if isOk?(r) then
+      print(join([s, " -> ", formatDuration(unwrapOr(r, zeroDuration()))], ""))
+    else
+      print(join([s, " -> rejected"], ""))
+    end
+  end
+end
