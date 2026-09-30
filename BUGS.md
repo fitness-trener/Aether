@@ -2727,7 +2727,7 @@ Negative controls (all still E0713):
 - a list `.append`ed before the loop;
 - the target rebound to input after the loop.
 
-### BUG-102  `parseInt`/`intToString` inherit CPython's `int()` grammar and 4300-digit limit, though `Int` is specified arbitrary-precision  [OPEN]
+### BUG-102  `parseInt`/`intToString` inherit CPython's `int()` grammar and 4300-digit limit, though `Int` is specified arbitrary-precision  [FIXED f2f870e]
 test: tests/test_int_strings.py
 (`::test_parse_int_accepts_ascii_decimal_only`,
 `::test_long_ints_round_trip_past_the_cpython_digit_guard`)
