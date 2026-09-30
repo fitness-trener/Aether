@@ -603,7 +603,10 @@ class _FnScope:
         self.request_params: frozenset = frozenset()
         self.redirect_guards: List[Tuple[str, int, int]] = []
         self.class_lits: Dict[str, Tuple[str, int]] = {}
-        self.depth = 0            # current `_expr` nesting (see _MAX_EXPR_DEPTH)
+        # ids of the calls whose value reaches a SQL executor/clause
+        # argument in this scope (`_sql_flow_ids`, BUG-098).
+        self.sql_flow: frozenset = frozenset()
+        self.depth = 0           # current `_expr` nesting (see _MAX_EXPR_DEPTH)
         self.too_deep = False     # set when the cap was hit in this scope
 
     def __call__(self, name: str) -> Optional[str]:
@@ -963,6 +966,28 @@ def _raw_literal(a: Any, scope: Any = None) -> bool:
         isinstance(a, _pyast.Name) and a.id in getattr(scope, "lit_names", ()))
 
 
+def _dict_choice(node: Any) -> Optional[Tuple[List[Any], List[Any]]]:
+    """`(the str literals the value is one of, what else is evaluated)` for
+    `{k: "lit", ...}.get(key, "lit")` or `{k: "lit", ...}[key]` on a dict
+    DISPLAY whose every value is a str literal; else None. A `.get` with
+    no default or a non-literal one, a `**` splat, or a name bound to a
+    dict (mutable elsewhere) is not a choice among literals."""
+    if isinstance(node, _pyast.Subscript):
+        d, key, default = node.value, node.slice, None
+    elif isinstance(node, _pyast.Call) and isinstance(node.func, _pyast.Attribute) \
+            and node.func.attr == "get" and len(node.args) == 2 and not node.keywords:
+        d, key, default = node.func.value, node.args[0], node.args[1]
+        if _const_str(default) is None:
+            return None
+    else:
+        return None
+    if not isinstance(d, _pyast.Dict) or not d.values or None in d.keys \
+            or any(_const_str(v) is None for v in d.values) \
+            or isinstance(key, (_pyast.Slice, _pyast.Starred)):
+        return None
+    return list(d.values) + ([default] if default is not None else []), list(d.keys) + [key]
+
+
 def _is_str_shaped(node: Any) -> bool:
     """A str BUILT at runtime: an f-string with an interpolation, a `+`
     chain with a str literal among non-literal parts, `"..." % x`,
@@ -1007,7 +1032,8 @@ def _raw_sql_entry(call: _pyast.Call, imp: "_Imports",
     if _sql_builder_of(func, imp) in _SQL_TEXT_ENTRY:
         kind = "qualified"
     elif isinstance(func, _pyast.Attribute) and func.attr == "text" \
-            and len(call.args) + len(call.keywords or []) == 1:
+            and len(call.args) + len(call.keywords or []) == 1 \
+            and _text_is_sql(call, imp, scope):
         # SQLAlchemy's `text(text)` takes the one string and nothing else;
         # a `.text(x, y, c)` or `.text(q, max_results=n)` is some other
         # API's signature (a canvas, a search client: 3 corpus sites).
@@ -1028,6 +1054,157 @@ def _raw_sql_entry(call: _pyast.Call, imp: "_Imports",
     if judged is None or _raw_literal(judged, scope):
         return None
     return judged, kind
+
+
+# `.text(x)` on an unresolved receiver is a raw-SQL entry only with SQL
+# EVIDENCE (BUG-098): `DocumentBuilder().text(t)` and `builder.page(1).
+# text(s)` are document builders, and the by-name row fired on both.
+_TEXT_SQL_ROOTS = _SQL_EXPR_ROOTS | {"flask_sqlalchemy"}
+# The conventional Flask-SQLAlchemy / SQLAlchemy receiver names, trusted
+# only in a file that imports one of `_TEXT_SQL_ROOTS`.
+_TEXT_SQL_RECEIVERS = frozenset({"db", "sa"})
+# Calls a `.text(...)` result reaching an argument of is SQL evidence: the
+# by-name executors plus the builder clauses that take a text clause.
+_SQL_FLOW_METHODS = frozenset(
+    {m for m, s in SINK_BY_METHOD.items() if s in ("sqlQuery", "sqlExec")}
+    | {"scalars", "scalar", "where", "filter", "order_by", "from_statement",
+       "having"})
+
+
+def _text_is_sql(call: _pyast.Call, imp: "_Imports", scope: Any) -> bool:
+    """SQL evidence for `recv.text(x)`: the receiver resolves into
+    SQLAlchemy / Flask-SQLAlchemy (an import, or a constructor it is bound
+    to: `db = SQLAlchemy(app)`); or it is spelled `db`/`sa` in a file that
+    imports one of them; or the call's result flows into an argument of a
+    SQL executor or clause in the same scope (`_sql_flow_ids`). A receiver
+    bound to any OTHER constructor is not SQL by its name — but flow still
+    counts, so `execute(DocumentBuilder().text(q))` stays a finding."""
+    if id(call) in getattr(scope, "sql_flow", ()):
+        return True
+    recv = call.func.value
+    ctor = _instance_ctor(call.func, scope)
+    spelled = (_callee_spelling(ctor.func, imp, scope) if ctor is not None
+               else _callee_spelling(recv, imp, scope)
+               if isinstance(recv, (_pyast.Name, _pyast.Attribute)) else None)
+    if spelled and "." in spelled and _module_root(spelled) in _TEXT_SQL_ROOTS:
+        return True
+    if ctor is not None or not isinstance(recv, _pyast.Name) \
+            or recv.id not in _TEXT_SQL_RECEIVERS:
+        return False
+    return any(_module_root(t) in _TEXT_SQL_ROOTS
+               for t in list(imp.alias_to_path.values()) + list(imp.fromimport.values()))
+
+
+def _sql_flow_ids(calls: List[Any], binds: List[Tuple[str, Any, int]]) -> frozenset:
+    """ids of every Call node inside an argument of a `_SQL_FLOW_METHODS`
+    call, following names through their bound values (`cond = db.text(q)`
+    then `.where(cond)`), in one scope."""
+    values: Dict[str, List[Any]] = {}
+    for n, v, _l in binds:
+        if v is not None:
+            values.setdefault(n, []).append(v)
+    todo = [a for c in calls
+            if isinstance(c.func, _pyast.Attribute) and c.func.attr in _SQL_FLOW_METHODS
+            for a in list(c.args) + [k.value for k in c.keywords or []]]
+    ids: Set[int] = set()
+    names: Set[str] = set()
+    while todo:
+        for s in _walk(todo.pop()):
+            if isinstance(s, _pyast.Call):
+                ids.add(id(s))
+            elif isinstance(s, _pyast.Name) and s.id not in names:
+                names.add(s.id)
+                todo += values.get(s.id, [])
+    return frozenset(ids)
+
+
+def _name_loads(node: Any, name: str) -> int:
+    return sum(1 for s in _walk(node) if isinstance(s, _pyast.Name)
+               and s.id == name and isinstance(s.ctx, _pyast.Load))
+
+
+def _refine_bindings(node: Any, ix: "_DefIndex", binds: List[Tuple[str, Any, int]],
+                     imp: "_Imports", module_lits: Optional[Dict[str, Tuple[str, int]]]
+                     ) -> Tuple[List[Tuple[str, Any, int]], List[Tuple[str, Any]]]:
+    """Give two value-less binding forms the values they provably take,
+    as `(binding rows, [(name, value node)] the scope binds as Lets)`.
+    Each replaced value-less row becomes one row per value; a name any
+    OTHER binding makes unsafe stays unsafe, the Lets only add values.
+
+    * `g = lambda sql: con.execute(sql)` bound once, every load of `g` in
+      the scope a call `g("lit", ...)` (it never escapes): each parameter
+      whose every call-site argument is a str literal takes those
+      literals (BUG-100).
+    * `for label, stmt in specs:` over a tuple/list DISPLAY — inline, or a
+      name bound once to a tuple, or to a list loaded nowhere but as a
+      `for` iterable (so never mutated): a target position whose every
+      element is a SQLAlchemy expression (`_is_sql_expression`) or a str
+      literal takes those elements (BUG-101).
+
+    Function scopes only: a module- or class-level name is reachable from
+    every function in the file, whose loads this scope's walk never sees."""
+    if not isinstance(node, (_pyast.FunctionDef, _pyast.AsyncFunctionDef)):
+        return binds, []
+    counts: Dict[str, int] = {}
+    for n, _v, _l in binds:
+        counts[n] = counts.get(n, 0) + 1
+    judge: List[Any] = []                          # the scope, built on first use
+    out: List[Tuple[str, Any, List[Any]]] = []     # (name, row replaced, values)
+    for n, lam, _ln in binds:
+        if not isinstance(lam, _pyast.Lambda) or counts[n] != 1:
+            continue
+        a = lam.args
+        if a.vararg or a.kwarg or a.kwonlyargs or a.defaults \
+                or getattr(a, "posonlyargs", None):
+            continue
+        sites = [c for c in ix.calls if isinstance(c.func, _pyast.Name) and c.func.id == n]
+        if not sites or _name_loads(node, n) != len(sites) or any(
+                c.keywords or len(c.args) != len(a.args) for c in sites):
+            continue
+        for i, p in enumerate(a.args):
+            if all(_const_str(c.args[i]) is not None for c in sites):
+                out.append((p.arg, (p.arg, None, lam.lineno), [c.args[i] for c in sites]))
+    values = {n: v for n, v, _l in binds if counts[n] == 1}
+    for f in ix.stmts:
+        if not isinstance(f, (_pyast.For, _pyast.AsyncFor)):
+            continue
+        seq = f.iter
+        if isinstance(seq, _pyast.Name) and counts.get(seq.id) == 1:
+            v = values.get(seq.id)
+            if not (isinstance(v, _pyast.Tuple) or (
+                    isinstance(v, _pyast.List) and _name_loads(node, seq.id) == sum(
+                        1 for g in ix.stmts if isinstance(g, (_pyast.For, _pyast.AsyncFor))
+                        and isinstance(g.iter, _pyast.Name) and g.iter.id == seq.id))):
+                continue
+            seq = v
+        if not isinstance(seq, (_pyast.Tuple, _pyast.List)) or not seq.elts:
+            continue
+        tgt = f.target
+        slots = [tgt] if isinstance(tgt, _pyast.Name) else list(tgt.elts) \
+            if isinstance(tgt, (_pyast.Tuple, _pyast.List)) else []
+        rows = [[e] if isinstance(tgt, _pyast.Name) else list(e.elts)
+                if isinstance(e, (_pyast.Tuple, _pyast.List)) else None for e in seq.elts]
+        if not slots or any(r is None or len(r) != len(slots) for r in rows):
+            continue
+        if not judge:
+            judge.append(_FnScope({}, *_sql_expression_names(binds, imp, module_lits)))
+        for i, t in enumerate(slots):
+            col = [r[i] for r in rows]
+            if isinstance(t, _pyast.Name) and all(
+                    _const_str(e) is not None
+                    or (isinstance(e, _pyast.Call) and _is_sql_expression(e, imp, judge[0]))
+                    for e in col):
+                out.append((t.id, (t.id, None, f.lineno), col))
+    if not out:
+        return binds, []
+    binds = list(binds)
+    lets: List[Tuple[str, Any]] = []
+    for name, row, vals in out:
+        if row in binds:
+            binds.remove(row)
+            binds += [(name, e, getattr(e, "lineno", row[2])) for e in vals]
+            lets += [(name, e) for e in vals]
+    return binds, lets
 
 
 def _assign_bindings(binds: List[Tuple[str, Any, int]]) -> Dict[str, List[Any]]:
@@ -1466,6 +1643,17 @@ def _expr_inner(node: Any, imp: "_Imports",
             return {"kind": "StringLit", "pos": _pos(node),
                     "value": "".join(p.get("value", "") for p in parts)}
         return _concat(parts)
+    choice = _dict_choice(node)
+    if choice is not None:
+        # `{"a": "x ASC", "b": "x DESC"}.get(key, "x ASC")` / `{...}[key]`
+        # is one of the literals written there, whatever `key` is — an
+        # allowlist (BUG-099). The literals reach the rules as a `+` of
+        # themselves: accepted wherever a literal is, their bans read over
+        # them together (over-flag). The keys and the key are carried.
+        lits, carried = choice
+        out = _concat([_expr(v, imp, safe_xml, resolver) for v in lits])
+        out = dict(out, parts=[_expr(c, imp, safe_xml, resolver) for c in carried])
+        return out
     if isinstance(node, _pyast.Call):
         return _call_expr(node, imp, safe_xml, resolver)
     if isinstance(node, _pyast.Attribute):
@@ -3081,7 +3269,7 @@ def py_to_ir(source: str) -> Tuple[Dict[str, Any], Dict[str, List[Dict[str, Any]
         v = _FnVisitor(imports, simple_names, qual, line, module_lits=module_lits)
         try:
             ix = _DefIndex(node)
-            binds = ix.bindings
+            binds, lets = _refine_bindings(node, ix, ix.bindings, imports, module_lits)
             sql_names, lit_names = _sql_expression_names(binds, imports, module_lits)
             counts: Dict[str, int] = {}
             for n, _v, _l in binds:
@@ -3096,6 +3284,9 @@ def py_to_ir(source: str) -> Tuple[Dict[str, Any], Dict[str, List[Dict[str, Any]
                             if counts[n] == 1 and val is not None},
                            module)
             v.has_walrus = ix.has_walrus
+            if any(isinstance(c.func, _pyast.Attribute) and c.func.attr == "text"
+                   for c in ix.calls):
+                v.scope.sql_flow = _sql_flow_ids(ix.calls, binds)
             v.scope.class_lits = class_lits.get(qual.rpartition(".")[0], {})
             fargs = getattr(node, "args", None)
             v.scope.request_params = frozenset(
@@ -3113,6 +3304,14 @@ def py_to_ir(source: str) -> Tuple[Dict[str, Any], Dict[str, List[Dict[str, Any]
             for sub in ix.calls:
                 v.visit_call(sub)
             v.seed_bindings(binds)
+            for n, e in lets:
+                # The value is written (and judged) elsewhere — at the call
+                # site, in the display — so it is `synthetic` / argument-free.
+                v.stmts.append({"kind": "Let", "name": n, "pos": _pos(e, line),
+                                "value": {"kind": "StringLit", "value": e.value,
+                                          "pos": _pos(e, line), "synthetic": True}
+                                if _const_str(e) is not None
+                                else _py_wrapper("sqlBind", [], e)})
             # Statements only. A handler's exception type and a case's
             # guard are expression children of their Try / Match
             # statement and are translated there; visiting the handler
