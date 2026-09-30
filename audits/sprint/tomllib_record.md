@@ -54,6 +54,17 @@ https://github.com/hukkin/tomli/issues/309, after reproducing it on tomli
 `master` @ 5a77b12. The filed text drops the gh-156414 docs reference,
 which was not re-verified.
 
+**Response, 2026-09-30.** Not new. cpython gh-153392 / PR #153393 had
+proposed the same change for a *valid* document with an over-long integer.
+They were closed in 2026-07 as intended behaviour: encukou said the
+document is valid, but Python can't handle its contents, so `ValueError`
+is reasonable. The prior-art search missed it because it covered issues
+only, not PRs, and used "4300 digits" rather than "over-long". On #309,
+hukkin agreed with CPython and suggested documenting the limit, together
+with the `RecursionError` from deep nesting. Our variant, an invalid
+document whose syntax error is masked, is narrower, but the maintainers
+have not taken it up. Counted as **not a confirmed defect**.
+
 Draft issue text:
 
 > **tomllib.loads raises ValueError instead of TOMLDecodeError on an invalid document containing a very long integer**
