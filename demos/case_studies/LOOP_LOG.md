@@ -2886,6 +2886,162 @@ State carried forward: the full gate suite must stay green
 
 ---
 
+## Iteration 71 — real-world differential: dateutil.rrule (no new detector)
+
+- **Target:** not a backlog row; a sprint spec-port differential. RFC 5545
+  recurrence expansion (§3.3.10 RECUR, §3.8.5.3 RRULE) was ported to
+  Aether from the RFC text and compared with python-dateutil 2.9.0.post0
+  `rrule` (dateutil/dateutil, 2,638 stars per `gh api`, 2026-09-30).
+  Upstream `rrule.py` on `master` is identical to the installed file.
+- **Built:**
+  - `bench/realworld_dateutil/rrule_port.aeth` (`// expect: clean`). It
+    covers YEARLY/MONTHLY/WEEKLY/DAILY, INTERVAL, COUNT/UNTIL, BYMONTH,
+    BYMONTHDAY, BYDAY with ordinals, BYSETPOS and WKST, over exact Int
+    dates.
+  - Runtime contracts on `expand`: strictly increasing; ≥ DTSTART; COUNT
+    bound; UNTIL bound; every BYxxx part holds; a synchronized DTSTART is
+    first.
+  - `differential.py`, seed 20260930.
+  - Draft upstream fixes in `audits/sprint/dateutil_fix/`.
+- **Measured:**
+  - 35/35 RFC example vectors match on both sides.
+  - 50,000 random rules (1,527,214 instances): 5,952 divergences, all
+    attributed, 0 port bugs, and no contract fired on the real port.
+  - 5,658 rules: mixed plain/ordinal BYDAY is intersected by dateutil.
+    (b); it looks new.
+  - 179 rules: WEEKLY+BYSETPOS with a synchronized DTSTART. (b), known:
+    #1398 and PR #1575.
+  - 115 rules: the same mechanism with an unsynchronized DTSTART. (c),
+    because the RFC leaves that case undefined.
+  - All six single-rule mutants fail the harness, three of them through
+    the port's own `E0304` (runtime).
+  - Both draft fixes: 5,000/5,000 agree at 1/10 scale, and dateutil's
+    rrule tests give 566 passed (560 existing + 6 new).
+- **Upstream:** one candidate (mixed BYDAY). Nothing filed.
+- **TYPE gap surfaced for next iter:** the spec does not say how Int `/`
+  and `%` round with negative operands. The runtime floors (Python `//`
+  and `%`), so a port transcribed from a truncating-division source
+  computes silently different values (BUG-103). Pin it in
+  `grammar/types.md` or `grammar/stdlib.md`, and add a test.
+- **Suite:** `python -B scripts/run_all.py` exit 0 at `de2dfed`.
+- **Aether bugs hit:** BUG-103, closed in the same sprint (`1055115`):
+  `grammar/types.md` pins floor division and remainder;
+  `tests/test_int_division.py`.
+
+---
+
+## Iteration 72 — real-world differential: tomllib (no new detector)
+
+- **Target:** CPython 3.11.15 `tomllib` against TOML v1.0.0: numbers,
+  booleans, strings, keys, and the table-redefinition rules
+  (`bench/realworld_tomllib/`).
+- **Measured:** 110,000 documents, seed 20260930.
+  - 109,982 agree.
+  - 18 divergences, all attributed: 6 out of scope, 9 at the documented
+    4300-digit limit, and 3 lone surrogates in a `str`.
+  - 59,349 of 59,350 round trips pass.
+  - All three mutants of the port fail the harness; one is stopped by the
+    port's own E0304 contract.
+- **Library (b):** none.
+- **Upstream candidate (low, not filed):** an invalid document with an
+  integer over 4300 digits raises `ValueError`, not `TOMLDecodeError`.
+  Still on `main` and in tomli; no prior report.
+- **Aether bug:** BUG-104. The pretty-printer wrote string escapes raw, so
+  a second `fmt` pass lost a comment line. Fixed.
+- **TYPE gap surfaced for next iter:** none for the security loop.
+- **Suite:** exit 0.
+
+---
+
+## Iteration 73 — real-world differential: packaging specifiers (no new detector)
+
+- **Target:** PEP 440 "Version specifiers" vs `packaging` 26.3
+  `packaging.specifiers`.
+- **Built:** `bench/realworld_packaging_specifiers/specifiers_port.aeth`,
+  written from the PEP text, with its ordering taken from
+  `bench/realworld_packaging/pep440.aeth`. Its runtime contracts each pair
+  two formulations of one rule. The harness is `differential.py`.
+- **Measured:**
+  - Inputs: 312,005 contains checks, 20,000 filter lists and 20,032
+    validity strings.
+  - Matching: 0 divergences, and 0 library self-consistency failures.
+  - Validity: 223 divergences, all in known classes. Three are
+    intentional or unspecified (#425/#831, #1000, #974); one is a defect
+    already fixed on main (PR #1384).
+  - The port had one bug of its own (empty `===`), now fixed.
+  - Mutants: all 10 fail the harness, 6 through E0304.
+- **Upstream:** nothing new.
+- **Aether bug hit:** BUG-105 (`fmt` comment anchoring and pattern-literal
+  escapes). Fixed by the coordinator.
+- **TYPE gap surfaced for next iter:** none in the detector surface.
+- **Suite:** exit 0.
+
+---
+
+## Iteration 74 — real-world differential: CPython datetime ISO 8601 (no new detector)
+
+- **Target:** the evidence campaign, not a backlog row. CPython 3.11.15
+  `date/time/datetime.fromisoformat` and `isoformat`, the C accelerator,
+  against an Aether port of ISO 8601-1:2019 dates, week dates, times and
+  offsets, and the 3.11 documented subset (`bench/realworld_datetime_iso/`).
+- **Built:**
+  - `datetime_iso_port.aeth` (`// expect: clean`). The week rule is derived
+    from the first Thursday. The contracts are the week ↔ calendar
+    bijection and `parse(format(x)) == x`.
+  - `differential.py`, seed 20260930. It attributes each divergence by
+    re-running the port with named CPython relaxations, and counts it only
+    on an exact value match.
+- **Measured:**
+  - 630,000 comparisons (210,000 strings × 3 APIs): 18,304 divergences,
+    0 unexplained.
+  - 60,000 round trips: 57,613 pass. 2,387 hit gh-152079, which is fixed
+    on 3.13+.
+  - Week sweep: all 3,652,059 days match `isocalendar()`. No contract
+    fired.
+  - Three spec mutants fail the harness; one also fires the port's E0304.
+- **Port bugs (a):** none.
+- **Library (b), still on `main`, not filed:**
+  - `date.fromisoformat` ignores the last 2 bytes of a 10-byte basic
+    string, in C and in Python. New.
+  - The C time parser skips stray text before `Z`/`±`. Partly seen in
+    #130959 and #107779.
+  - Known and open: gh-155175 (a fraction with no decimal sign) and
+    gh-115783 (mixed formats).
+  - Six more classes are already fixed on 3.13, 3.14 or `main`.
+- **Aether bugs hit:** none, so BUG-106 is unused.
+- **TYPE gap surfaced for next iter:** none for the security loop.
+  - The `.aeth` contracts caught a mutant on their own. This is the second
+    time after semver.
+  - Harness note: a full week sweep through the port costs about 0.3 ms
+    per day with contracts on, so default runs use a window plus a stride.
+- **Suite:** `python -B scripts/run_all.py` exit 0.
+
+---
+
+## Iteration 75 — E0209: implicit Int/Float mixing refused
+
+- **Target:** q9's "exactness is not enforced" and q8's local-check
+  slice. Not a security row; a language guarantee for ports.
+- **Gap confirmed first:** `let a = 1 + 2.5` → `check` exit 0 at
+  `6e7a48d`, evaluates to 3.5.
+- **Built:** `passes/numeric.py` (E0209, `semantic` stage), doc rows in
+  `grammar/diagnostics.md` / `grammar/types.md`, `risk.py` low,
+  `tests/test_numeric_coercion.py`, `playground/examples/35_*.aeth`
+  (`// expect: E0209x2`), ratchet 57 codes / 33 detectors / 120 claimed.
+- **Measured:** 0 E0209 on 421 loadable tracked `.aeth` (1,244 fully typed
+  numeric operators, 266 fully typed bindings); `check-py` output
+  byte-identical over `bench/`.
+- **TYPE gap surfaced for next iter:** call arguments. An `Int` passed to
+  a `Float` parameter is unchecked, and inside the callee `x / y` on two
+  `Float` parameters that hold Ints is floor division. Same machinery
+  (the callee's parameter annotations are already read); needs a decision
+  on stdlib parameters (`sqrt(4)`, `pow(2, 3)`), which the runtime
+  accepts.
+- **Suite:** `python -B scripts/run_all.py` exit 0.
+- **Aether bugs hit:** none; BUG-107 unused.
+
+---
+
 ---
 
 ## Next-iteration checklist (for the loop)

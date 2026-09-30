@@ -19,7 +19,7 @@ vault q8): refinement predicates and contracts are checked at runtime.
 ### 1. The security-detector improvement loop (the main work)
 Aether grows by eliminating one *violation TYPE* per iteration. The
 security family is **22 codes, E0710–E0731** (table:
-`SECURITY_POSTURE.md`); the whole surface is **56 emitted codes across 32
+`SECURITY_POSTURE.md`); the whole surface is **57 emitted codes across 33
 gated detectors**, the floor in `tests/ratchet_baseline.json`. State of
 record: `demos/case_studies/LOOP_LOG.md`. Backlog + coverage:
 `vault/wiki/clusters/violation-taxonomy.md`.

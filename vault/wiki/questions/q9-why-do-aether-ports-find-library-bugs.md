@@ -36,6 +36,12 @@ second Python implementation would find the same defects.
    written in exact integers. Aether does **not** refuse implicit Int/Float
    mixing: `1 + 2.5` passes `check`, because there is no type checker.
    `[source: types, section: What is checked, key: coercion]`
+   **Partly enforced since iter-75:** E0209 refuses an Int/Float mix
+   where both types are statically known. A mix through an unknown-typed
+   value is still not refused, and floats are not opt-in. Int `/` and `%`
+   are now specified as floor operations (BUG-103), so a port no longer
+   inherits the rounding by accident `[source: types, section: What is
+   checked, key: E0209]`.
 4. **A small, regular language** that an agent can write a faithful port
    in, with structured diagnostics it can act on.
 
@@ -51,6 +57,8 @@ the port's exactness would be a guarantee, not the porter's discipline.
 | The defect class is float vs exact int, and the port avoided it by construction, not by any language rule | `grammar/types.md` "Excluded by design but not refused": `let a = 1 + 2.5` passes `check` `[source: types, section: What is checked, key: coercion]` | high |
 | Contracts add detection beyond the differential | humanize §5: issues #86, #57, #171 become E0304/E0301. semver: the §10 mutant was stopped by the port's own `ensures` (`bench/realworld_semver/REPORT.md` §3) | high |
 | Hit rate across 8 library runs is low and uneven | 1 confirmed significant (humanize); minor and new: semver #487, isodate #114, croniter over-fires; known upstream: num2words #402, #603; zero defects: packaging, bech32, numpy-financial (`docs/history/REALWORLD_*.md`, `bench/realworld_*/REPORT.md`) | high |
+| Sprint of 2026-09-30, four spec-first targets: two clean, two with new candidates | tomllib (TOML 1.0): 0 spec departures, one low candidate (`ValueError` instead of `TOMLDecodeError`). packaging specifiers (PEP 440): 0 divergences in matching; the only defect reached was already fixed on main. CPython `datetime` (ISO 8601): two defects still on `main`, no prior report found. dateutil `rrule` (RFC 5545): one defect that looks new (mixed plain/ordinal BYDAY intersected), one known (#1398). None confirmed by a maintainer yet (`bench/realworld_{tomllib,packaging_specifiers,datetime_iso,dateutil}/REPORT.md`) | high |
+| The sprint also found three Aether-side bugs | BUG-103 (Int division rounding unspecified), BUG-104 and BUG-105 (`fmt` escapes and comment anchoring), all fixed (`BUGS.md`). Writing ports is also a test of the toolchain | high |
 | Filing a report is not the same as getting a fix | the humanize fix came from someone else's PR, and the Appendix A draft was never filed | high |
 
 ## Recommended Actions

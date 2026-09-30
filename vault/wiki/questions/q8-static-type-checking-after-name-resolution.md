@@ -3,7 +3,7 @@ type: question_page
 question_id: q8
 status: answered
 confidence: medium
-last_updated: 2026-09-29
+last_updated: 2026-09-30
 tags: [type-system, name-resolution, design-rationale, backlog]
 ---
 
@@ -31,6 +31,12 @@ Whatever ships must be described by what it checks — "literal/annotation
 mismatch at three sites, and arity" — never as "type-checked" or
 "type-safe" `[source: types, section: What is checked, key: Not checked]`.
 
+**Update 2026-09-30 (iter-75).** The Int/Float part of option B shipped as
+E0209. Arity and String/Bool literal mismatches remain open, and so does
+the decision on an `Int` literal passed to a `Float` parameter: call
+arguments are not checked `[source: diagnostics, section: E0209, key:
+implicit numeric coercion]`.
+
 ## Evidence
 
 | Finding | Evidence | Confidence |
@@ -42,6 +48,7 @@ mismatch at three sites, and arity" — never as "type-checked" or
 | A full checker would make the stdlib signatures load-bearing | 119 runtime exports (`runtime.unmangle`); their documented types in `grammar/stdlib.md` are not checked against `runtime.py` today, and generic parameters are not checked for consistency (SPEC_ISSUES S-007) | medium |
 | Marker types complicate a real checker | `Secret<T>`, `PII<T>`, `Untrusted<T>` are read off signatures by the security family E0710–E0731; a checker must treat them as wrappers the passes already reason about, or it will contradict them | medium |
 | Runtime refinements are not static types and must not be relabelled | E0302/E0303 are runtime checks (q2); option B does not change that | high |
+| Option B's first slice shipped as E0209 (Int/Float only) | `passes/numeric.py` reuses the E0208 scope model (block scope, params/locals shadow globals, `match` bindings unknown). Operators, returns and bindings; not arguments, not arity, not String/Bool literals. 0 findings on 421 loadable tracked `.aeth`, 1,244 fully typed numeric operators seen (`audits/sprint/coercion_record.md`) `[source: diagnostics, section: E0209, key: implicit numeric coercion]` | high |
 
 Options and cost:
 

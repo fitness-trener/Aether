@@ -1,5 +1,14 @@
 # Operation Log (append-only — newest on top)
 
+## [2026-09-30] Q1/q8/q9 rows | sprint iterations 71-75 (differentials + E0209)
+- **Iterations 71-74 (real-world differentials):** dateutil rrule, tomllib,
+  packaging specifiers, CPython datetime. Two clean targets, and three new
+  upstream candidates (dateutil mixed BYDAY; two CPython `fromisoformat`
+  defects). Nothing filed; each needs the owner's approval.
+- **Iteration 75 (E0209):** one q1 residual row; q8 records option B's
+  first slice as shipped; q9 item 3 is now "partly enforced".
+- **Aether bugs:** BUG-103 (floor division specified), BUG-104, BUG-105 fixed.
+
 ## [2026-09-30] New question page | q9: why Aether ports find library bugs
 - **The answer separates method from language.** The bug-finding power is mostly the
   differential method. Aether's enforced parts are the runtime contracts and the

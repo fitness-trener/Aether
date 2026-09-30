@@ -2776,3 +2776,87 @@ that relied on `parseInt(" 12 ")` now gets `Err`.
 - In both functions, either lift the digit limit or fail with `E0305`
   (stdlib precondition violation, already in `grammar/diagnostics.md`)
   naming a documented bound.
+
+### BUG-103  Int `/` and `%` rounding for negative operands is unspecified; the runtime floors  [FIXED 1055115]
+test: tests/test_int_division.py (`::test_int_division_floors`)
+
+Found 2026-09-30 while porting RFC 5545 date arithmetic for the dateutil
+differential (`bench/realworld_dateutil/`). The port avoids the question
+by keeping every operand of `/` and `%` non-negative.
+
+Repro (`aether check` exits 0; `aether run`, CPython 3.11.15):
+
+```
+intToString((0 - 7) / 2)   -> -4     (truncation would give -3)
+intToString((0 - 7) % 2)   -> 1      (truncation would give -1)
+intToString(7 / (0 - 2))   -> -4
+intToString(7 % (0 - 2))   -> -1
+intToString(-7 / 2)        -> -4
+```
+
+**Root cause.** `transpiler/aether/emitter.py` (the `BinOp` branch for
+`/`) emits `__a // __b` for two ints, and `%` is emitted as Python `%`.
+Both are floor semantics.
+
+**Spec gap.** `grammar/types.md` and `grammar/stdlib.md` say nothing about
+integer division or remainder: a grep for "division", "floor",
+"truncat" and "modulo" in `grammar/` finds nothing relevant. C, C++,
+Java, Rust, Go and JS `Math.trunc` truncate; Python floors.
+
+**Impact.** A spec port from a truncating source, such as the civil-date
+algorithms written in C++, returns silently different values for negative
+inputs. No diagnostic is raised.
+
+**Fixed 2026-09-30** by specifying the existing behaviour, a
+non-breaking change: `grammar/types.md` states that `Int` `/` and `%` are
+floor division and floor remainder (the remainder takes the divisor's
+sign, `a == b * (a / b) + a % b`), and names the truncating languages a
+port must convert from. Neither operator is in the SMT fragment
+(`passes/smt.py`), so no proof changes. The test pins both operators and
+the law on small and 40-digit operands. Not done: explicit `quot`/`rem`
+stdlib functions.
+
+### BUG-104  `pretty` printed `\n` `\r` `\t` `\0` inside string literals raw; with `"\r"` a second comment-keeping `fmt` pass lost a comment line  [FIXED 09aeec7]
+test: tests/test_pretty_roundtrip.py (`::test_string_escapes_print_escaped`)
+
+Found 2026-09-30 by `tests/test_pretty_roundtrip.py` on
+`bench/realworld_tomllib/toml_port.aeth` (iteration 72).
+
+**Root cause.** `transpiler/aether/pretty.py` `expr_StringLit` escaped
+only `\\` and `"`.
+- A raw CR in the output made the comment re-attachment, which splits on
+  `splitlines()`, disagree with the lexer's line numbers, so a comment line
+  was lost on the next pass.
+- `\n`, `\t` and `\0` also went out raw. They reparse to the same AST, but
+  `fmt` still changed the source text.
+
+**Fix.** `expr_StringLit` writes back every escape the lexer reads
+(`\n \t \r \\ \" \0`). The test fails on the old printer and checks that:
+- each escape prints escaped;
+- two passes give the same text;
+- both comment lines survive;
+- the AST is unchanged.
+
+### BUG-105  `fmt` dropped a comment line on each pass when a string literal held a raw line-separator character; the `match` literal-pattern printer wrote escapes raw  [FIXED 32659a9]
+test: tests/test_pretty_roundtrip.py (`::test_pattern_literals_and_unicode_line_breaks_keep_comments`)
+
+Found 2026-09-30 while gating
+`bench/realworld_packaging_specifiers/specifiers_port.aeth` (iteration 73).
+
+Cause:
+- `_comment_blocks` in `transpiler/aether/pretty.py` split the source with
+  `str.splitlines()`. That also breaks on CR, VT, FF, U+0085, U+2028 and
+  U+2029, while the lexer counts only newlines.
+- A raw U+2028 inside a string literal therefore shifted every later node's
+  line anchor by one, and the last line of a following comment block was
+  lost on the next pass.
+- Separately, the literal-pattern printer escaped only backslash and
+  quote. That is the same gap BUG-104 closed for expressions.
+
+Fix:
+- `_comment_blocks` splits on `"\n"` only; the existing `rstrip()` still
+  removes the CR of a CRLF line.
+- Both string printers share `_quote_string`.
+
+The test fails on the previous printer: with `"a b"`, the second pass
+kept only `// one`.
