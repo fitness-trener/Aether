@@ -1,0 +1,840 @@
+// expect: clean
+// Aether port of PEP 440 "Version specifiers", written from the PEP text
+// (https://peps.python.org/pep-0440/#version-specifiers) and its living
+// copy, the PyPA "Version specifiers" specification. Section names quoted
+// below ("Compatible release", "Version matching", ...) are the PEP's own.
+//
+// Differential target: packaging 26.3 `packaging.specifiers`
+// (`Specifier.contains`, `SpecifierSet.contains`, `SpecifierSet.filter`),
+// driven by bench/realworld_packaging_specifiers/differential.py.
+//
+// Scope and decisions:
+//   * Versions are read in the canonical PEP 440 form
+//     [N!]N(.N)*[{a|b|rc}N][.postN][.devN][+local], ASCII case-insensitive
+//     (PEP "Case sensitivity"). The rest of the normalization layer
+//     (alpha/beta/c spellings, "-"/"_" separators, implicit numbers, a "v"
+//     prefix) is out of scope; the harness only feeds canonical text to
+//     the non-=== operators.
+//   * Ordering reuses the flat 6-int suffix key of
+//     bench/realworld_packaging/pep440.aeth (the PEP's "Summary of permitted
+//     suffixes and relative ordering"), extended with local labels.
+//   * Pre-release policy: the PEP "Handling of pre-releases" default
+//     (accept pre-releases only when no final or post release satisfies the
+//     specifier), plus packaging's documented `prereleases=` switches, which
+//     are the PEP's "alternative behaviours" (accept all / exclude all).
+//   * Numbers are built digit by digit; Aether Int is arbitrary-precision.
+//
+// Flags passed as Int: -1 = None (unset), 0 = False, 1 = True.
+
+record PV do
+  ok: Bool
+  epoch: Int
+  release: List<Int>
+  pre: Int          // -1 none, 0 a, 1 b, 2 rc
+  preN: Int
+  post: Int         // -1 none, else N
+  dev: Int          // -1 none, else N
+  local: String     // "" none, else lowercase dot-separated label
+end
+
+function badPV() returns PV
+  effects pure
+do
+  return PV(false, 0, [], 0 - 1, 0, 0 - 1, 0 - 1, "")
+end
+
+// ---- characters ----
+
+function isAsciiDigit(c: String) returns Bool
+  requires length(c) == 1
+  effects pure
+do
+  let o = ord(c)
+  return o >= 48 and o <= 57
+end
+
+function isAsciiAlnum(c: String) returns Bool
+  requires length(c) == 1
+  effects pure
+do
+  let o = ord(c)
+  return (o >= 48 and o <= 57) or (o >= 97 and o <= 122) or (o >= 65 and o <= 90)
+end
+
+function allDigits(s: String) returns Bool
+  effects pure
+do
+  if length(s) == 0 then
+    return false
+  end
+  for c in chars(s) do
+    if not isAsciiDigit(c) then
+      return false
+    end
+  end
+  return true
+end
+
+function digitsValue(s: String) returns Int
+  requires allDigits(s)
+  ensures result >= 0
+  effects pure
+do
+  var n = 0
+  for c in chars(s) do
+    n = n * 10 + (ord(c) - 48)
+  end
+  return n
+end
+
+// ASCII-only lowercase: the living spec says === "MUST treat ASCII letters
+// case-insensitively ... and is unspecified for non-ASCII text".
+function asciiLower(s: String) returns String
+  ensures length(result) == length(s)
+  effects pure
+do
+  var out = []
+  for c in chars(s) do
+    let o = ord(c)
+    if o >= 65 and o <= 90 then
+      out = append(out, chr(o + 32))
+    else
+      out = append(out, c)
+    end
+  end
+  return join(out, "")
+end
+
+// PEP "Local version identifiers": ASCII letters, digits and periods,
+// starting and ending with a letter or digit (canonical form uses "." only).
+function isLocalLabel(s: String) returns Bool
+  effects pure
+do
+  if length(s) == 0 then
+    return false
+  end
+  for seg in split(s, ".") do
+    if length(seg) == 0 then
+      return false
+    end
+    for c in chars(seg) do
+      if not isAsciiAlnum(c) then
+        return false
+      end
+    end
+  end
+  return true
+end
+
+// ---- parsing (canonical form) ----
+
+function parseReleaseList(s: String) returns List<Int>
+  effects pure
+do
+  var acc = []
+  for p in split(s, ".") do
+    if not allDigits(p) then
+      return []
+    end
+    acc = append(acc, digitsValue(p))
+  end
+  return acc
+end
+
+function parseVersion(input: String) returns PV
+  effects pure
+do
+  let t = asciiLower(input)
+  if length(t) == 0 then
+    return badPV()
+  end
+  let plus = split(t, "+")
+  if length(plus) > 2 then
+    return badPV()
+  end
+  var local = ""
+  if length(plus) == 2 then
+    local = unwrapOrElse(get(plus, 1), "")
+    if not isLocalLabel(local) then
+      return badPV()
+    end
+  end
+  var body = unwrapOrElse(get(plus, 0), "")
+
+  var epoch = 0
+  let bang = split(body, "!")
+  if length(bang) > 2 then
+    return badPV()
+  end
+  if length(bang) == 2 then
+    let es = unwrapOrElse(get(bang, 0), "")
+    if not allDigits(es) then
+      return badPV()
+    end
+    epoch = digitsValue(es)
+    body = unwrapOrElse(get(bang, 1), "")
+  end
+
+  var dev = 0 - 1
+  let devParts = split(body, ".dev")
+  if length(devParts) > 2 then
+    return badPV()
+  end
+  if length(devParts) == 2 then
+    let ds = unwrapOrElse(get(devParts, 1), "")
+    if not allDigits(ds) then
+      return badPV()
+    end
+    dev = digitsValue(ds)
+    body = unwrapOrElse(get(devParts, 0), "")
+  end
+
+  var post = 0 - 1
+  let postParts = split(body, ".post")
+  if length(postParts) > 2 then
+    return badPV()
+  end
+  if length(postParts) == 2 then
+    let ps = unwrapOrElse(get(postParts, 1), "")
+    if not allDigits(ps) then
+      return badPV()
+    end
+    post = digitsValue(ps)
+    body = unwrapOrElse(get(postParts, 0), "")
+  end
+
+  // The release is digits and dots; the first other character starts the
+  // pre-release tag {a|b|rc}N.
+  var cut = length(body)
+  var i = 0
+  for c in chars(body) do
+    if cut == length(body) and not isAsciiDigit(c) and c != "." then
+      cut = i
+    end
+    i = i + 1
+  end
+  let relText = slice(body, 0, cut)
+  let tag = slice(body, cut, length(body))
+  var pre = 0 - 1
+  var preN = 0
+  if length(tag) > 0 then
+    var num = ""
+    if startsWith?(tag, "rc") then
+      pre = 2
+      num = slice(tag, 2, length(tag))
+    elif startsWith?(tag, "a") then
+      pre = 0
+      num = slice(tag, 1, length(tag))
+    elif startsWith?(tag, "b") then
+      pre = 1
+      num = slice(tag, 1, length(tag))
+    else
+      return badPV()
+    end
+    if not allDigits(num) then
+      return badPV()
+    end
+    preN = digitsValue(num)
+  end
+
+  let release = parseReleaseList(relText)
+  if length(release) == 0 then
+    return badPV()
+  end
+  return PV(true, epoch, release, pre, preN, post, dev, local)
+end
+
+function isVersion(s: String) returns Bool
+  effects pure
+do
+  return parseVersion(s).ok
+end
+
+// ---- ordering (PEP "Summary of permitted suffixes and relative ordering") ----
+
+function cmpInt(a: Int, b: Int) returns Int
+  ensures result == 0 - 1 or result == 0 or result == 1
+  effects pure
+do
+  if a < b then
+    return 0 - 1
+  elif a > b then
+    return 1
+  end
+  return 0
+end
+
+// PEP "Final releases": the shorter release is padded with zeros.
+function cmpRelease(a: List<Int>, b: List<Int>) returns Int
+  ensures result == 0 - 1 or result == 0 or result == 1
+  effects pure
+do
+  let n = max(length(a), length(b))
+  for i in range(0, n) do
+    let c = cmpInt(unwrapOrElse(get(a, i), 0), unwrapOrElse(get(b, i), 0))
+    if c != 0 then
+      return c
+    end
+  end
+  return 0
+end
+
+// Within a release: .devN < aN < bN < rcN < (none) < .postN; within a
+// pre- or post-release: .devN < (none) < .postN. Key of pep440.aeth:
+// [preRank, preN, postRank, postN, devRank, devN], dev-only preRank = -1.
+function suffixKey(v: PV) returns List<Int>
+  ensures length(result) == 6
+  effects pure
+do
+  var preRank = v.pre
+  if v.pre < 0 then
+    if v.post < 0 and v.dev >= 0 then
+      preRank = 0 - 1
+    else
+      preRank = 3
+    end
+  end
+  var postRank = 0
+  if v.post >= 0 then
+    postRank = 1
+  end
+  var devRank = 1
+  var devN = 0
+  if v.dev >= 0 then
+    devRank = 0
+    devN = v.dev
+  end
+  return [preRank, v.preN, postRank, max(v.post, 0), devRank, devN]
+end
+
+// Public-version order; local labels are ignored (PEP "Version specifiers":
+// "local version labels MUST be ignored entirely when checking if candidate
+// versions match a given version specifier", except where noted).
+function cmpPublic(a: PV, b: PV) returns Int
+  ensures result == 0 - 1 or result == 0 or result == 1
+  effects pure
+do
+  let ce = cmpInt(a.epoch, b.epoch)
+  if ce != 0 then
+    return ce
+  end
+  let cr = cmpRelease(a.release, b.release)
+  if cr != 0 then
+    return cr
+  end
+  let ka = suffixKey(a)
+  let kb = suffixKey(b)
+  for i in range(0, 6) do
+    let c = cmpInt(unwrapOrElse(get(ka, i), 0), unwrapOrElse(get(kb, i), 0))
+    if c != 0 then
+      return c
+    end
+  end
+  return 0
+end
+
+function isPre(v: PV) returns Bool
+  effects pure
+do
+  return v.pre >= 0 or v.dev >= 0
+end
+
+function sameRelease(a: PV, b: PV) returns Bool
+  effects pure
+do
+  return a.epoch == b.epoch and cmpRelease(a.release, b.release) == 0
+end
+
+function samePre(a: PV, b: PV) returns Bool
+  effects pure
+do
+  return a.pre == b.pre and (a.pre < 0 or a.preN == b.preN)
+end
+
+function withDev(v: PV, d: Int) returns PV
+  effects pure
+do
+  return PV(true, v.epoch, v.release, v.pre, v.preN, v.post, d, "")
+end
+
+// The smallest version whose release starts with `rel` bumped in its last
+// component: 1.2 -> 1.3.dev0.
+function bumpDev0(epoch: Int, rel: List<Int>) returns PV
+  requires length(rel) >= 1
+  effects pure
+do
+  let n = length(rel)
+  let last = unwrapOrElse(get(rel, n - 1), 0)
+  let bumped = append(take(rel, n - 1), last + 1)
+  return PV(true, epoch, bumped, 0 - 1, 0, 0 - 1, 0, "")
+end
+
+// ---- "Version matching" / "Version exclusion" ----
+
+// Strict equality, field by field; "The *only* substitution performed is
+// the zero padding of the release segment." A local label in the specifier
+// is compared by strict string equality; otherwise the candidate's is ignored.
+function matchEq(c: PV, v: PV) returns Bool
+  effects pure
+do
+  if not (sameRelease(c, v) and samePre(c, v) and c.post == v.post and c.dev == v.dev) then
+    return false
+  end
+  return v.local == "" or c.local == v.local
+end
+
+// "the sense of any match is inverted" -- computed here from the ordering,
+// and checked against the field-wise matchEq.
+function matchNe(c: PV, v: PV) returns Bool
+  ensures result == (not matchEq(c, v))
+  effects pure
+do
+  return cmpPublic(c, v) != 0 or (v.local != "" and c.local != v.local)
+end
+
+// Prefix matching (`==V.*`): "additional trailing segments will be ignored".
+// A release-only prefix also ignores trailing release components "(or the
+// lack thereof)", i.e. the candidate is zero-padded to the prefix length.
+function matchPrefix(c: PV, v: PV) returns Bool
+  effects pure
+do
+  if c.epoch != v.epoch then
+    return false
+  end
+  if v.pre < 0 and v.post < 0 then
+    let k = length(v.release)
+    for i in range(0, k) do
+      if unwrapOrElse(get(c.release, i), 0) != unwrapOrElse(get(v.release, i), 0) then
+        return false
+      end
+    end
+    return true
+  end
+  // A prefix naming a pre- or post-release: the release matches exactly
+  // (padded) and the named suffixes are equal; later segments are ignored.
+  if not (cmpRelease(c.release, v.release) == 0 and samePre(c, v)) then
+    return false
+  end
+  return v.post < 0 or c.post == v.post
+end
+
+// `!=V.*` from the ordering: outside [P.dev0, bump(P).dev0).
+function matchNotPrefix(c: PV, v: PV) returns Bool
+  ensures result == (not matchPrefix(c, v))
+  effects pure
+do
+  if v.pre >= 0 or v.post >= 0 then
+    return not matchPrefix(c, v)
+  end
+  let lo = PV(true, v.epoch, v.release, 0 - 1, 0, 0 - 1, 0, "")
+  let hi = bumpDev0(v.epoch, v.release)
+  return cmpPublic(c, lo) < 0 or cmpPublic(c, hi) >= 0
+end
+
+// ---- "Compatible release" ----
+
+function prefixOf(v: PV) returns PV
+  requires length(v.release) >= 2
+  effects pure
+do
+  return PV(true, v.epoch, take(v.release, length(v.release) - 1), 0 - 1, 0, 0 - 1, 0 - 1, "")
+end
+
+// Computed as an interval [V, bump(prefix).dev0); the contract is the PEP's
+// own expansion `>= V.N, == V.*` with the suffix ignored for the prefix.
+function matchCompatible(c: PV, v: PV) returns Bool
+  requires length(v.release) >= 2
+  ensures result == (cmpPublic(c, v) >= 0 and matchPrefix(c, prefixOf(v)))
+  effects pure
+do
+  let p = take(v.release, length(v.release) - 1)
+  return cmpPublic(c, v) >= 0 and cmpPublic(c, bumpDev0(v.epoch, p)) < 0
+end
+
+// ---- "Exclusive ordered comparison" ----
+
+// "<V MUST NOT allow a pre-release of the specified version unless the
+// specified version is itself a pre-release." A pre-release of V shares V's
+// release (and V's post-release, when V is one).
+function preReleaseOf(c: PV, v: PV) returns Bool
+  effects pure
+do
+  if not (isPre(c) and sameRelease(c, v)) then
+    return false
+  end
+  return v.post < 0 or (c.pre < 0 and c.post == v.post)
+end
+
+// Computed from V.dev0, the earliest pre-release of V; the contract restates
+// the MUST NOT in the PEP's words.
+function matchLt(c: PV, v: PV) returns Bool
+  ensures result == (cmpPublic(c, v) < 0 and not (not isPre(v) and preReleaseOf(c, v)))
+  effects pure
+do
+  if isPre(v) then
+    return cmpPublic(c, v) < 0
+  end
+  return cmpPublic(c, withDev(v, 0)) < 0
+end
+
+// ">V MUST NOT allow a post-release of the given version unless V itself is
+// a post release." A developmental release V has no post-releases.
+function postReleaseOf(c: PV, v: PV) returns Bool
+  effects pure
+do
+  return v.dev < 0 and c.post >= 0 and sameRelease(c, v) and samePre(c, v)
+end
+
+// Computed from the least admissible successor where one exists; the
+// contract restates the MUST NOT. ">V MUST NOT match a local version of the
+// specified version" holds because locals are ignored (V+x is not > V).
+function matchGt(c: PV, v: PV) returns Bool
+  ensures result == (cmpPublic(c, v) > 0 and not (v.post < 0 and postReleaseOf(c, v)))
+  effects pure
+do
+  if v.dev >= 0 then
+    return cmpPublic(c, withDev(v, v.dev + 1)) >= 0
+  end
+  if v.post >= 0 then
+    let next = PV(true, v.epoch, v.release, v.pre, v.preN, v.post + 1, 0, "")
+    return cmpPublic(c, next) >= 0
+  end
+  return cmpPublic(c, v) > 0 and not (c.post >= 0 and sameRelease(c, v) and samePre(c, v))
+end
+
+// ---- specifier syntax ----
+
+// Operator of a specifier: "===" before the two-character operators.
+function opOf(s: String) returns String
+  effects pure
+do
+  let t = trim(s)
+  if startsWith?(t, "===") then
+    return "==="
+  end
+  for op in ["~=", "==", "!=", "<=", ">="] do
+    if startsWith?(t, op) then
+      return op
+    end
+  end
+  if startsWith?(t, "<") or startsWith?(t, ">") then
+    return slice(t, 0, 1)
+  end
+  return ""
+end
+
+function versionTextOf(s: String) returns String
+  effects pure
+do
+  let t = trim(s)
+  return trim(slice(t, length(opOf(s)), length(t)))
+end
+
+// Space, tab, LF, CR by code point. (Not "\r"/"\n" literals: `pretty`
+// prints them as raw control characters, and a raw CR shifts its comment
+// anchors -- BUG-105.)
+function hasWhitespace(s: String) returns Bool
+  effects pure
+do
+  for c in chars(s) do
+    let o = ord(c)
+    if o == 32 or o == 9 or o == 10 or o == 13 then
+      return true
+    end
+  end
+  return false
+end
+
+// A specifier clause is valid when:
+//   * `===` is followed by any text without whitespace, even none
+//     ("Arbitrary equality": the version "cannot otherwise be represented";
+//     the spec puts no restriction on it -- packaging#1000);
+//   * `==`/`!=` take a version, or a public version with `.*` that names no
+//     developmental release ("It is invalid to have a prefix match
+//     containing a development or local release");
+//   * `~=` takes a public version with at least two release segments
+//     ("MUST NOT be used with a single segment version number");
+//   * `<=`, `>=`, `<`, `>` take a public version ("Local version identifiers
+//     are NOT permitted in this version specifier").
+function isValidSpecifier(s: String) returns Bool
+  effects pure
+do
+  let op = opOf(s)
+  if op == "" then
+    return false
+  end
+  let v = versionTextOf(s)
+  if hasWhitespace(v) then
+    return false
+  end
+  if op == "===" then
+    return true
+  end
+  if length(v) == 0 then
+    return false
+  end
+  if op == "==" or op == "!=" then
+    if endsWith?(v, ".*") then
+      let base = parseVersion(slice(v, 0, length(v) - 2))
+      return base.ok and base.dev < 0 and base.local == ""
+    end
+    return isVersion(v)
+  end
+  let pv = parseVersion(v)
+  if not pv.ok or pv.local != "" then
+    return false
+  end
+  if op == "~=" then
+    return length(pv.release) >= 2
+  end
+  return true
+end
+
+// ---- one clause ----
+
+// Does candidate `cand` satisfy the clause `spec`, pre-release policy aside?
+function clauseMatches(spec: String, cand: String) returns Bool
+  requires isValidSpecifier(spec)
+  effects pure
+do
+  let op = opOf(spec)
+  let vt = versionTextOf(spec)
+  if op == "===" then
+    return asciiLower(cand) == asciiLower(vt)
+  end
+  let c = parseVersion(cand)
+  if not c.ok then
+    return false
+  end
+  if endsWith?(vt, ".*") then
+    let p = parseVersion(slice(vt, 0, length(vt) - 2))
+    if op == "==" then
+      return matchPrefix(c, p)
+    end
+    return matchNotPrefix(c, p)
+  end
+  let v = parseVersion(vt)
+  if op == "==" then
+    return matchEq(c, v)
+  elif op == "!=" then
+    return matchNe(c, v)
+  elif op == "~=" then
+    return matchCompatible(c, v)
+  elif op == "<=" then
+    return cmpPublic(c, v) <= 0
+  elif op == ">=" then
+    return cmpPublic(c, v) >= 0
+  elif op == "<" then
+    return matchLt(c, v)
+  end
+  return matchGt(c, v)
+end
+
+// ---- pre-release policy ----
+
+// Does the clause itself name a pre-release (an explicit user request, PEP
+// "Handling of pre-releases")? packaging's documented autodetection: `!=`
+// and `==V.*` never do; `===` only when its text parses as a version.
+function clauseRequestsPre(spec: String) returns Bool
+  effects pure
+do
+  let op = opOf(spec)
+  let vt = versionTextOf(spec)
+  if op == "!=" or (op == "==" and endsWith?(vt, ".*")) then
+    return false
+  end
+  let v = parseVersion(vt)
+  return v.ok and isPre(v)
+end
+
+// Effective policy: the call's flag, else the object's flag, else "the
+// specifier asks for pre-releases" (1) or the PEP default (-1).
+function effectivePolicy(specs: List<String>, objPre: Int, callPre: Int) returns Int
+  ensures result == 0 - 1 or result == 0 or result == 1
+  effects pure
+do
+  if callPre != 0 - 1 then
+    return callPre
+  end
+  if objPre != 0 - 1 then
+    return objPre
+  end
+  for s in specs do
+    if clauseRequestsPre(s) then
+      return 1
+    end
+  end
+  return 0 - 1
+end
+
+// "The comma is equivalent to a logical and operator: a candidate version
+// must match all given version clauses".
+function allClausesMatch(specs: List<String>, cand: String) returns Bool
+  effects pure
+do
+  for s in specs do
+    if not clauseMatches(s, cand) then
+      return false
+    end
+  end
+  return true
+end
+
+function countFailing(specs: List<String>, cand: String) returns Int
+  ensures result >= 0
+  effects pure
+do
+  var n = 0
+  for s in specs do
+    if not clauseMatches(s, cand) then
+      n = n + 1
+    end
+  end
+  return n
+end
+
+// `canon` is the candidate's canonical text, or "" when it is not a PEP 440
+// version (only reachable through `===`).
+function candIsPre(canon: String) returns Bool
+  effects pure
+do
+  let v = parseVersion(canon)
+  return v.ok and isPre(v)
+end
+
+// Membership of one candidate. A single candidate has no alternatives, so
+// under the default policy the PEP's "no final or post release satisfies"
+// condition holds and a matching pre-release is accepted; only an explicit
+// "exclude pre-releases" rejects it.
+function setContains(specs: List<String>, setPre: Int, raw: String, canon: String,
+                     callPre: Int) returns Bool
+  ensures result == (not (effectivePolicy(specs, setPre, callPre) == 0 and candIsPre(canon))
+                     and countFailing(specs, raw) == 0)
+  effects pure
+do
+  if effectivePolicy(specs, setPre, callPre) == 0 and candIsPre(canon) then
+    return false
+  end
+  return allClausesMatch(specs, raw)
+end
+
+// ---- filter ----
+
+function isFinalAt(canons: List<String>, i: Int) returns Bool
+  effects pure
+do
+  let v = parseVersion(unwrapOrElse(get(canons, i), ""))
+  return v.ok and not isPre(v)
+end
+
+function isPreAt(canons: List<String>, i: Int) returns Bool
+  effects pure
+do
+  return candIsPre(unwrapOrElse(get(canons, i), ""))
+end
+
+function strictlyIncreasing(xs: List<Int>) returns Bool
+  effects pure
+do
+  for i in range(1, length(xs)) do
+    if unwrapOrElse(get(xs, i - 1), 0) >= unwrapOrElse(get(xs, i), 0) then
+      return false
+    end
+  end
+  return true
+end
+
+function anyPreAt(canons: List<String>, idx: List<Int>) returns Bool
+  effects pure
+do
+  for i in idx do
+    if isPreAt(canons, i) then
+      return true
+    end
+  end
+  return false
+end
+
+function anyFinalAt(canons: List<String>, idx: List<Int>) returns Bool
+  effects pure
+do
+  for i in idx do
+    if isFinalAt(canons, i) then
+      return true
+    end
+  end
+  return false
+end
+
+function matchingIndices(specs: List<String>, raws: List<String>) returns List<Int>
+  effects pure
+do
+  var out = []
+  for i in range(0, length(raws)) do
+    if allClausesMatch(specs, unwrapOrElse(get(raws, i), "")) then
+      out = append(out, i)
+    end
+  end
+  return out
+end
+
+// Indices (in input order) of the candidates kept. PEP "Handling of
+// pre-releases" default: accept pre-releases "where there is no final or
+// post release that satisfies the version specifier"; exclude all others.
+// Contracts: order is preserved, and under the default policy a satisfying
+// final release means no pre-release is returned.
+function setFilter(specs: List<String>, setPre: Int, callPre: Int,
+                   raws: List<String>, canons: List<String>) returns List<Int>
+  requires length(raws) == length(canons)
+  ensures length(result) <= length(raws)
+  ensures strictlyIncreasing(result)
+  ensures (effectivePolicy(specs, setPre, callPre) != 1
+           and anyFinalAt(canons, matchingIndices(specs, raws)))
+          implies not anyPreAt(canons, result)
+  effects pure
+do
+  let policy = effectivePolicy(specs, setPre, callPre)
+  let matched = matchingIndices(specs, raws)
+  if policy == 1 then
+    return matched
+  end
+  if policy == 0 - 1 and not anyFinalAt(canons, matched) then
+    return matched
+  end
+  var out = []
+  for i in matched do
+    if not isPreAt(canons, i) then
+      out = append(out, i)
+    end
+  end
+  return out
+end
+
+function main() returns Unit
+  effects log
+do
+  // PEP "Examples" and the clause tables of "Version matching",
+  // "Compatible release" and "Exclusive ordered comparison".
+  let checks = [
+    ["~=3.1", "3.9", "true"], ["~=3.1", "4.0", "false"],
+    ["~=3.1.2", "3.1.9", "true"], ["~=3.1.2", "3.2.0", "false"],
+    ["~=3.1a1", "3.1a1", "true"], ["~=3.1a1", "4.0", "false"],
+    ["==3.1", "3.1.0", "true"], ["==3.1.*", "3.1.7", "true"],
+    ["==1.1", "1.1.post1", "false"], ["==1.1.*", "1.1.post1", "true"],
+    ["==1.1.dev1", "1.1", "false"], ["!=1.1.*", "1.1.post1", "false"],
+    [">1.7", "1.7.1", "true"], [">1.7", "1.7.0.post1", "false"],
+    [">1.7.post2", "1.7.0.post3", "true"], [">1.7.post2", "1.7.0", "false"],
+    ["<2.0", "2.0rc1", "false"], ["<2.0rc2", "2.0rc1", "true"],
+    ["===1.0", "1.0+downstream1", "false"], ["===foobar", "FooBar", "true"]
+  ]
+  for row in checks do
+    let spec = unwrapOrElse(get(row, 0), "")
+    let cand = unwrapOrElse(get(row, 1), "")
+    let got = clauseMatches(spec, cand)
+    var gotText = "false"
+    if got then
+      gotText = "true"
+    end
+    print(join([spec, " ", cand, " -> ", gotText, " (PEP: ", unwrapOrElse(get(row, 2), ""), ")"], ""))
+  end
+end
