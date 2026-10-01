@@ -56,6 +56,16 @@ only the ASCII examples. The drafts below are as written before filing.
 
 ### 1. `date.fromisoformat` accepts and ignores trailing characters in a 10-byte basic-format string (new)
 
+**Response 2026-10-01.** A third-party contributor, rupayon123,
+reproduced the bug and opened https://github.com/python/cpython/pull/158557
+(awaiting review). It adds the same length checks as our draft, in both
+the C and Python parsers, plus a NEWS entry, and was tested on a built
+CPython (`test_datetime`, 1,166 tests). With the owner's approval we
+deferred to that PR and suggested one more test string, `'20200101é'`
+(10 UTF-8 bytes, which exercises the C 10-byte branch):
+https://github.com/python/cpython/issues/158500#issuecomment-5929591679.
+This is independent reproduction, not yet a maintainer confirmation.
+
 - **Evidence:** 301 cases in the run.
 - **Still on `main`:** yes. The C code was read, and `_pydatetime` from
   `main` was run.
