@@ -56,6 +56,24 @@ PY_SKIP_STAGES = ("effects", "semantic")
 # times, 8 of them `open(path_param)` — real, but at a ratio that buries
 # the other rows. `--strict` adds it back. The rationale stays in cli.py.
 PY_STRICT_ONLY_CODES = ("E0711",)
+# ...except where the callee SERVES the file to an HTTP client. Flask's
+# `send_file` docstring: "Never pass file paths provided by a user";
+# Starlette's and aiohttp's `FileResponse` open the path with no
+# containment. These calls exist only in request handlers, so the
+# `open(path_param)` ratio above does not describe them: 0 sites on the
+# 15-framework corpus, 2 on the PyPI corpus (2026-10-02, both inside
+# starlette's own StaticFiles after its commonpath check).
+PY_DEFAULT_ON_CALLEES = frozenset({
+    "flask.send_file", "flask.helpers.send_file", "werkzeug.utils.send_file",
+    "starlette.responses.FileResponse", "fastapi.responses.FileResponse",
+    "aiohttp.web.FileResponse", "aiohttp.web_fileresponse.FileResponse",
+})
+
+
+def py_held_back(d) -> bool:
+    """True for a finding `check-py` reports only under `--strict`."""
+    return d.code in PY_STRICT_ONLY_CODES \
+        and (d.extra or {}).get("callee") not in PY_DEFAULT_ON_CALLEES
 
 # ----------------------------------------------------------------------
 # THE AUDITABLE CAPABILITY MAPPING TABLE
@@ -236,6 +254,22 @@ SINK_BY_QUALIFIED: Dict[str, str] = {
     "code.InteractiveInterpreter.runsource": "evalCode",
     "code.InteractiveConsole.runsource": "evalCode",
     "code.InteractiveConsole.push": "evalCode",
+    # File-serving calls (E0711, default-on through PY_DEFAULT_ON_CALLEES):
+    # each sends the file at its path argument to the client, no
+    # containment (flask 3.1.2 / werkzeug 3.1.3 / starlette 1.0.1 /
+    # aiohttp 3.14.1 source). CVE-2023-52288 (send_file) and
+    # CVE-2026-44716 (FileResponse) are this shape. NOT rows, read from
+    # source or docs: send_from_directory (werkzeug safe_join), Starlette
+    # StaticFiles (commonpath), tornado StaticFileHandler (root prefix),
+    # bottle static_file (403 outside root), django.views.static.serve
+    # (safe_join), Django FileResponse (takes an open file; the `open` is
+    # the sink). 0 framework-corpus sites; 2 PyPI-corpus sites.
+    "flask.send_file": "readFile", "flask.helpers.send_file": "readFile",
+    "werkzeug.utils.send_file": "readFile",
+    "starlette.responses.FileResponse": "readFile",
+    "fastapi.responses.FileResponse": "readFile",
+    "aiohttp.web.FileResponse": "readFile",
+    "aiohttp.web_fileresponse.FileResponse": "readFile",
 }
 
 # ----------------------------------------------------------------------
@@ -2210,6 +2244,11 @@ def _call_expr(node: _pyast.Call, imp: "_Imports",
         # silent. The keyword values take the positional slots, in
         # order. Flag-more: whatever lands in `args[0]` is refused unless
         # it is a literal or a sanctioned wrapper (BUG-012).
+        # A path sink's own path keyword goes first, whatever its place:
+        # `FileResponse(media_type="text/plain", path=p)` judged the
+        # literal media type and was clean.
+        if name == "readFile":
+            kws.sort(key=lambda k: k.arg not in ("path", "path_or_file", "file"))
         args = [kw.value for kw in kws]
         kws = []
     # `py` marks a frontend-emitted Call. A wrapper call written in Aether

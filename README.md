@@ -212,6 +212,12 @@ capability inventory. Both are **held back by measurement, not taste**: on
 the 2026-07-26 PyPI corpus, E0711 alone fired 476 times against 170 for
 that day's whole default set, both counted over every file including
 bundled tests ([`bench/pypi_scan/REPORT.md`](https://github.com/fitness-trener/Aether/blob/main/bench/pypi_scan/REPORT.md) §2).
+One part of `E0711` is on by default: a dynamic path handed to a
+file-serving call (`flask.send_file`, Werkzeug's `send_file`, and Starlette/FastAPI/aiohttp `FileResponse`), which sends the file to the HTTP client. Those
+calls appear only in request handlers: 0 sites on the 15-framework corpus
+and 2 on the PyPI corpus (2026-10-02). CVE-2023-52288 and CVE-2026-44716
+are this shape. `send_from_directory`, `safe_join` and `StaticFiles`
+contain the path and are not flagged.
 
 **`E0727` is not checked yet** on: a SAX parser object's own `.parse(...)`;
 `xml.etree.ElementTree.XML(...)` in any form (the same function as

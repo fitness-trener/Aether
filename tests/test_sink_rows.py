@@ -32,6 +32,11 @@ _SKIP = pf.PY_SKIP_STAGES + ("capability",)
 # codes one call yields -> rows. `executescript` is a sqlExec: E0713 for
 # the query text and E0716 for an unauthorized state change (documented).
 QUALIFIED = {
+    # file-serving calls (track B 2026-10-02): default-on E0711 rows
+    ("E0711",): ("flask.send_file", "flask.helpers.send_file",
+                 "werkzeug.utils.send_file", "starlette.responses.FileResponse",
+                 "fastapi.responses.FileResponse", "aiohttp.web.FileResponse",
+                 "aiohttp.web_fileresponse.FileResponse"),
     ("E0713",): ("pandas.read_sql", "pandas.read_sql_query",
                  "django.db.models.expressions.RawSQL", "django.db.models.RawSQL",
                  "duckdb.sql", "duckdb.execute", "duckdb.query"),

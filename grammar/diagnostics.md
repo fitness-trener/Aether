@@ -468,6 +468,19 @@ method name when the receiver is a plain variable — `execute` for
 an imported name). Only these rows carry `callee` on Python; `E0723`,
 `E0701` and the sink rows on Aether source do not.
 
+On Python, E0711 is a `--strict`-only row (`PY_STRICT_ONLY_CODES`)
+except on a file-serving callee (`PY_DEFAULT_ON_CALLEES`): `flask.send_file`,
+`flask.helpers.send_file`, `werkzeug.utils.send_file`, and
+`starlette.responses`/`fastapi.responses`/`aiohttp.web`/
+`aiohttp.web_fileresponse` `FileResponse`. Each sends the file at its
+path to the client with no containment, so on these callees the finding
+is reported by default. A keyword-only call is judged on its `path`,
+`path_or_file` or `file` keyword wherever it is written. Not rows:
+`send_from_directory` (Werkzeug `safe_join`), Starlette `StaticFiles`,
+tornado `StaticFileHandler`, bottle `static_file`,
+`django.views.static.serve`, and Django `FileResponse`, which takes an
+open file (the `open` is the sink).
+
 On Python these rows (and E0723) speak Python (audit 2026-09-24 C6): the
 message names the resolved `callee` instead of the Aether sink, the
 reason drops its Aether remedy (`- use sqlBind(...)`), the suggestion
