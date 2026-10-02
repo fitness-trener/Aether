@@ -34,7 +34,7 @@ classifies each finding by its sink argument:
 | **a parameter, and every in-module caller passes a literal** | **0** | 0% |
 | **a call to a local function that returns only literals** | **0** | 0% |
 
-A same-module interprocedural pass would clear **0 of 679**.
+A same-module interprocedural pass would clear **0 of 679** *by this classifier*. The package-wide follow-up below refines this to 4 sound clearings: a helper returning `text("<fixed SQL>")`, a shape `classify.py` did not model.
 
 `other.py` breaks down the 603 E0713 findings:
 - 235 have an f-string at the sink. The interpolated values are a local

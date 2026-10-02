@@ -3139,6 +3139,33 @@ State carried forward: the full gate suite must stay green
 
 ---
 
+## Iteration 79 — package-wide interprocedural taint, measured and not built (track D)
+
+- **Gap:** precision only. check-py flags any non-literal sink argument, so
+  a cross-function miss cannot exist on modelled sinks (probes p1/p2).
+- **Measured** (`audits/ipa_probe_2026-10-02/pkg_ipa.py`):
+
+  | Corpus | Findings | Sound | `_private` convention | Unsound | Loose bound |
+  |---|---:|---:|---:|---:|---:|
+  | Framework | 679 | 4 | 9 | 9 | 11 |
+  | Site-packages | 687 | 12 | — | — | — |
+
+  - Framework: 9 of 9 confirmed by a counterfactual re-run.
+  - Site-packages: all 12 are in one tornado test file; 0 outside tests.
+  - Parameters: 0 of 143 cleared.
+- **Decision:** not built. The threshold was at least 2% sound on both
+  corpora. The cost would be a package pre-pass plus summaries for the
+  per-file workers.
+- **TYPE gap surfaced for next iter:**
+  - Hand-written identifier quoters (agno `quote_db_identifier`: 156
+    findings, 120 of which would clear on their own). These need the
+    dialect as an argument; shape cannot prove them safe.
+  - Smaller: a same-module helper returning fixed SQL (4 sound, 9 under
+    the convention).
+- **Suite:** exit 0.
+
+---
+
 ## Next-iteration checklist (for the loop)
 
 1. Read the previous report's "TYPE gap for next iter".

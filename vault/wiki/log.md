@@ -1,5 +1,8 @@
 # Operation Log (append-only — newest on top)
 
+## [2026-10-02] Q1 row + q10 erratum | iteration 79 (track D)
+- The package-wide measurement corrects "0 of 679" to 4 sound (0.6%). Still not built.
+
 ## [2026-10-02] Q1 rows + q10 correction | iterations 76-78 (four-track comparison)
 - Three q1 residuals (SMT widening, file-serving rows, psycopg precision) and the BUG-107 closure.
 - q10: the SMT baseline was measured with z3 (0/123, not the 4/123 static bound), and the

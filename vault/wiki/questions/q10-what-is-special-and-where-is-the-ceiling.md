@@ -66,7 +66,7 @@ a type checker.
   reproducible narrow wins and the agent-ready diagnostics.
 - **Raising the ceiling, in order of payoff per cost:**
   1. ~~Interprocedural dataflow for taint~~. **Measured 2026-10-02 and not
-     built:** a same-module pass would clear 0 of 679 real findings, and
+     built:** a package-wide pass would soundly clear 4 of 679 real findings (0.6%; 9 under the `_private` convention, 0 from parameters), and
      probes show no cross-function miss on modelled sinks
      (`audits/ipa_probe_2026-10-02/README.md`). The levers that move
      numbers are E0713 precision (89% of framework findings; dynamic
