@@ -7,6 +7,9 @@ last_updated: 2026-10-02
 tags: [design-rationale, positioning, refinement-contracts, toolchain]
 ---
 
+**Erratum 2026-10-02:** the first version said taint "misses flows across
+functions". Probes refute that for modelled sinks; corrected below.
+
 # What is special about Aether compared with other tools, what is its ceiling, and can SMT raise it?
 
 ## Short Answer
@@ -27,8 +30,11 @@ A spec-written port plus a differential run finds library bugs, mostly
 because of the method ([[q9-why-do-aether-ports-find-library-bugs]]).
 
 **The ceiling** is set by three design choices:
-- taint is syntactic and intraprocedural, so it over-flags and misses
-  flows across functions ([[q1-taint-marker-soundness-boundary]]);
+- taint is syntactic and intraprocedural. For modelled sinks it over-flags
+  rather than misses: any non-literal sink argument is flagged, and in
+  `.aeth` a marker crossing a function boundary is refused at the
+  signature. The real limits are precision, and sinks with no rule at all,
+  such as Python `open` paths ([[q1-taint-marker-soundness-boundary]]);
 - there is no type checker beyond E0208/E0209 ([[q8-static-type-checking-after-name-resolution]]);
 - contracts hold only on paths that actually run ([[q2-runtime-refinement-vs-smt]]).
 
@@ -55,8 +61,13 @@ a type checker.
 - **Pitch:** do not say "better than other tools". Say the two
   reproducible narrow wins and the agent-ready diagnostics.
 - **Raising the ceiling, in order of payoff per cost:**
-  1. Interprocedural dataflow for taint (q4 lattice item). This attacks
-     the biggest limit, misses across function calls.
+  1. ~~Interprocedural dataflow for taint~~. **Measured 2026-10-02 and not
+     built:** a same-module pass would clear 0 of 679 real findings, and
+     probes show no cross-function miss on modelled sinks
+     (`audits/ipa_probe_2026-10-02/README.md`). The levers that move
+     numbers are E0713 precision (89% of framework findings; dynamic
+     identifiers and the q5 method-name rule) and unmodelled sinks
+     (Python `open`/`send_file` paths).
   2. A wider SMT fragment where the ports need it: multi-statement
      bodies (`let` chains), `if` expressions, and `/`/`%` once their
      floor semantics are encoded (BUG-103 now pins them). Measure the

@@ -1,5 +1,11 @@
 # Operation Log (append-only — newest on top)
 
+## [2026-10-02] Probe | interprocedural taint: not built
+- A same-module interprocedural pass would clear 0 of 679 framework findings, and there
+  are no cross-function misses on modelled sinks. q10 erratum; q1 PROBED row.
+- **Lesson carried:** "intraprocedural" sounds like a recall gap, but with the
+  literal-or-sanitizer rule it is a precision gap. Measure before building.
+
 ## [2026-10-02] New question page | q10: what is special, the ceiling, SMT
 - Measured the SMT fragment's share of contracts. At most 4 of 123 `ensures` clauses in the
   real-world ports, 16 of 173 across the corpus (upper bound).
