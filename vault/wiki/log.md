@@ -1,5 +1,11 @@
 # Operation Log (append-only — newest on top)
 
+## [2026-10-02] New question page | q10: what is special, the ceiling, SMT
+- Measured the SMT fragment's share of contracts. At most 4 of 123 `ensures` clauses in the
+  real-world ports, 16 of 173 across the corpus (upper bound).
+- **Lesson carried:** SMT lifts only the runtime-contract limit. The taint and type limits
+  need dataflow analysis and a type checker.
+
 ## [2026-09-30] Q1/q8/q9 rows | sprint iterations 71-75 (differentials + E0209)
 - **Iterations 71-74 (real-world differentials):** dateutil rrule, tomllib,
   packaging specifiers, CPython datetime. Two clean targets, and three new

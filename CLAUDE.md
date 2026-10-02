@@ -84,7 +84,7 @@ The method only compounds if you run its loops. Do:
   (formal-methods adoption filter), q5 (sink matching vs purity
   matching), q6 (risk vs confidence axes), q7 (frontend totality), q8 (static
   type checking after name resolution), q9 (why Aether ports find library
-  bugs: method vs language).
+  bugs: method vs language), q10 (what is special, the ceiling, SMT).
 - **Curate loop.** `raw/sources/` are **read-only pointer stubs** to the
   canonical in-repo spec (`grammar/*.md`, `README.md`). Never edit them;
   add NEW source stubs only. Clusters cite source markers

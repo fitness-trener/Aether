@@ -36,6 +36,7 @@ query — start here, follow links.
 - [[questions/q7-frontend-totality-over-syntax|Q7]] — why the Python frontend must be TOTAL over statement positions and binding forms: a position it does not emit is a silent miss, not an over-flag (BUG-012, 411 → 628 on the framework corpus)
 - [[questions/q8-static-type-checking-after-name-resolution|Q8]] — what static type checking Aether should have now that names resolve (E0208): options, measured prevalence, and why it ranks below security work
 - [[questions/q9-why-do-aether-ports-find-library-bugs|Q9]] — why Aether ports find bugs in real libraries: mostly the method (a spec-written port plus a differential run), with enforced runtime contracts and arbitrary-precision Int; exactness is not yet enforced
+- [[questions/q10-what-is-special-and-where-is-the-ceiling|Q10]] — what is special about Aether (narrow, reproducible scanner wins plus agent-ready diagnostics), its three ceilings, and how far SMT lifts the contract one (3.3% of port contracts today)
 
 ## Concepts (`wiki/concepts/`)
 - _none yet — decisions beyond sources go here_
