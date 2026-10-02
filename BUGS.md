@@ -2860,3 +2860,51 @@ Fix:
 
 The test fails on the previous printer: with `"a b"`, the second pass
 kept only `// one`.
+
+### BUG-106  SMT prover assumed refinement predicates through an unrefined alias (wrong proof)  [FIXED ccd5cb4]
+test: tests/test_smt.py (`::test_unrefined_alias_predicates_are_not_assumed`)
+
+Found 2026-10-02 by track C while widening the prover. The coordinator
+re-ran the repro on the pre-fix branch.
+
+Repro (z3 4.16):
+- `type Percentage = Int where self >= 0 and self <= 100`, then
+  `type Pct = Percentage` (no `where`).
+- `function keep(p: Pct) returns Int ensures result >= 0 do return p end`.
+- `check --prove` printed `1 proved`, but `run` with `keep(0 - 5)` raised
+  E0304.
+
+**Root cause.** The emitter checks a type's predicate only when the type
+has its own `where`. It re-checks a base type only if that base is refined
+too. `_resolve_param_sort` in `passes/smt.py` gathered predicates down the
+whole alias chain, so the prover assumed constraints the runtime never
+enforces.
+
+**Fix.** A type with no `where` of its own contributes no predicates. The
+repro is now refuted (E0901, with a counterexample).
+
+### BUG-107  E0714 accepted a dict choice of literals followed by a quoted piece when one option leaves no fixed program word (false accept)  [FIXED 40a8d9b]
+test: tests/test_py_precision.py (`::test_bug107_dict_choice_is_alternatives_in_a_shell_composition`)
+
+Found 2026-10-02 by track A's E0713 census. The coordinator confirmed it on
+`sprint-differential`.
+
+Repro:
+
+    subprocess.run({"list": "ls -l ", "raw": ""}[k] + shlex.quote(p), shell=True)
+
+`check-py` exited 0. With `k == "raw"`, the command is the quoted input
+alone, which is BUG-034's whole-command shape. The bound-name form
+(`prefix = {...}[k]`) was already flagged.
+
+**Root cause.** The frontend gives the rules the options of a dict choice
+(BUG-099) as one `+` of literals. `_concat_reason` flattened that chain into
+the surrounding concatenation, so `_shell_pieces_ok` saw the sequence
+`"ls -l " + "" + q` and never judged each option on its own.
+
+**Fix.**
+- The frontend marks the choice node.
+- `_concat_reason` keeps it as one leaf.
+- The `pieces` check must hold for every option; past 256 combinations it
+  over-flags.
+- Literal bans still read all the options together, as before (over-flag).

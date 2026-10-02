@@ -3044,6 +3044,101 @@ State carried forward: the full gate suite must stay green
 
 ---
 
+## Iteration 76 — SMT fragment widened (track C, no new detector)
+
+- **Target:** vault q10. The prover covered only Int/Bool functions whose
+  body is a single `return`.
+- **Real baseline** (z3 4.16, Python 3.13): 0 of 123 `ensures` clauses
+  proved in `bench/realworld_*`, and 2 of 174 across the corpus. q10's
+  static estimate (4/123, 16/173) was an upper bound and has been
+  corrected.
+- **Built:** `passes/smt.py` now handles:
+  - `let`/`var`/assign;
+  - `if`/`elif`/`else` and the if-expression;
+  - floor `/` and `%`, where a zero divisor is a raising path;
+  - short-circuit definedness;
+  - `abs`/`min`/`max`, consts, return refinements;
+  - inlined user calls. An abstracted call can prove a clause, never
+    refute one.
+- **Measured:**
+
+  | | Before | After |
+  |---|---:|---:|
+  | Realworld clauses proved | 0/123 | 13/123 |
+  | Corpus clauses proved | 2/174 | 34/174 |
+  | Refuted | 6 | 8 |
+  | Timeouts | 0 | 0 |
+
+  - Both new refutations are real (`bench/aetherbench` `discount` and
+    `applyDiscount`, negative price).
+  - `playground/examples/06_payment_pipeline.aeth` gained
+    `requires amount >= 0`.
+  - The 32 functions with proved clauses ran 96,000 times: no E0304.
+- **BUG-106 fixed:** a wrong proof through an unrefined alias, which
+  predates this work.
+- **TYPE gap surfaced for next iter:** loops need invariants or bounded
+  unrolling (9 realworld clauses). String, List and record values block
+  98 realworld clauses.
+- **Suite:** `python -B scripts/run_all.py` exit 0; `tests/test_smt.py`
+  33/33 under z3.
+
+---
+
+## Iteration 77 — file-serving calls are default-on path sinks (track B)
+
+- **Target:** `audits/ipa_probe_2026-10-02/b4_path.py`.
+  `send_file(request path)` was silent even under `--strict`.
+- **Gap confirmed:** `check-py` exit 0 on the shape.
+- **Built:**
+  - 7 rows for Flask/Werkzeug `send_file` and Starlette/FastAPI/aiohttp
+    `FileResponse`, default-on as E0711. `open()` stays `--strict`-only.
+  - `PY_DEFAULT_ON_CALLEES` / `py_held_back()`.
+  - The `path` keyword is judged first.
+  - `min_py_table_rows` 134 -> 141.
+  - Repro `bench/py_frontend/corpus/file_serving_repro.py`
+    (CVE-2023-52288, CVE-2026-44716, CVE-2022-31538; the coordinator
+    checked all three records).
+- **Measured:**
+  - framework corpus 679 -> 679;
+  - PyPI 686 -> 688: two sites inside Starlette `StaticFiles` after its
+    containment check, both over-flags;
+  - `bench/py_frontend` TP 72 -> 77, benign files unchanged.
+- **TYPE gap surfaced for next iter:** a containment-check sanitizer
+  (`realpath`/`commonpath`/`is_relative_to` dominating the sink), and file
+  objects in the path slot (`io.BytesIO`).
+- **Suite:** exit 0.
+
+---
+
+## Iteration 78 — E0713 precision: psycopg composition through names (track A)
+
+- **Target:** E0713 is 603 of the 679 framework findings.
+- **Census:** `audits/e0713_census_2026-10-02/`, counted by the worst
+  dynamic leaf:
+
+  | Worst dynamic leaf | Findings |
+  |---|---:|
+  | agno `quote_db_identifier` | 141 |
+  | other call | 127 |
+  | parameter | 119 |
+  | `self.attr` | 89 |
+  | loop variable | 30 |
+  | psycopg | 27 |
+  | SQLAlchemy chain via a helper | 19 |
+
+  Literal-only constant propagation would clear 1 of 603 (not built).
+- **Built:** `_psycopg_composed` resolves a name bound once, and
+  `Placeholder() * n`.
+- **Measured:** framework E0713 603 -> 587 (16 psycopg sites); PyPI
+  232 -> 232; `bench/py_frontend` 0 FN; CVE corpus PASS.
+- **Found:** BUG-107, an E0714 false accept on a dict choice in a shell
+  composition. The coordinator fixed it (`40a8d9b`).
+- **TYPE gap surfaced for next iter:** SQLAlchemy statements passed
+  through a helper (`stmt = apply_sorting(stmt, ...)`).
+- **Suite:** exit 0.
+
+---
+
 ## Next-iteration checklist (for the loop)
 
 1. Read the previous report's "TYPE gap for next iter".

@@ -41,9 +41,12 @@ because of the method ([[q9-why-do-aether-ports-find-library-bugs]]).
 
 **SMT raises the third limit only, and today only slightly.** The prover
 handles Int/Bool functions whose body is a single `return`; `/` and `%`
-are excluded. Measured on 2026-10-02, at most 4 of the 123 `ensures`
-clauses in `bench/realworld_*` (3.3%) are in that fragment, and 16 of 173
-(9.2%) across the whole corpus. SMT cannot help with the other two
+are excluded. A real z3 run on 2026-10-02 proved **0 of 123** `ensures`
+clauses in `bench/realworld_*` and 2 of 174 across the corpus. A static
+count had put the ceiling at 4/123 and 16/173. **After iteration 76**
+widened the fragment (`let`/`if`, floor `/` and `%`, inlined calls), it
+proves 13/123 (10.6%) and 34/174 (19.5%). Loops and String/List/record
+values block the rest. SMT cannot help with the other two
 limits. Those need a dataflow analysis (q4's monotone-framework item) and
 a type checker.
 

@@ -1,5 +1,12 @@
 # Operation Log (append-only — newest on top)
 
+## [2026-10-02] Q1 rows + q10 correction | iterations 76-78 (four-track comparison)
+- Three q1 residuals (SMT widening, file-serving rows, psycopg precision) and the BUG-107 closure.
+- q10: the SMT baseline was measured with z3 (0/123, not the 4/123 static bound), and the
+  after-numbers were added.
+- **Lesson carried:** a static eligibility count is an upper bound. Run the real tool before
+  quoting a baseline.
+
 ## [2026-10-02] Probe | interprocedural taint: not built
 - A same-module interprocedural pass would clear 0 of 679 framework findings, and there
   are no cross-function misses on modelled sinks. q10 erratum; q1 PROBED row.
