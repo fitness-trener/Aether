@@ -193,6 +193,38 @@ def test_c3_sql_constants_and_composition():
     print("C3: constants, psycopg sql, attribute Tables and IN-lists clear E0713; raw text fires")
 
 
+def test_psycopg_composition_through_names():
+    """Track A (2026-10-02): a psycopg format/join argument that is a NAME
+    bound exactly once to a composition is that composition
+    (`t = sql.Identifier(s, tbl)` ... `.format(t=t)`, 15 framework-corpus
+    sites), and `sql.Placeholder() * n` is a Composed. A second binding,
+    a parameter, a raw `sql.SQL(x)` or a plain value behind the name
+    sanctions nothing."""
+    pg = "def f(cur, schema, table, raw, cols):\n    from psycopg2 import sql\n"
+    run = "    cur.execute(sql.SQL('SELECT * FROM {t}').format(t=t))\n"
+    _check([
+        (pg + "    t = sql.Identifier(schema, table)\n" + run, []),
+        (pg + "    p = sql.SQL('CREATE TEMP TABLE {} AS').format(sql.Identifier(table))\n"
+              "    cur.execute(sql.SQL('{p} SELECT 1').format(p=p))\n", []),
+        (pg + "    cur.execute(sql.SQL('INSERT INTO t VALUES ({})').format(\n"
+              "        sql.SQL(', ').join(sql.Placeholder() * len(cols))))\n", []),
+        ("from psycopg import sql\nT = sql.Identifier('users')\n"
+         "def f(cur):\n    cur.execute(sql.SQL('SELECT * FROM {}').format(T))\n", []),
+        # near misses: the name may hold raw text, or is not one binding
+        (pg + "    t = sql.Identifier(table)\n    t = sql.SQL(raw)\n" + run, ["E0713"]),
+        (pg + "    t = sql.SQL(raw)\n" + run, ["E0713"]),
+        (pg + "    t = table\n" + run, ["E0713"]),
+        (pg.replace("raw, cols", "raw, cols, t") + run, ["E0713"]),
+        (pg + "    for t in cols:\n" + run.replace("    cur", "        cur"), ["E0713"]),
+        (pg + "    q = sql.SQL('SELECT {}').format(q)\n    cur.execute(q)\n", ["E0713"]),
+        (pg + "    cur.execute(sql.SQL('INSERT INTO t VALUES ({})').format(\n"
+              "        sql.SQL(', ').join(sql.SQL(raw) * len(cols))))\n", ["E0713"]),
+        ("from psycopg import sql\nT = sql.SQL(input())\n"
+         "def f(cur):\n    cur.execute(sql.SQL('SELECT * FROM {}').format(T))\n", ["E0713"]),
+    ])
+    print("psycopg: a name bound once to a composition, and Placeholder() * n, clear E0713")
+
+
 def test_c4_sandbox_and_own_from_string():
     """C4: Jinja's sandbox, and a class this file defines with its own
     `from_string`, are not the template row."""
@@ -377,6 +409,7 @@ if __name__ == "__main__":
     test_c1_quoted_pieces_compose()
     test_c2_own_origin_redirects()
     test_c3_sql_constants_and_composition()
+    test_psycopg_composition_through_names()
     test_c4_sandbox_and_own_from_string()
     test_c7_compile_exec_xml_and_docstring()
     test_bug039_secure_filename_join()
