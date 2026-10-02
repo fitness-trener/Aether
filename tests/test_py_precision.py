@@ -356,6 +356,25 @@ def test_bug099_dict_allowlist_is_literal():
     print("BUG-099: a dict allowlist of literals is a literal; any computed value is not")
 
 
+def test_bug107_dict_choice_is_alternatives_in_a_shell_composition():
+    """BUG-107: the options of a dict choice were read as one `+` of each
+    other, so `{"list": "ls -l ", "raw": ""}[k] + shlex.quote(p)` passed the
+    shell composition check as `"ls -l " + "" + q`. With `k == "raw"` the
+    command is the quoted input alone (BUG-034's whole-command shape). Each
+    option is now judged on its own."""
+    head = "import shlex, subprocess\ndef f(k, p):\n    subprocess.run("
+    tail = " + shlex.quote(p), shell=True)\n"
+    _check([
+        (head + "{'list': 'ls -l ', 'long': 'ls -la '}[k]" + tail, []),
+        (head + "{'list': 'ls -l '}.get(k, 'ls ')" + tail, []),
+        # negative controls: one option leaves no fixed program word
+        (head + "{'list': 'ls -l ', 'raw': ''}[k]" + tail, ["E0714"]),
+        (head + "{'list': 'ls -l '}.get(k, '')" + tail, ["E0714"]),
+        (head + "{'list': 'ls -l ', 'x': 'ls'}[k]" + tail, ["E0714"]),
+    ])
+    print("BUG-107: a dict choice in a shell composition is judged option by option")
+
+
 def test_bug100_lambda_fed_only_literals():
     """BUG-100: a lambda bound once to a local name, called only with str
     literals and never escaping, has literal-only parameters. One
@@ -404,6 +423,7 @@ def test_bug101_for_over_sqlalchemy_specs():
 if __name__ == "__main__":
     test_bug098_text_needs_sql_evidence()
     test_bug099_dict_allowlist_is_literal()
+    test_bug107_dict_choice_is_alternatives_in_a_shell_composition()
     test_bug100_lambda_fed_only_literals()
     test_bug101_for_over_sqlalchemy_specs()
     test_c1_quoted_pieces_compose()

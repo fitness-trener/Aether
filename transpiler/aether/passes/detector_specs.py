@@ -1312,12 +1312,15 @@ def _arg_reason(node: Any, safe_names: Set[str], rule: ArgRule) -> Optional[str]
 _UNFOLDED = object()
 
 
-def _concat_leaves(node: Dict[str, Any]) -> List[Any]:
-    """The operands of a `+` tree, left to right."""
+def _concat_leaves(node: Dict[str, Any], keep_choice: bool = False) -> List[Any]:
+    """The operands of a `+` tree, left to right. With `keep_choice`, a
+    dict choice (the frontend's `choice` node) stays one leaf."""
     out, stack = [], [node]
     while stack:
         x = stack.pop()
-        if isinstance(x, dict) and x.get("kind") == "BinOp" and x.get("op") == "+":
+        if keep_choice and isinstance(x, dict) and x.get("choice") and x is not node:
+            out.append(x)
+        elif isinstance(x, dict) and x.get("kind") == "BinOp" and x.get("op") == "+":
             stack += [x.get("right"), x.get("left")]
         else:
             out.append(x)
@@ -1334,9 +1337,14 @@ def _concat_reason(node: Dict[str, Any], safe_names: Set[str],
     is accepted only by a rule with a `pieces` check, which judges the
     composition. None if accepted, a ban reason, or `_UNFOLDED`."""
     texts: List[Optional[str]] = []
-    for leaf in _concat_leaves(node):
+    options: Dict[int, List[str]] = {}   # index in texts -> a choice's options
+    for leaf in _concat_leaves(node, keep_choice=True):
         k = leaf.get("kind") if isinstance(leaf, dict) else None
-        if k == "StringLit":
+        if isinstance(leaf, dict) and leaf.get("choice"):
+            opts = [x.get("value") or "" for x in _concat_leaves(leaf)]
+            options[len(texts)] = opts
+            texts.append("".join(opts))  # bans read every option together
+        elif k == "StringLit":
             texts.append(leaf.get("value") or "")
         elif k == "Ident" and leaf.get("name") in safe_names:
             texts.append(None)
@@ -1354,8 +1362,16 @@ def _concat_reason(node: Dict[str, Any], safe_names: Set[str],
             if banned in "".join(run):
                 return why
         run = []
-    if rule.pieces is not None and None in texts and not rule.pieces(texts):
-        return rule.concat or rule.default
+    if rule.pieces is not None and None in texts:
+        # A dict choice is one of its options, not their sequence: the
+        # composition must hold for every option (BUG-107).
+        variants: List[List[Optional[str]]] = [texts]
+        for i, opts in options.items():
+            variants = [v[:i] + [o] + v[i + 1:] for v in variants for o in opts]
+            if len(variants) > 256:     # ponytail: cap, over-flag past it
+                return rule.concat or rule.default
+        if not all(rule.pieces(v) for v in variants):
+            return rule.concat or rule.default
     return None
 
 

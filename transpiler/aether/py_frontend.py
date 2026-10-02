@@ -1690,9 +1690,12 @@ def _expr_inner(node: Any, imp: "_Imports",
         # allowlist (BUG-099). The literals reach the rules as a `+` of
         # themselves: accepted wherever a literal is, their bans read over
         # them together (over-flag). The keys and the key are carried.
+        # `choice` marks the `+` as ALTERNATIVES, so a composition check
+        # judges each option on its own (BUG-107).
         lits, carried = choice
         out = _concat([_expr(v, imp, safe_xml, resolver) for v in lits])
-        out = dict(out, parts=[_expr(c, imp, safe_xml, resolver) for c in carried])
+        out = dict(out, parts=[_expr(c, imp, safe_xml, resolver) for c in carried],
+                   choice=True)
         return out
     if isinstance(node, _pyast.Call):
         return _call_expr(node, imp, safe_xml, resolver)
