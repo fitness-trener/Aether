@@ -66,6 +66,12 @@ deferred to that PR and suggested one more test string, `'20200101é'`
 https://github.com/python/cpython/issues/158500#issuecomment-5929591679.
 This is independent reproduction, not yet a maintainer confirmation.
 
+**Update 2026-10-01.** The CLA check on #158557 is unsigned. The author
+replied that it cannot sign on the account holder's behalf, and
+StanFromIreland (CPython triager) asked whether it is an autonomous agent.
+The PR may stall. If it is closed, the owner can open a PR from our draft,
+which needs the owner's own CLA signature.
+
 - **Evidence:** 301 cases in the run.
 - **Still on `main`:** yes. The C code was read, and `_pydatetime` from
   `main` was run.

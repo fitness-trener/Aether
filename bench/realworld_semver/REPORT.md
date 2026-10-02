@@ -174,6 +174,14 @@ semver.Version.parse(s).compare(s)   # ValueError: Exceeds the limit (4300 digit
   [python-semver#487](https://github.com/python-semver/python-semver/issues/487),
   a low-severity consistency note that suggests comparing canonical numeric
   identifiers by `(len, str)`.
+- **Fixed upstream, 2026-10-01.** A third party (SAY-5) opened
+  [python-semver#488](https://github.com/python-semver/python-semver/pull/488)
+  ("Compare long numeric prerelease identifiers without integer
+  conversion", `Fixes #487`). It compares numeric identifiers by
+  normalized digit count and text, which is the suggested approach. The
+  maintainer, tomschr, requested changes and then merged it; #487 is
+  closed as completed. Not yet in a release; not re-run here against
+  `master`.
 
 ## 5. What this does NOT prove
 
