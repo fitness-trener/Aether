@@ -99,9 +99,10 @@ fixed-width wrapping semantics must mask explicitly, e.g.
 rounds toward negative infinity and the remainder takes the divisor's sign,
 so `a == b * (a / b) + a % b` always holds. `-7 / 2` is `-4`, `-7 % 2` is
 `1`, `7 % -2` is `-1`. C, Java, Rust and Go truncate instead (`-3`, `-1`,
-`1`); a port from those languages must convert. Neither operator is in the
-SMT prover's fragment (`passes/smt.py`). (BUG-103,
-`tests/test_int_division.py`.)
+`1`); a port from those languages must convert. The SMT prover
+(`passes/smt.py`) encodes both with these floor semantics and treats a
+zero divisor as a path that raises. (BUG-103,
+`tests/test_int_division.py`, `tests/test_smt.py`.)
 
 ## Parameterised types
 

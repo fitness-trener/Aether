@@ -561,12 +561,23 @@ zero-dependency.
 E0901's `counterexample` maps param names (plus `result`) to the
 violating values, so a fix-loop can re-prompt with them.
 
-The pass only analyzes a restricted fragment (Int/Bool params,
-single-`return` bodies, linear arithmetic without `/` and `%`);
-everything else is counted `skipped` in the `prove:` summary and keeps
-runtime checks. A function whose `requires` clauses or param
-refinements do not translate is skipped entirely — dropping an
-assumption would fabricate spurious counterexamples.
+The pass only analyzes a restricted fragment: Int/Bool params and
+result; bodies of `let`/`var`/assignment, `if`/`elif`/`else` and
+`return` (no loops, no `match`, no fall-through); Int arithmetic
+including `/` and `%` as floor division and floor remainder (a zero
+divisor is a path that raises, never an assumption); `if`
+expressions; `abs`/`min`/`max` on Int; module `const`s; and calls to
+user functions, inlined when their body is in the fragment. Everything
+else is counted `skipped` in the `prove:` summary and keeps runtime
+checks.
+
+A run that had to drop an untranslatable `requires` clause or
+refinement, or stand a fresh value in for a call it could not inline,
+is inexact: it can still PROVE a clause (fewer premises), but a
+counterexample would not be a real execution, so it never emits E0901
+or E0902 and counts the clause `skipped`. Proofs are relative to the
+declared parameter types; there is no static type checker
+(`grammar/types.md`).
 
 ---
 
