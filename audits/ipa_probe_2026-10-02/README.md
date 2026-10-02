@@ -11,7 +11,7 @@ interprocedural pass would clear.
 |---|---|---|
 | `p1_sql.py` | SQL built in a helper and executed by the caller; a parameter executed in a helper | Both flagged, E0713 |
 | `p2_cmd.py` | Command returned from a helper, and an identity wrapper | Both flagged, E0714 |
-| `p4_path.py`, `b4_path.py` | `open`/`send_file` of a request-derived path | Not flagged, **including within one function**. The Python path sink is not modelled (README: 9 rows); that is not a cross-function gap |
+| `p4_path.py`, `b4_path.py` | `open`/`send_file` of a request-derived path | `open` paths are flagged as E0711 under `--strict` only, cross-function shapes included (`user_path()`, helper parameter). `send_file` has no rule even within one function. Off by default and unmodelled sinks are not cross-function gaps |
 
 For a sink check-py models, a non-literal argument is flagged wherever its
 value comes from, so a flow across functions cannot be missed. It is

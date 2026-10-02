@@ -33,8 +33,9 @@ because of the method ([[q9-why-do-aether-ports-find-library-bugs]]).
 - taint is syntactic and intraprocedural. For modelled sinks it over-flags
   rather than misses: any non-literal sink argument is flagged, and in
   `.aeth` a marker crossing a function boundary is refused at the
-  signature. The real limits are precision, and sinks with no rule at all,
-  such as Python `open` paths ([[q1-taint-marker-soundness-boundary]]);
+  signature. The real limits are precision, and sinks that are off by default or
+  have no rule (Python `open` paths are E0711 only under `--strict`;
+  `send_file` has no rule) ([[q1-taint-marker-soundness-boundary]]);
 - there is no type checker beyond E0208/E0209 ([[q8-static-type-checking-after-name-resolution]]);
 - contracts hold only on paths that actually run ([[q2-runtime-refinement-vs-smt]]).
 
@@ -66,8 +67,8 @@ a type checker.
      probes show no cross-function miss on modelled sinks
      (`audits/ipa_probe_2026-10-02/README.md`). The levers that move
      numbers are E0713 precision (89% of framework findings; dynamic
-     identifiers and the q5 method-name rule) and unmodelled sinks
-     (Python `open`/`send_file` paths).
+     identifiers and the q5 method-name rule) and path sinks
+     (E0711 is `--strict`-only; `send_file` has no rule).
   2. A wider SMT fragment where the ports need it: multi-statement
      bodies (`let` chains), `if` expressions, and `/`/`%` once their
      floor semantics are encoded (BUG-103 now pins them). Measure the
