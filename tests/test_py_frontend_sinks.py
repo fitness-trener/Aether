@@ -1914,6 +1914,50 @@ def test_quoted_option_word_for_option_running_programs():
     print("E0714: a quoted option word for git/tar/rsync/zip is not the shell exit")
 
 
+def test_file_serving_calls_are_default_on_path_sinks():
+    """Track B (2026-10-02): `send_file`/`FileResponse` of a request path
+    was silent even under --strict (audits/ipa_probe_2026-10-02/b4_path.py).
+    CVE-2023-52288 and CVE-2026-44716 are this shape. They are E0711 rows
+    reported by DEFAULT, while `open(path_param)` stays --strict-only."""
+    from aether.py_frontend import py_held_back, PY_DEFAULT_ON_CALLEES, SINK_BY_QUALIFIED
+    assert all(SINK_BY_QUALIFIED.get(c) == "readFile" for c in PY_DEFAULT_ON_CALLEES)
+    e = lambda src: [c for c in _codes(src) if c == "E0711"]   # noqa: E731
+    bad = (
+        "from flask import send_file, request\n"
+        "def f():\n    return send_file('/srv/' + request.args['f'])\n",
+        "import os\nfrom flask import send_file\n"
+        "def f(p):\n    return send_file(os.path.join('/srv', p))\n",
+        "from fastapi.responses import FileResponse\nfrom pathlib import Path\n"
+        "def f(d, n):\n    return FileResponse(path=Path(d) / n, filename=n)\n",
+        # the path keyword after a literal one is still the judged slot
+        "from starlette.responses import FileResponse\n"
+        "def f(n):\n    return FileResponse(media_type='text/plain', path=n)\n",
+        "from aiohttp import web\ndef f(n):\n    return web.FileResponse(n)\n",
+    )
+    for src in bad:
+        assert e(src) == ["E0711"], src
+    clean = (
+        "from flask import send_from_directory\n"
+        "def f(n):\n    return send_from_directory('/srv', n)\n",
+        "from flask import send_file\nfrom werkzeug.utils import safe_join\n"
+        "def f(n):\n    return send_file(safe_join('/srv', n))\n",
+        "from flask import send_file\ndef f():\n    return send_file('/srv/a.pdf')\n",
+        "from starlette.staticfiles import StaticFiles\n"
+        "def f():\n    return StaticFiles(directory='./dist', html=True)\n",
+    )
+    for src in clean:
+        assert e(src) == [], src
+    # default-on through the CLI for the serving call, not for `open`
+    rc, out = _run_check_py(bad[0])
+    assert rc == 1 and "[E0711]" in out, out
+    rc, out = _run_check_py(_OPEN_PARAM_SRC)
+    assert "[E0711]" not in out, out
+    ir, _u, _m = py_to_ir(bad[0])
+    assert not any(py_held_back(d) for d in analyze_flat(ir, skip=PY_SKIP_STAGES)
+                   if d.code == "E0711")
+    print("E0711: file-serving calls are default-on path sinks; safe forms clean")
+
+
 if __name__ == "__main__":
     test_body_is_no_longer_discarded()
     test_assign_becomes_let()
@@ -2017,4 +2061,5 @@ if __name__ == "__main__":
     test_stripe_restricted_key_is_a_credential()
     test_argv_option_injection_is_a_command_injection()
     test_quoted_option_word_for_option_running_programs()
+    test_file_serving_calls_are_default_on_path_sinks()
     print("PY FRONTEND: ALL TESTS PASS")

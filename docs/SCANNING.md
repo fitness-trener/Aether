@@ -174,7 +174,10 @@ which requires an authorization proof; no Python spelling tried clears
 it, an `authorize(...)` second argument or an `Authorized` annotation
 included (measured).
 `E0711` and the `E0701` capability inventory are held back from the
-default set by measurement — see `bench/py_frontend/REPORT.md` §2.
+default set by measurement — see `bench/py_frontend/REPORT.md` §2. The
+exception is `E0711` on a file-serving call (`flask.send_file`,
+Werkzeug's `send_file`, Starlette/FastAPI/aiohttp `FileResponse`), which
+is reported by default.
 
 ## Exit codes and the JSON contract
 

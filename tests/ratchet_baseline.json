@@ -3,5 +3,5 @@
   "min_emitted_codes": 57,
   "min_gated_detectors": 33,
   "min_corpus_claimed_findings": 120,
-  "min_py_table_rows": 134
+  "min_py_table_rows": 141
 }

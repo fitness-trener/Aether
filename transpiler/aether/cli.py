@@ -301,6 +301,7 @@ from .py_frontend import PY_SKIP_STAGES as _PY_SKIP_STAGES  # noqa: E402
 # E0701. That is an inventory, which `tools/py_surface.py` already
 # reports properly — not a security verdict.
 from .py_frontend import PY_STRICT_ONLY_CODES as _PY_STRICT_ONLY_CODES  # noqa: E402
+from .py_frontend import py_held_back as _py_held_back  # noqa: E402
 
 
 # Directories that are never the user's own source. Walking `.venv` or
@@ -415,7 +416,7 @@ def _scan_one(job):
         # __init__.py` deliberately does not swallow exceptions.
         return ("crashed", path, f"{type(e).__name__}: {e}")
     if not strict:
-        diags = [d for d in diags if d.code not in _PY_STRICT_ONLY_CODES]
+        diags = [d for d in diags if not _py_held_back(d)]
     # Worst-first, then most-certain-first: the top of a long scan is the
     # part worth reading, and of two equally-risky findings the one the
     # analysis is surest about leads. Line and code break ties so the
@@ -608,7 +609,9 @@ def cmd_check_py(args) -> int:
           "clears it.")
     if not strict:
         print("NOT checked by default (--strict adds both): E0711 dynamic "
-              "filesystem paths, and the capability inventory (E0701). "
+              "filesystem paths (except file-serving calls such as "
+              "flask.send_file and FileResponse, checked by default), and "
+              "the capability inventory (E0701). "
               "Held back by measurement, not taste - see "
               "bench/py_frontend/REPORT.md.")
     return rc

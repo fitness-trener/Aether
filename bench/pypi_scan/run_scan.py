@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.join(ROOT, "transpiler"))
 sys.path.insert(0, ROOT)
 
 from aether.py_frontend import (py_to_ir, PY_SKIP_STAGES,   # noqa: E402
-                                PY_STRICT_ONLY_CODES)
+                                PY_STRICT_ONLY_CODES, py_held_back)
 from aether.passes import analyze_flat                      # noqa: E402
 
 # The CLI's row set, from the one definition the CLI itself imports —
@@ -115,7 +115,7 @@ def scan(root: str, limit: int = 0):
                 "dist": _dist_of(path, root),
                 "line": d.position.line,
                 "is_test": _is_test_path(path),
-                "default_row": d.code not in STRICT_ONLY,
+                "default_row": not py_held_back(d),
                 "message": d.message[:160],
             })
     return stats, findings, dict(err_kinds)

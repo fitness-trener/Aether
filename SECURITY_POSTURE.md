@@ -22,7 +22,7 @@ checked at **runtime** and are runtime guarantees, not static proof (see
 | Code | Class | CWE | Family | Sanctioned repair | Default on Python |
 |------|-------|-----|--------|-------------------|:---:|
 | E0710 | SSRF — unpinned fetch scope | 918 | effect-string | pin the host | — ¹ |
-| E0711 | Path traversal / Zip-Slip | 22 | sink+literal | `safeJoin` | `--strict` |
+| E0711 | Path traversal / Zip-Slip | 22 | sink+literal | `safeJoin` | `--strict`; file-serving calls ✓ ³ |
 | E0712 | Secret reaches a log/disk sink | 532 | taint | `reveal` | — |
 | E0713 | SQL injection | 89 | sink+literal | `sqlBind` | ✓ |
 | E0714 | Command injection | 78 | sink+literal | `shellArg` | ✓ |
@@ -50,6 +50,10 @@ network module, not on `requests.get` or `urlopen` (measured; README,
 ² `E0716` does fire on Python, on every `.executescript(...)` method call:
 the frontend maps it to `sqlExec`, which requires an authorization proof no
 Python spelling supplies. Read it as "this call runs a SQL script".
+³ A dynamic path given to `flask.send_file`, Werkzeug's `send_file` or
+a Starlette/FastAPI/aiohttp `FileResponse` is reported by default
+(`PY_DEFAULT_ON_CALLEES` in `transpiler/aether/py_frontend.py`); `open`
+and the rest of E0711 stay `--strict`.
 
 ## Four detector families (the reusable shapes)
 
