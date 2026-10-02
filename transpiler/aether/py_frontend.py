@@ -2793,13 +2793,33 @@ _PSYCOPG_SQL_MODULES = ("psycopg2.sql.", "psycopg.sql.")
 _PSYCOPG_QUOTED = frozenset({"Identifier", "Literal", "Placeholder"})
 
 
-def _psycopg_composed(node: Any, imp: "_Imports", resolver: Any = None) -> bool:
+def _psycopg_composed(node: Any, imp: "_Imports", resolver: Any = None,
+                      _seen: frozenset = frozenset()) -> bool:
     """True if `node` is a psycopg `sql` composition carrying no raw
     string: `sql.SQL("... {} ...").format(sql.Identifier(t), ...)`,
     `sql.SQL(", ").join(sql.Identifier(c) for c in cols)`, or one of the
     quoting constructors. `sql.SQL(x)` with a non-literal `x` anywhere
     makes the whole thing raw, and a format argument that is not itself
-    such a composition (a plain value, a name) sanctions nothing."""
+    such a composition (a plain value) sanctions nothing.
+
+    A NAME is a composition when it is bound exactly once and that one
+    value is a composition (`t = sql.Identifier(s, tbl)` ...
+    `.format(t=t)`): the binding table's single-value rule, so a second
+    binding, a parameter or a loop target leaves it unresolved. A module-
+    level name is judged with no local names, as `_sanctioned_value` does."""
+    if isinstance(node, _pyast.Name):
+        if resolver is None or node.id in _seen:
+            return False
+        if node.id in getattr(resolver, "local_names", ()):
+            v, r = getattr(resolver, "values", {}).get(node.id), resolver
+        else:
+            mod = getattr(resolver, "module", None)
+            v, r = (mod.values.get(node.id) if mod else None), None
+        return v is not None and _psycopg_composed(v, imp, r, _seen | {node.id})
+    if isinstance(node, _pyast.BinOp) and isinstance(node.op, _pyast.Mult):
+        # `sql.Placeholder() * n` is a Composed of n copies (psycopg's
+        # `Composable.__mul__`); the count is not text.
+        return _psycopg_composed(node.left, imp, resolver, _seen)
     if not isinstance(node, _pyast.Call):
         return False
     spelled = _callee_spelling(node.func, imp, resolver) or ""
@@ -2811,15 +2831,15 @@ def _psycopg_composed(node: Any, imp: "_Imports", resolver: Any = None) -> bool:
             return len(node.args) == 1 and not node.keywords \
                 and _raw_literal(node.args[0], resolver)
         if leaf == "Composed":
-            return len(node.args) == 1 and _psycopg_parts(node.args[0], imp, resolver)
+            return len(node.args) == 1 and _psycopg_parts(node.args[0], imp, resolver, _seen)
         return False
     func = node.func
     if isinstance(func, _pyast.Attribute) and func.attr in ("format", "join") \
-            and _psycopg_composed(func.value, imp, resolver):
+            and _psycopg_composed(func.value, imp, resolver, _seen):
         if func.attr == "join":
             return len(node.args) == 1 and not node.keywords \
-                and _psycopg_parts(node.args[0], imp, resolver)
-        return all(_psycopg_composed(v, imp, resolver)
+                and _psycopg_parts(node.args[0], imp, resolver, _seen)
+        return all(_psycopg_composed(v, imp, resolver, _seen)
                    for v in list(node.args) + [k.value for k in node.keywords or []])
     return False
 
@@ -2838,10 +2858,15 @@ def _sanctioned_value(v: Any, imp: "_Imports") -> Optional[str]:
     return None
 
 
-def _psycopg_parts(arg: Any, imp: "_Imports", resolver: Any) -> bool:
+def _psycopg_parts(arg: Any, imp: "_Imports", resolver: Any,
+                   _seen: frozenset = frozenset()) -> bool:
+    if isinstance(arg, _pyast.BinOp) and isinstance(arg.op, _pyast.Mult):
+        # `sql.SQL(", ").join(sql.Placeholder() * n)`: a Composed iterates
+        # its parts, so joining one joins compositions.
+        return _psycopg_composed(arg, imp, resolver, _seen)
     found = _join_elements(arg)
     return found is not None and bool(found[0]) \
-        and all(_psycopg_composed(x, imp, resolver) for x in found[0])
+        and all(_psycopg_composed(x, imp, resolver, _seen) for x in found[0])
 
 
 def _classify_dotted(dotted: str) -> Optional[Tuple[str, str]]:
