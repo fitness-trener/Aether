@@ -87,6 +87,7 @@ end
 
 function addFee(amount: Int, bps: Bps) returns Int
   effects pure
+  requires amount >= 0
   ensures result >= amount
 do
   return amount + (amount * bps / 10000)
