@@ -72,6 +72,13 @@ StanFromIreland (CPython triager) asked whether it is an autonomous agent.
 The PR may stall. If it is closed, the owner can open a PR from our draft,
 which needs the owner's own CLA signature.
 
+**Update 2026-10-03.** StanFromIreland closed #158557 unmerged: "we don't
+accept contributions from autonomous agents". Its author confirmed it
+was agent-prepared and withdrew. CPython's devguide (`getting-started/ai-tools.rst`)
+allows AI-assisted contributions when the submitter reviews the work,
+takes responsibility for it, and can explain it in their own words;
+disclosure is appreciated. #158500 is open with no PR.
+
 - **Evidence:** 301 cases in the run.
 - **Still on `main`:** yes. The C code was read, and `_pydatetime` from
   `main` was run.
